@@ -1,0 +1,5 @@
+fastapi>=0.141
+uvicorn[standard]>=0.52
+pydantic>=2.13
+python-dotenv>=1.0
+clickhouse-connect>=0.8

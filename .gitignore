@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.venv/
+__pycache__/
+*.pyc
+artifacts/
+*.db
+.env
+.DS_Store
+nohup.outbackend/report.py
+backend/report.spec.json
