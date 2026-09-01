@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 
 import clickhouse_connect
 
-from .config import DB
+from ..core.config import DB
 
 # Имена таблиц фиксированы — их знают и промпт-агент, и тестовые данные.
 SALES_TABLE = 'sales_orders'

@@ -6,15 +6,35 @@
 
 ## Структура проекта
 
-- `frontend/` — React 19 + Vite + TS, роутинг `react-router-dom`, графики `recharts`. Типы отчёта: `src/types/report.ts`, рендеры секций `src/components/`, демо-данные `src/data/reports.ts`.
-- `backend/` — FastAPI, Python 3.12, свой venv в `backend/.venv`. В - `backend/app/`:
-  - `schemas.py` — контракт ReportSpec (camelCase через Pydantic alias), зеркало фронтовых типов;
-  - `compiler.py` — сборка отчёта: запускает `opencode run`, затем выполняет `report.py --output report.spec.json` и читает спеки;
-  - `prompt.py` — промпт для opencode-агента + схема ReportSpec;
-  - `template_report.py` — демо `report.py` (fallback без LLM);
-  - `db.py` — реестр отчётов в SQLite (`backend/reports.db`), статусы: `queued → building → ready | error`.
-- `backend/skills/` — `*.md` скиллы, по которым opencode генерирует `report.py`.
-- `backend/artifacts/<report_id>/` — сгенерированные `report.py` и `report.spec.json`.
+- `frontend/` — React 19 + Vite + TS, роутинг `react-router-dom`, графики `recharts`. Типы отчёта: `src/types/report.ts`, датасеты: `src/types/dataset.ts`, рендеры секций `src/components/`, страницы `src/pages/` (в т.ч. `/datasets`), демо-данные `src/data/reports.ts`.
+- `backend/app/` — FastAPI, Python 3.12, свой venv в `backend/.venv`. Пакеты:
+  - `core/` — `config.py` (DB/DSN, BASE_DIR), `database.py` (SQLite `backend/reports.db`: reports, users, groups, sessions, datasets; миграция имён скиллов), `security.py` (pbkdf2, Bearer-сессии);
+  - `schemas/` — `report.py` (ReportSpec, camelCase через Pydantic alias), `dataset.py`, `user.py` — зеркала фронтовых типов;
+  - `api/` — роутеры: `auth.py`, `reports.py` (+ `/api/skills`), `datasets.py`, `admin.py`;
+  - `services/` — `compiler.py` (сборка отчёта: `opencode run` → `report.py --output report.spec.json` → валидация), `prompt.py` (промпт + схема ReportSpec + блок датасетов), `template_report.py` (демо-скрипт), `worker.py` (queued → building → ready | error);
+  - `datasets/` — реестр датасетов (`registry.py`, SQLite-таблица `datasets`) и адаптеры источников: `clickhouse.py`, `postgres.py`, `csvsource.py` (интерфейс `base.py`: test_connection / fetch_schema / sample_rows);
+  - `reports/` — `warehouse.py` (витрина ClickHouse + сиды), `seed.py` (CLI `python -m app.reports.seed`).
+- `backend/skills/` — скиллы по доменам: `sales/sales.md`, `sales/drilldown.md`, `managers/manager.md`, `support/support.md`, `finance/cost.md`. Имя скилла = `домен/файл` (например `sales/sales`); файлы/папки с префиксом `_` служебные: не видны в `/api/skills` и запрещены для создания отчётов.
+- `backend/artifacts/<report_id>/` — сгенерированные `report.py`, `report.spec.json`, `datasets.json`; CSV-датасеты — `backend/artifacts/datasets/<slug>/data.csv`.
+
+## Датасеты
+
+Датасет = именованный источник: `source` (`clickhouse` | `postgres` | `csv`),
+`dsn` (литерал или `env:VAR`), `table_name` (CH/PG) или CSV-файл, вычитанная
+схема полей (`fields`), статус подключения. Реестр в SQLite, сид дефолтных
+`sales_orders` / `manager_stats` (`env:DATABASE_URL`) при пустом реестре.
+
+- API (просмотр — любой авторизованный; CRUD/refresh/upload — админ):
+  `GET /api/datasets`, `GET /api/datasets/{slug}` (схема + превью 50 строк),
+  `POST /api/datasets`, `PATCH`, `POST /{slug}/refresh`, `POST /{slug}/upload`
+  (CSV multipart), `DELETE`.
+- Фронт: `/datasets` — список, карточка с полями и превью, форма создания,
+  загрузка CSV, «Проверить и вычитать схему».
+- Скилл привязывает датасеты секцией `## Датасеты: <slug>, ...` (без секции —
+  все зарегистрированные). Компилятор передаёт описание этих датасетов в
+  промпт и пишет `datasets.json` рядом со скриптом; скрипту доступны env
+  `DATASET_<SLUG>_DSN` (резолв `env:VAR`).
+- Пароли/DSN в API не отдаются; произвольный SQL от пользователя запрещён.
 
 ## Данные (ClickHouse)
 
@@ -27,15 +47,15 @@ DSN задаётся в `backend/.env` (`DATABASE_URL=clickhouse://user:pass@hos
 
 Витрина — две таблицы в базе из DSN:
 `sales_orders` (продажи) и `manager_stats` (менеджеры); схема — в
-`backend/app/warehouse.py`. Демо `report.py`, сгенерированный компилятором,
-подключается к ClickHouse и агрегирует живые данные; если DSN недоступен —
-использует синтетический fallback (отчёт собирается всегда).
+`backend/app/reports/warehouse.py`. Демо `report.py` подключается к
+ClickHouse и агрегирует живые данные; если DSN недоступен — синтетический
+fallback (отчёт собирается всегда).
 
 Заполнить витрину тестовыми данными:
 
 ```bash
-cd backend && .venv/bin/python -m app.seed            # 30 дней
-cd backend && .venv/bin/python -m app.seed --days 90
+cd backend && .venv/bin/python -m app.reports.seed            # 30 дней
+cd backend && .venv/bin/python -m app.reports.seed --days 90
 ```
 
 При первом запуске воркера таблицы создаются автоматически (ensure_schema),
@@ -71,17 +91,28 @@ OPENCODE_MODEL="openrouter/~deepseek/deepseek-v4-flash-latest" .venv/bin/uvicorn
 cd frontend && npm run lint && npm run build
 
 # backend: импорт и валидация компиляции демо
-cd backend && .venv/bin/python -c "from app import compiler; import asyncio; asyncio.run(compiler.compile_report({'id':'t','slug':'t','title':'t','skill':'sales','params':{}}, mode='demo'))"
+cd backend && .venv/bin/python -c "from app.services import compiler; import asyncio; asyncio.run(compiler.compile_report({'id':'t','slug':'t','title':'t','skill':'sales/sales','params':{}}, mode='demo'))"
 ```
 
 ## Генерация отчёта по скиллу
 
-`POST /api/reports` `{skill: "sales", slug?, title?, params?, mode?: "auto"|"demo"|"llm"}`
-→ статус 202, фоновый воркер строит отчёт. `mode` хранится в реестре отчётов.
-`GET /api/reports/{slug}` после `ready` возвращает `sections`; пока идёт сборка —
-`queued/building`. `POST /api/reports/{slug}/refresh` перезапускает существующий
-`report.py` (актуализация данных без LLM). Скиллы: `sales`, `manager`
-(демо `report.py` знает оба, выбирает по env `SKILL`).
+`POST /api/reports` `{skill: "sales/sales", slug?, title?, params?, mode?:
+"auto"|"demo"|"llm"}` → статус 202, фоновый воркер строит отчёт. `mode`
+хранится в реестре отчётов. `GET /api/reports/{slug}` после `ready` возвращает
+`sections`; пока идёт сборка — `queued/building`. Slug по умолчанию:
+`домен-имя-<hex>`. `POST /api/reports/{slug}/refresh` перезапускает
+существующий `report.py` (актуализация данных без LLM).
+Демо `report.py` знает домены `sales/*`, `managers/manager`, `sales/drilldown`
+(выбор по env `SKILL`, иерархические имена); для остальных скиллов —
+generic-отчёт по `datasets.json` (превью датасетов: CSV/ClickHouse/PostgreSQL,
+иначе синтетика по схеме полей). `drilldown` — bar-график «Выручка по городам»
+с детализацией по клику (chart-секция с полем `detail {title, columns,
+rowsBy}` — ключи `rowsBy` = значения xKey точек, фронт открывает модалку)
+и комбо-график `kind: "combo"` (столбцы — категории, линии — сотрудники;
+у серий `type: "bar"|"line"`, столбцы на левой оси, линии на правой),
+фильтр `region` «Город».
+Правила и каркас для новых скиллов — opencode-скилл `report-skill`
+(`.opencode/skills/report-skill/SKILL.md`).
 
 Изменение скилла (новый фильтр/секция) требует **перекомпиляции**:
 `POST /api/reports/{slug}/recompile` `{mode?: "llm"|"auto"|"demo"}` (только
@@ -105,18 +136,20 @@ cd backend && .venv/bin/python -c "from app import compiler; import asyncio; asy
 ## Права доступа и кабинет
 
 Авторизация: логин/пароль → Bearer-токен (SQLite `sessions`), пароли pbkdf2
-(`auth.py`). При пустой БД создаётся админ `admin / admin` — сменить пароль
-в кабинете. Все `/api/reports*` и `/api/admin/*` требуют токен
-(`auth.get_current_user` / `auth.require_admin`).
+(`core/security.py`). При пустой БД создаётся админ `admin / admin` — сменить
+пароль в кабинете. Все `/api/reports*`, `/api/datasets*` и `/api/admin/*`
+требуют токен (`auth.get_current_user` / `auth.require_admin`).
 
 - Пользователь видит только назначенные ему отчёты (напрямую или через
   группу): `report_access` (`user_id` | `group_id`). Проверка доступа —
   до запуска `report.py`.
-- Создавать/удалять отчёты, `refresh` — только админ; фильтры — любой
-  пользователь с доступом к отчёту.
+- Создавать/удалять отчёты, `refresh`, `recompile`, датасеты (CRUD/загрузка
+  CSV) — только админ; фильтры и просмотр датасетов — любой пользователь
+  с доступом (датасеты — любой авторизованный).
 - Admin API: `/api/admin/users` (+`/{id}`, `/{id}/password`),
   `/api/admin/groups` (+`/{id}/members`), `/api/admin/access` (назначение
   отчёта пользователю ИЛИ группе), `/api/admin/access/{slug}` — список.
-- Фронт: `/login`, `/reports` (группировка по скиллам), `/account`
-  (свои отчёты + смена пароля), `/admin` (пользователи/группы/назначения).
-  Демо-fallback данных на фронте удалён — при ошибке API заглушка.
+- Фронт: `/login`, `/reports` (группировка по доменам скиллов), `/datasets`,
+  `/account` (свои отчёты + смена пароля), `/admin` (пользователи/группы/
+  назначения). Демо-fallback данных на фронте удалён — при ошибке API
+  заглушка.

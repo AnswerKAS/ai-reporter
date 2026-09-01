@@ -5,7 +5,9 @@
 - применяет фильтры из переменных FILTER_<KEY> (значения сохраняет бэкенд);
 - объявляет в спеке metadata фильтров (key/label/options из DISTINCT-запросов);
 - если DSN нет или подключение не удалось — использует синтетический fallback.
-Скилл передаётся переменной окружения SKILL (sales | manager).
+Скилл передаётся переменной окружения SKILL (sales | manager | drilldown
+или иерархическое имя 'домен/файл'); для неизвестных доменов скрипт строит
+generic-отчёт по реестру датасетов (datasets.json рядом со скриптом).
 """
 
 import json
@@ -87,6 +89,62 @@ MANAGER_FILTERS = [
      ]]]},
 ]
 
+DRILLDOWN_COLS = [
+    {"key": "order_date", "header": "Дата", "format": "date"},
+    {"key": "category", "header": "Категория"},
+    {"key": "revenue", "header": "Выручка", "format": "money"},
+    {"key": "orders", "header": "Заказы", "format": "number"},
+]
+
+
+def _drilldown_rows() -> dict[str, list[dict]]:
+    cats = ["Электроника", "Бытовая техника", "Одежда", "Товары для дома"]
+    out: dict[str, list[dict]] = {}
+    for i, point in enumerate(REGION_SERIES):
+        region, revenue = point["region"], point["revenue"]
+        rows = []
+        for j in range(4):
+            rows.append({
+                "order_date": f"2026-08-{1 + (i * 2 + j * 5) % 30:02d}",
+                "category": cats[(i + j) % len(cats)],
+                "revenue": round(revenue / (5 + j) / 1000) * 1000,
+                "orders": 3 + (i + j) % 5,
+            })
+        out[region] = rows
+    return out
+
+
+DRILLDOWN_DETAIL = {
+    "title": "Детализация: {point}",
+    "columns": DRILLDOWN_COLS,
+    "rowsBy": _drilldown_rows(),
+}
+
+DRILLDOWN_FILTERS = [
+    {"key": "region", "label": "Город", "kind": "select",
+     "options": [p["region"] for p in REGION_SERIES]},
+]
+
+DRILLDOWN_COMBO_CATS = [c["category"] for c in CATEGORY_SERIES[:4]]
+DRILLDOWN_COMBO_MGRS = ["Иванова А.", "Петров В.", "Сидорова Е."]
+
+
+def _drilldown_combo() -> tuple[list[dict], list[dict]]:
+    rows = []
+    for i, point in enumerate(REVENUE_SERIES):
+        row: dict = {"week": point["week"]}
+        for j, cat in enumerate(DRILLDOWN_COMBO_CATS):
+            row[cat] = round(point["revenue"] / (len(DRILLDOWN_COMBO_CATS) - j) / 1000) * 1000
+        for k, mgr in enumerate(DRILLDOWN_COMBO_MGRS):
+            row[mgr] = 20 + (i * 3 + k * 5) % 15
+        rows.append(row)
+    series = [{"key": c, "name": c, "type": "bar"} for c in DRILLDOWN_COMBO_CATS]
+    series += [{"key": m, "name": m, "type": "line"} for m in DRILLDOWN_COMBO_MGRS]
+    return rows, series
+
+
+DRILLDOWN_COMBO_DATA, DRILLDOWN_COMBO_SERIES = _drilldown_combo()
+
 
 def _pyt(value: object) -> str:
     return json.dumps(value, ensure_ascii=False)
@@ -104,6 +162,7 @@ def _meta(report: dict) -> dict:
 
 
 _SCRIPT = r'''
+import csv
 import json
 import os
 import sys
@@ -129,8 +188,8 @@ for _k, _v in os.environ.items():
         FILTERS[_k[len("FILTER_"):].lower()] = _v.strip()
 
 
-def get_client():
-    url = os.environ.get("DATABASE_URL", "").strip()
+def get_client(dsn=None):
+    url = (dsn or os.environ.get("DATABASE_URL", "")).strip()
     if not url:
         return None
     try:
@@ -353,16 +412,184 @@ def build_manager(client):
     }
 
 
+# ---------- drilldown ----------
+def build_drilldown(client):
+    start, end = range_params(0)
+    iso0, iso1 = iso(start), iso(end)
+
+    region_opts = [r[0] for r in client.query("SELECT DISTINCT region FROM __SALES__ ORDER BY region").result_rows]
+    flt = filter_clause({"region": ("region", region_opts)})
+    filters_meta = [{"key": "region", "label": "Город", "kind": "select", "options": region_opts}]
+
+    reg = client.query(f"SELECT region, sum(revenue) FROM __SALES__ WHERE order_date >= '{iso0}' AND order_date < '{iso1}'{flt} GROUP BY region ORDER BY 2 DESC").result_rows
+    bar_data = [{"region": r[0], "revenue": round(r[1] or 0)} for r in reg]
+
+    detail = {"title": "Детализация: {point}", "columns": __DRILLDOWN_COLS__, "rowsBy": {}}
+    for r in reg:
+        region = r[0]
+        rows = client.query(f"SELECT order_date, category, sum(revenue), sum(orders) FROM __SALES__ WHERE order_date >= '{iso0}' AND order_date < '{iso1}'{flt} AND region = '{esc(region)}' GROUP BY order_date, category ORDER BY 3 DESC LIMIT 15").result_rows
+        detail["rowsBy"][region] = [
+            {"order_date": iso(row[0]), "category": row[1], "revenue": round(row[2] or 0), "orders": row[3] or 0}
+            for row in rows
+        ]
+
+    top_cats = [r[0] for r in client.query(f"SELECT category, sum(revenue) FROM __SALES__ WHERE order_date >= '{iso0}' AND order_date < '{iso1}'{flt} GROUP BY category ORDER BY 2 DESC LIMIT 5").result_rows]
+    top_mgrs = [r[0] for r in client.query(f"SELECT manager_name, sum(tasks_done) FROM __MANAGER__ WHERE date >= '{iso0}' AND date < '{iso1}' GROUP BY manager_name ORDER BY 2 DESC LIMIT 3").result_rows]
+
+    weeks: dict = {}
+    for d, cat, rev in client.query(f"SELECT toStartOfWeek(order_date) d, category, sum(revenue) FROM __SALES__ WHERE order_date >= '{iso0}' AND order_date < '{iso1}'{flt} GROUP BY d, category").result_rows:
+        weeks.setdefault(iso(d), {})[cat] = round(rev or 0)
+    for d, mgr, done in client.query(f"SELECT toStartOfWeek(date) d, manager_name, sum(tasks_done) FROM __MANAGER__ WHERE date >= '{iso0}' AND date < '{iso1}' GROUP BY d, manager_name").result_rows:
+        weeks.setdefault(iso(d), {})[mgr] = done or 0
+    for vals in weeks.values():
+        for key in top_cats + top_mgrs:
+            vals.setdefault(key, 0)
+    combo_data = [{"week": w, **vals} for w, vals in sorted(weeks.items())]
+    combo_series = [{"key": c, "name": c, "type": "bar"} for c in top_cats]
+    combo_series += [{"key": m, "name": m, "type": "line"} for m in top_mgrs]
+
+    return {
+        "filters": filters_meta,
+        "bar": (bar_data if bar_data else __DRILLDOWN_BAR__),
+        "detail": detail,
+        "combo": (combo_data if combo_data else __DRILLDOWN_COMBO_DATA__),
+        "combo_series": (combo_series if combo_series else __DRILLDOWN_COMBO_SERIES__),
+    }
+
+
+# ---------- generic: отчёт по реестру датасетов (datasets.json) ----------
+def load_datasets_meta():
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "datasets.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+def _cell(v):
+    if v is None:
+        return ""
+    s = str(v)
+    return s[:200]
+
+
+def ch_rows(dsn, table, limit=30):
+    client = get_client(dsn)
+    if client is None or not table:
+        return None, None
+    try:
+        res = client.query(f"SELECT * FROM `{table}` LIMIT {int(limit)}")
+        return list(res.column_names), [[_cell(v) for v in row] for row in res.result_rows]
+    except Exception:
+        return None, None
+    finally:
+        try:
+            client.close()
+        except Exception:
+            pass
+
+
+def pg_rows(dsn, table, limit=30):
+    if not dsn or not table:
+        return None, None
+    try:
+        import psycopg
+        with psycopg.connect(dsn, connect_timeout=10) as conn:
+            with conn.cursor() as cur:
+                cur.execute(f'SELECT * FROM "{table}" LIMIT {int(limit)}')
+                cols = [d[0] for d in (cur.description or [])]
+                return cols, [[_cell(v) for v in row] for row in cur.fetchall()]
+    except Exception:
+        return None, None
+
+
+def csv_rows(path, limit=30):
+    try:
+        with open(path, encoding="utf-8-sig", newline="") as f:
+            reader = csv.reader(f)
+            header = next(reader)
+            rows = [row for row, _ in zip(reader, range(limit))]
+        return header, [[_cell(c) for c in row] for row in rows]
+    except Exception:
+        return None, None
+
+
+def synth_rows(fields, n=20):
+    flds = fields or [{"name": f"col{i}", "type": "string"} for i in range(1, 6)]
+    today = datetime.now(timezone.utc).date()
+    rows = []
+    for i in range(n):
+        row = []
+        for f in flds:
+            t = (f.get("type") or "string").lower()
+            name = f.get("name") or "col"
+            if "date" in t or "timestamp" in t:
+                row.append((today - timedelta(days=i)).isoformat())
+            elif "int" in t:
+                row.append((i + 1) * 7 % 1000)
+            elif "float" in t or "decimal" in t or "numeric" in t:
+                row.append(round(100.0 / (i + 1), 2))
+            else:
+                row.append(f"{name} {i + 1}")
+        rows.append(row)
+    return [f.get("name") or "col" for f in flds], rows
+
+
+def build_generic():
+    datasets = load_datasets_meta()
+    sections = []
+    names = []
+    collected = []
+    for d in datasets:
+        slug = (d.get("slug") or "").upper()
+        source = d.get("source")
+        if source == "csv" and d.get("file"):
+            cols, rows = csv_rows(d["file"], 20)
+        elif source == "postgres":
+            cols, rows = pg_rows(os.environ.get(f"DATASET_{slug}_DSN", ""), d.get("table"), 20)
+        else:
+            cols, rows = ch_rows(os.environ.get(f"DATASET_{slug}_DSN", "") or os.environ.get("DATABASE_URL", ""), d.get("table"), 20)
+        if cols is None:
+            cols, rows = synth_rows(d.get("fields") or [])
+            note = "синтетические данные (источник недоступен)"
+        else:
+            note = source
+        names.append(f"{d.get('title')} ({d.get('slug')}) — {note}")
+        collected.append((d, cols, rows))
+    if not collected:
+        collected = [({"slug": "demo", "title": "Демо-данные"},) + synth_rows([]) for _ in range(1)]
+        names = ["Демо-данные — синтетика (реестр датасетов пуст)"]
+    sections.append({"type": "markdown", "content": "## Обзор\n\nДатасеты: " + "; ".join(names) + f". Период до {NOW}."})
+    kpi_items = []
+    for d, cols, rows in collected:
+        kpi_items.append({"label": f'{d.get("title")}: строк в выборке', "value": len(rows), "format": "number"})
+        kpi_items.append({"label": f'{d.get("title")}: полей', "value": len(cols), "format": "number"})
+    sections.append({"type": "kpi", "items": kpi_items})
+    for d, cols, rows in collected:
+        show = cols[:10]
+        sections.append({
+            "type": "table", "title": f'Превью: {d.get("title")}',
+            "columns": [{"key": c, "header": c} for c in show],
+            "rows": [{c: r[i] for i, c in enumerate(show) if i < len(r)} for r in rows],
+        })
+    return sections
+
+
 # ---------- assemble ----------
 client = get_client()
 
 if client is not None:
     try:
-        if SKILL == "manager":
+        if SKILL in ("manager", "managers/manager"):
             root = build_manager(client)
-        else:
+        elif SKILL in ("drilldown", "sales/drilldown"):
+            root = build_drilldown(client)
+        elif SKILL in ("sales", "sales/sales"):
             root = build_sales(client)
-        description = root.pop("description")
+        else:
+            root = {}
+        description = root.pop("description", "")
         client.close()
     except Exception:
         try:
@@ -376,7 +603,7 @@ else:
     description = "Синтетический fallback: DATABASE_URL не задан."
 
 if not root:
-    if SKILL == "manager":
+    if SKILL in ("manager", "managers/manager"):
         root = {
             "filters": __MANAGER_FILTERS__,
             "kpi": [
@@ -390,7 +617,15 @@ if not root:
             "pie": __MANAGER_PIE__,
             "table": __MANAGER_TABLE__,
         }
-    else:
+    elif SKILL in ("drilldown", "sales/drilldown"):
+        root = {
+            "filters": __DRILLDOWN_FILTERS__,
+            "bar": __DRILLDOWN_BAR__,
+            "detail": __DRILLDOWN_DETAIL__,
+            "combo": __DRILLDOWN_COMBO_DATA__,
+            "combo_series": __DRILLDOWN_COMBO_SERIES__,
+        }
+    elif SKILL in ("sales", "sales/sales"):
         root = {
             "filters": __SALES_FILTERS__,
             "kpi": [
@@ -405,23 +640,36 @@ if not root:
             "table": __TABLE_ROWS__,
         }
 
-sections = [
-    {"type": "markdown", "content": f"## Обзор\n\n{description} · период до {NOW}."},
-    {"type": "kpi", "items": root["kpi"]},
-    {"type": "chart", "kind": "line", "title": ("Динамика задач и выручки по неделям" if SKILL == "manager" else "Динамика выручки и заказов по неделям"),
-     "data": root["line"], "xKey": "week",
-     "series": ([{"key": "tasks_done", "name": "Задач завершено"}, {"key": "revenue", "name": "Выручка"}] if SKILL == "manager"
-                else [{"key": "revenue", "name": "Выручка"}, {"key": "orders", "name": "Заказы"}])},
-    {"type": "chart", "kind": "bar", "title": ("Эффективность по командам, %" if SKILL == "manager" else "Продажи по регионам"),
-     "data": root["bar"], "xKey": ("team" if SKILL == "manager" else "region"),
-     "series": [{"key": ("efficiency" if SKILL == "manager" else "revenue"), "name": ("Эффективность" if SKILL == "manager" else "Выручка")}]},
-    {"type": "chart", "kind": "pie", "title": ("Структура выручки по командам" if SKILL == "manager" else "Структура выручки по категориям"),
-     "data": root["pie"], "xKey": ("team" if SKILL == "manager" else "category"),
-     "series": [{"key": "revenue", "name": "Выручка"}]},
-    {"type": "table", "title": ("Рейтинг менеджеров" if SKILL == "manager" else "Топ-категории по выручке"),
-     "columns": (__MANAGER_COLS__ if SKILL == "manager" else __SALES_COLS__),
-     "rows": root["table"]},
-]
+if SKILL in ("drilldown", "sales/drilldown"):
+    sections = [
+        {"type": "chart", "kind": "bar", "title": "Выручка по городам",
+         "data": root["bar"], "xKey": "region",
+         "series": [{"key": "revenue", "name": "Выручка"}],
+         "detail": root["detail"]},
+        {"type": "chart", "kind": "combo", "title": "Категории и сотрудники по неделям",
+         "data": root["combo"], "xKey": "week",
+         "series": root["combo_series"]},
+    ]
+elif SKILL in ("sales", "sales/sales", "manager", "managers/manager"):
+    sections = [
+        {"type": "markdown", "content": f"## Обзор\n\n{description} · период до {NOW}."},
+        {"type": "kpi", "items": root["kpi"]},
+        {"type": "chart", "kind": "line", "title": ("Динамика задач и выручки по неделям" if SKILL == "manager" else "Динамика выручки и заказов по неделям"),
+         "data": root["line"], "xKey": "week",
+         "series": ([{"key": "tasks_done", "name": "Задач завершено"}, {"key": "revenue", "name": "Выручка"}] if SKILL == "manager"
+                    else [{"key": "revenue", "name": "Выручка"}, {"key": "orders", "name": "Заказы"}])},
+        {"type": "chart", "kind": "bar", "title": ("Эффективность по командам, %" if SKILL == "manager" else "Продажи по регионам"),
+         "data": root["bar"], "xKey": ("team" if SKILL == "manager" else "region"),
+         "series": [{"key": ("efficiency" if SKILL == "manager" else "revenue"), "name": ("Эффективность" if SKILL == "manager" else "Выручка")}]},
+        {"type": "chart", "kind": "pie", "title": ("Структура выручки по командам" if SKILL == "manager" else "Структура выручки по категориям"),
+         "data": root["pie"], "xKey": ("team" if SKILL == "manager" else "category"),
+         "series": [{"key": "revenue", "name": "Выручка"}]},
+        {"type": "table", "title": ("Рейтинг менеджеров" if SKILL in ("manager", "managers/manager") else "Топ-категории по выручке"),
+         "columns": (__MANAGER_COLS__ if SKILL in ("manager", "managers/manager") else __SALES_COLS__),
+         "rows": root["table"]},
+    ]
+else:
+    sections = build_generic()
 
 report = {
     "id": META["id"], "slug": META["slug"], "title": META["title"],
@@ -470,6 +718,12 @@ def write_demo_script(
         .replace('__MANAGER_TABLE__', _pyt(MANAGER_TABLE_ROWS))
         .replace('__SALES_FILTERS__', _pyt(SALES_FILTERS))
         .replace('__MANAGER_FILTERS__', _pyt(MANAGER_FILTERS))
+        .replace('__DRILLDOWN_BAR__', _pyt(REGION_SERIES))
+        .replace('__DRILLDOWN_COLS__', _pyt(DRILLDOWN_COLS))
+        .replace('__DRILLDOWN_DETAIL__', _pyt(DRILLDOWN_DETAIL))
+        .replace('__DRILLDOWN_FILTERS__', _pyt(DRILLDOWN_FILTERS))
+        .replace('__DRILLDOWN_COMBO_DATA__', _pyt(DRILLDOWN_COMBO_DATA))
+        .replace('__DRILLDOWN_COMBO_SERIES__', _pyt(DRILLDOWN_COMBO_SERIES))
         .replace(
             '__MANAGER_COLS__',
             _pyt([

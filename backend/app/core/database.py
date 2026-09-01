@@ -3,7 +3,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-DB_PATH = Path(__file__).resolve().parent.parent / 'reports.db'
+DB_PATH = Path(__file__).resolve().parents[2] / 'reports.db'
 
 
 def utcnow() -> str:
@@ -85,6 +85,24 @@ def init_db() -> None:
                 token TEXT PRIMARY KEY,
                 user_id TEXT NOT NULL,
                 created_at TEXT NOT NULL
+            )
+            '''
+        )
+        conn.execute(
+            '''
+            CREATE TABLE IF NOT EXISTS datasets (
+                slug TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                description TEXT,
+                source TEXT NOT NULL,
+                dsn TEXT,
+                table_name TEXT,
+                file TEXT,
+                schema TEXT NOT NULL DEFAULT '[]',
+                status TEXT NOT NULL DEFAULT 'new',
+                error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
             )
             '''
         )
@@ -341,3 +359,21 @@ def get_session_user(token: str) -> dict | None:
 def delete_session(token: str) -> None:
     with _conn() as conn:
         conn.execute('DELETE FROM sessions WHERE token = ?', (token,))
+
+
+# --- миграции ------------------------------------------------------------
+
+SKILL_NAME_ALIASES = {
+    'sales': 'sales/sales',
+    'drilldown': 'sales/drilldown',
+    'manager': 'managers/manager',
+    'support': 'support/support',
+    'cost': 'finance/cost',
+}
+
+
+def migrate_skill_names() -> None:
+    """Разовая миграция плоских имён скиллов к иерархическим (папка/файл)."""
+    for old, new in SKILL_NAME_ALIASES.items():
+        with _conn() as conn:
+            conn.execute('UPDATE reports SET skill = ? WHERE skill = ?', (new, old))

@@ -598,6 +598,228 @@ a {
   background: #fafaff;
 }
 
+.chart-clickable .recharts-wrapper {
+  cursor: pointer;
+}
+
+.chart-detail-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 20, 35, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 100;
+}
+
+.chart-detail-modal {
+  background: var(--surface);
+  border-radius: 12px;
+  width: 100%;
+  max-width: 720px;
+  max-height: 80vh;
+  overflow: auto;
+  padding: 20px 24px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
+}
+
+.chart-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.chart-detail-head h3 {
+  font-size: 16px;
+}
+
+.chart-detail-close {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 22px;
+  line-height: 1;
+  padding: 4px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.chart-detail-close:hover {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.chart-detail-empty {
+  color: var(--muted);
+  font-size: 14px;
+  padding: 12px 0;
+}
+
+/* --- датасеты --- */
+
+.badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 9px;
+}
+
+.badge-good {
+  color: var(--good);
+  background: rgba(22, 163, 74, 0.08);
+  border-color: transparent;
+}
+
+.badge-bad {
+  color: var(--bad);
+  background: rgba(220, 38, 38, 0.08);
+  border-color: transparent;
+}
+
+.form-error {
+  color: var(--bad);
+  font-size: 13px;
+  background: rgba(220, 38, 38, 0.07);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.dataset-create {
+  margin-bottom: 20px;
+}
+
+.dataset-create summary {
+  display: inline-flex;
+  cursor: pointer;
+  list-style: none;
+}
+
+.dataset-create summary::-webkit-details-marker {
+  display: none;
+}
+
+.dataset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 14px;
+  margin-bottom: 28px;
+}
+
+.dataset-card {
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font: inherit;
+  color: inherit;
+}
+
+.dataset-card:hover {
+  border-color: var(--accent);
+}
+
+.dataset-card-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.dataset-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.dataset-card-head h3 {
+  font-size: 15px;
+}
+
+.dataset-card-meta {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.dataset-form {
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+  align-items: end;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.dataset-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.dataset-form input,
+.dataset-form select {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px 12px;
+  font-size: 14px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.dataset-detail {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+}
+
+.dataset-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.dataset-detail-head h2 {
+  font-size: 18px;
+}
+
+.dataset-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.dataset-upload {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.dataset-subtitle {
+  font-size: 14px;
+  margin: 18px 0 8px;
+}
+
 @media (max-width: 640px) {
   .page {
     padding: 24px 14px 48px;

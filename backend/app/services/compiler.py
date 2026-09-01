@@ -5,12 +5,12 @@ import shutil
 import sys
 from pathlib import Path
 
+from ..core.config import DB, BASE_DIR
+from ..schemas.report import Report
 from . import prompt
-from .config import DB
-from .schemas import Report
 from .template_report import write_demo_script
+from ..datasets import registry as dataset_registry
 
-BASE_DIR = Path(__file__).resolve().parent.parent
 ARTIFACTS_DIR = BASE_DIR / 'artifacts'
 SKILLS_DIR = BASE_DIR / 'skills'
 
@@ -36,8 +36,46 @@ def artifacts_dir() -> Path:
     return ARTIFACTS_DIR
 
 
+def list_skill_files() -> list[Path]:
+    """Все скилл-файлы рекурсивно; служебные (с `_` в пути) исключены."""
+    return [
+        p for p in sorted(skills_dir().rglob('*.md'))
+        if not any(part.startswith('_') for part in p.relative_to(SKILLS_DIR).parts)
+    ]
+
+
 def skill_path(name: str) -> Path:
+    if '..' in Path(name).parts or Path(name).is_absolute():
+        raise CompileError(f'некорректное имя скилла: {name}')
     return skills_dir() / f'{name}.md'
+
+
+def _skill_datasets(skill_text: str) -> list[dict]:
+    """Датасеты, объявленные секцией '## Датасеты' скилла (без секции — все)."""
+    return dataset_registry.for_slugs(dataset_registry.parse_skill_datasets(skill_text))
+
+
+def _datasets_meta(datasets: list[dict]) -> list[dict]:
+    """Мета для промпта и datasets.json (без секретов)."""
+    meta = []
+    for d in datasets:
+        meta.append({
+            'slug': d['slug'],
+            'title': d['title'],
+            'description': d.get('description') or '',
+            'source': d['source'],
+            'table': d.get('table_name') or '',
+            'file': str(dataset_registry.csv_path(d['slug'])) if d['source'] == 'csv' else '',
+            'fields': d.get('schema') or [],
+        })
+    return meta
+
+
+def _write_datasets_json(workdir: Path, datasets: list[dict]) -> None:
+    (workdir / 'datasets.json').write_text(
+        json.dumps(_datasets_meta(datasets), ensure_ascii=False, indent=2),
+        encoding='utf-8',
+    )
 
 
 async def _run(cmd: list[str], cwd: Path, timeout: int, env: dict | None = None) -> tuple[int, str]:
@@ -60,12 +98,10 @@ async def _run(cmd: list[str], cwd: Path, timeout: int, env: dict | None = None)
     return proc.returncode or 0, text
 
 
-async def _run_opencode(workdir: Path, skill_name: str, params: dict[str, str]) -> None:
-    skill_file = skill_path(skill_name)
-    if not skill_file.exists():
-        raise CompileError(f'скилл не найден: {skill_file}')
-    skill_text = skill_file.read_text(encoding='utf-8')
-    prompt_text = prompt.build_prompt(skill_text, params)
+async def _run_opencode(workdir: Path, skill_name: str, params: dict[str, str], skill_text: str) -> None:
+    datasets = _skill_datasets(skill_text)
+    _write_datasets_json(workdir, datasets)
+    prompt_text = prompt.build_prompt(skill_text, params, datasets)
 
     cmd = [
         OPENCODE_BIN, 'run', prompt_text,
@@ -86,6 +122,12 @@ async def _run_report_script(workdir: Path, report: dict) -> None:
     if not script.exists():
         raise CompileError('report.py не создан')
     params = report.get('params') or {}
+
+    # датасеты, привязанные к скиллу (файл читает и демо-скрипт, и LLM-скрипт)
+    skill_file = skill_path(report['skill'])
+    datasets = _skill_datasets(skill_file.read_text(encoding='utf-8')) if skill_file.exists() else []
+    _write_datasets_json(workdir, datasets)
+
     env = {
         'SKILL': report['skill'],
         'PERIOD': params.get('period', ''),
@@ -93,6 +135,11 @@ async def _run_report_script(workdir: Path, report: dict) -> None:
         'MANAGER_TABLE': 'manager_stats',
         'DATABASE_URL': os.environ.get('DATABASE_URL', DB.raw),
     }
+    # DSN каждого датасета → DATASET_<SLUG>_DSN (для скриптов с произвольными источниками)
+    for d in datasets:
+        resolved = dataset_registry.resolve_dsn(d.get('dsn') or '')
+        if resolved:
+            env[f"DATASET_{d['slug'].upper()}_DSN"] = resolved
     for key, value in (report.get('filter_values') or {}).items():
         if value:
             env[f'FILTER_{key.upper()}'] = str(value)
@@ -125,11 +172,18 @@ async def compile_report(report: dict, mode: str = 'auto') -> dict:
     # прошлая рабочая версия (self-healing: GET пересчитает её заново)
     (workdir / 'report.spec.json').unlink(missing_ok=True)
     params = report.get('params') or {}
+
+    skill_file = skill_path(report['skill'])
+    if not skill_file.exists():
+        raise CompileError(f'скилл не найден: {skill_file}')
+    skill_text = skill_file.read_text(encoding='utf-8')
+    datasets = _skill_datasets(skill_text)
+    _write_datasets_json(workdir, datasets)
     generated = False
 
     if mode != 'demo':
         try:
-            await _run_opencode(workdir, report['skill'], params)
+            await _run_opencode(workdir, report['skill'], params, skill_text)
             generated = (workdir / 'report.py').exists()
         except CompileError as exc:
             if mode == 'llm':

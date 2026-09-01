@@ -1,15 +1,15 @@
 """CLI: создать схему и наполнить витрину тестовыми данными.
 
 Запуск из backend/:
-    .venv/bin/python -m app.seed          # по умолчанию 30 дней
-    .venv/bin/python -m app.seed --days 90
+    .venv/bin/python -m app.reports.seed          # по умолчанию 30 дней
+    .venv/bin/python -m app.reports.seed --days 90
 """
 
 import argparse
 import sys
 
+from ..core.config import DB
 from . import warehouse
-from .config import DB
 
 
 def main() -> int:

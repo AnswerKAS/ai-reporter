@@ -43,21 +43,29 @@ class ChartSeries(CamelModel):
     key: str
     name: str | None = None
     color: str | None = None
+    type: Literal['bar', 'line'] | None = None
 
 
 class ChartSection(CamelModel):
     type: Literal['chart']
-    kind: Literal['bar', 'line', 'area', 'pie']
+    kind: Literal['bar', 'line', 'area', 'pie', 'combo']
     title: str | None = None
     data: list[ChartPoint]
     x_key: str | None = None
     series: list[ChartSeries]
+    detail: 'ChartSectionDetail | None' = None
 
 
 class TableColumn(CamelModel):
     key: str
     header: str
     format: NumberFormat | None = None
+
+
+class ChartSectionDetail(CamelModel):
+    title: str | None = None
+    columns: list[TableColumn] = []
+    rows_by: dict[str, list[dict[str, Any]]] = {}
 
 
 class TableSection(CamelModel):
@@ -124,44 +132,6 @@ class ReportPatch(CamelModel):
 
 class FiltersPatch(CamelModel):
     values: dict[str, str]
-
-
-# --- auth / admin -------------------------------------------------------
-
-class UserPublic(CamelModel):
-    id: str
-    username: str
-    role: Literal['admin', 'user']
-    created_at: str
-
-
-class LoginPatch(CamelModel):
-    username: str
-    password: str
-
-
-class UserPatch(CamelModel):
-    username: str
-    password: str
-    role: Literal['admin', 'user'] = 'user'
-
-
-class PasswordPatch(CamelModel):
-    password: str
-
-
-class GroupPatch(CamelModel):
-    name: str
-
-
-class MemberPatch(CamelModel):
-    user_id: str
-
-
-class AccessPatch(CamelModel):
-    report_slug: str
-    user_id: str | None = None
-    group_id: str | None = None
 
 
 class RecompilePatch(CamelModel):

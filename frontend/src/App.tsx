@@ -5,6 +5,7 @@ import { ReportViewPage } from './pages/ReportViewPage'
 import { LoginPage } from './pages/LoginPage'
 import { AccountPage } from './pages/AccountPage'
 import { AdminPage } from './pages/AdminPage'
+import { DatasetsPage } from './pages/DatasetsPage'
 import { AuthProvider, useAuth } from './lib/auth'
 
 function RequireAuth({ children }: { children: ReactNode }) {
@@ -27,6 +28,9 @@ function Layout() {
           </NavLink>
           <NavLink to="/reports" className={({ isActive }) => (isActive ? 'nav-link active' : 'nav-link')}>
             Отчёты
+          </NavLink>
+          <NavLink to="/datasets" className={({ isActive }) => (isActive ? 'nav-link active' : 'nav-link')}>
+            Датасеты
           </NavLink>
           {user && (
             <NavLink to="/account" className={({ isActive }) => (isActive ? 'nav-link active' : 'nav-link')}>
@@ -82,6 +86,14 @@ function Layout() {
           element={
             <RequireAuth>
               <ReportViewPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/datasets"
+          element={
+            <RequireAuth>
+              <DatasetsPage />
             </RequireAuth>
           }
         />

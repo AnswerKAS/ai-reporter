@@ -1,5 +1,6 @@
 import type { Report, ReportMeta } from '../types/report'
 import type { AccessEntry, Group, User } from '../types/user'
+import type { Dataset, DatasetCreateInput, DatasetDetail, SkillInfo } from '../types/dataset'
 import { TOKEN_KEY } from '../types/user'
 
 const BASE = import.meta.env.VITE_API_BASE ?? '/api'
@@ -224,9 +225,9 @@ export async function adminRevokeAccess(
   })
 }
 
-export async function fetchSkills(): Promise<string[]> {
-  const json = await request<{ skills: { name: string }[] }>('/skills')
-  return json.skills.map((s) => s.name)
+export async function fetchSkills(): Promise<SkillInfo[]> {
+  const json = await request<{ skills: SkillInfo[] }>('/skills')
+  return json.skills
 }
 
 export async function createReport(
@@ -239,4 +240,45 @@ export async function createReport(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ skill, title, mode }),
   })
+}
+
+// --- датасеты ---
+
+export async function fetchDatasets(): Promise<Dataset[]> {
+  const json = await request<{ datasets: Dataset[] }>('/datasets')
+  return json.datasets
+}
+
+export async function fetchDataset(slug: string): Promise<DatasetDetail> {
+  return await request<DatasetDetail>(`/datasets/${slug}`)
+}
+
+export async function createDataset(input: DatasetCreateInput): Promise<Dataset> {
+  const json = await request<{ dataset: Dataset }>('/datasets', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  return json.dataset
+}
+
+export async function refreshDataset(slug: string): Promise<Dataset> {
+  const json = await request<{ dataset: Dataset }>(`/datasets/${slug}/refresh`, {
+    method: 'POST',
+  })
+  return json.dataset
+}
+
+export async function deleteDataset(slug: string): Promise<void> {
+  await request(`/datasets/${slug}`, { method: 'DELETE' })
+}
+
+export async function uploadDatasetCsv(slug: string, file: File): Promise<{ dataset: Dataset; rows: number }> {
+  const form = new FormData()
+  form.append('file', file)
+  const json = await request<{ dataset: Dataset; rows: number }>(`/datasets/${slug}/upload`, {
+    method: 'POST',
+    body: form,
+  })
+  return json
 }

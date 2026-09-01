@@ -5,7 +5,7 @@ from urllib.parse import unquote
 import certifi
 from dotenv import load_dotenv
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = Path(__file__).resolve().parents[2]
 
 load_dotenv(BASE_DIR / '.env')
 

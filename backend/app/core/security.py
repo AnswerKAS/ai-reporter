@@ -7,7 +7,7 @@ from pathlib import Path
 
 from fastapi import Depends, HTTPException, Request
 
-from . import db
+from . import database as db
 
 _ITERATIONS = 200_000
 

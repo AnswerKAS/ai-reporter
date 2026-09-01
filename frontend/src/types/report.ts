@@ -17,9 +17,16 @@ export interface ChartSeries {
   key: string
   name?: string
   color?: string
+  type?: 'bar' | 'line'
 }
 
-export type ChartKind = 'bar' | 'line' | 'area' | 'pie'
+export type ChartKind = 'bar' | 'line' | 'area' | 'pie' | 'combo'
+
+export interface ChartDetail {
+  title?: string
+  columns: TableColumn[]
+  rowsBy: Record<string, Record<string, unknown>[]>
+}
 
 export interface MarkdownSection {
   type: 'markdown'
@@ -38,6 +45,7 @@ export interface ChartSection {
   data: ChartPoint[]
   xKey?: string
   series: ChartSeries[]
+  detail?: ChartDetail
 }
 
 export interface TableColumn {

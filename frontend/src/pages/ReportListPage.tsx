@@ -5,15 +5,20 @@ import { fetchReports } from '../lib/api'
 import { useAuth } from '../lib/auth'
 import { ApiError } from '../lib/api'
 
-const SKILL_TITLES: Record<string, string> = {
+const DOMAIN_TITLES: Record<string, string> = {
   sales: 'Продажи',
-  manager: 'Менеджеры',
+  managers: 'Менеджеры',
   support: 'Поддержка',
-  cost: 'Экономика заявок',
+  finance: 'Финансы',
+  reports: 'Прочие отчёты',
 }
 
-function skillTitle(skill: string): string {
-  return SKILL_TITLES[skill] ?? skill
+function domainOf(skill: string): string {
+  return skill.includes('/') ? skill.split('/')[0] : skill
+}
+
+function domainTitle(domain: string): string {
+  return DOMAIN_TITLES[domain] ?? domain
 }
 
 export function ReportListPage() {
@@ -38,11 +43,11 @@ export function ReportListPage() {
   const groups = useMemo(() => {
     const map = new Map<string, ReportMeta[]>()
     for (const r of reports ?? []) {
-      const key = r.skill ?? '—'
+      const key = r.skill ? domainOf(r.skill) : '—'
       if (!map.has(key)) map.set(key, [])
       map.get(key)!.push(r)
     }
-    return [...map.entries()].sort(([a], [b]) => skillTitle(a).localeCompare(skillTitle(b)))
+    return [...map.entries()].sort(([a], [b]) => domainTitle(a).localeCompare(domainTitle(b)))
   }, [reports])
 
   if (error) {
@@ -77,10 +82,10 @@ export function ReportListPage() {
         <p className="muted">Нет доступных отчётов — обратитесь к администратору.</p>
       )}
 
-      {groups.map(([skill, items]) => (
-        <section key={skill} className="skill-group">
+      {groups.map(([domain, items]) => (
+        <section key={domain} className="skill-group">
           <h2 className="skill-title">
-            {skillTitle(skill)} <span className="skill-name">{skill}</span>
+            {domainTitle(domain)} <span className="skill-name">{domain}</span>
           </h2>
           <div className="report-grid">
             {items.map((r) => (
