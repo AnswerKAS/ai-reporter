@@ -478,11 +478,14 @@ def spawn_improve(draft_id: str) -> None:
         prior_status = draft['status']
         try:
             result = await improve_content(draft)
+            issues = result.get('issues') or []
             db.update_skill_draft(
                 draft_id,
                 content=result['content'],
-                status='checked' if result['ok'] else 'rejected',
-                issues=result['issues'],
+                # improve_content гарантирует валидный каркас; замечания агента
+                # не блокируют публикацию (админ может публиковать в любом статусе)
+                status='checked' if not issues else 'rejected',
+                issues=issues,
             )
         except AgentRuntimeError as exc:
             db.update_skill_draft(draft_id, status=prior_status, issues=[_clean_agent_error(exc.code, exc.output)])
