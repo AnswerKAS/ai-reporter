@@ -226,27 +226,56 @@ async def improve_content(draft: dict) -> dict:
     verdict_file = workdir / 'verdict.json'
     skill_file.unlink(missing_ok=True)
     verdict_file.unlink(missing_ok=True)
-    code, output = await _run_opencode(workdir, prompt_text)
+    code, output = await _run_opencode_with_retry(workdir, prompt_text, _slot(draft['id']))
     if code != 0:
         raise AgentRuntimeError(code, output)
     if not skill_file.exists():
         raise AgentRuntimeError(code, 'агент не создал skill.md:\n' + output[-1500:])
     content = skill_file.read_text(encoding='utf-8')
     # валидация результата: каркас (секция Датасеты, существующие slug'и)
-    # должен остаться на месте — иначе исправление отклоняется целиком
-    from ..services.compiler import _skill_datasets
-    _skill_datasets(content)  # бросает CompileError при нарушении каркаса
+    # должен остаться на месте. Агенты регулярно её теряют или портят —
+    # вместо отклонения вырезаем их секцию и восстанавливаем правильную
+    # из датасетов черновика; если slug'и не из реестра — отклоняем целиком.
+    from ..services.compiler import _skill_datasets, CompileError
     issues: list[str] = []
+    try:
+        _skill_datasets(content)
+    except CompileError:
+        slugs = [s for s in (draft.get('datasets') or []) if s.strip()]
+        if not slugs:
+            raise
+        # вырезать секцию Датасеты целиком (от заголовка до следующего '##')
+        lines = content.splitlines(keepends=True)
+        out: list[str] = []
+        skipping = False
+        for line in lines:
+            if line.startswith('#'):
+                skipping = line.lstrip('#').strip().lower().startswith('датасет')
+            if not skipping:
+                out.append(line)
+        body = ''.join(out)
+        injected = False
+        out2: list[str] = []
+        for line in body.splitlines(keepends=True):
+            out2.append(line)
+            if not injected and line.startswith('# '):
+                out2.append('\n## Датасеты: ' + ', '.join(slugs) + '\n')
+                injected = True
+        if not injected:
+            out2.insert(0, '## Датасеты: ' + ', '.join(slugs) + '\n')
+        content = ''.join(out2)
+        _skill_datasets(content)  # slug'и не из реестра — пусть исключение уходит
+        issues.append('Секция «## Датасеты» потерялась/испортилась при исправлении — восстановлена автоматически по датасетам черновика.')
     if verdict_file.exists():
         try:
             verdict = json.loads(verdict_file.read_text(encoding='utf-8'))
-            issues = [str(i) for i in (verdict.get('issues') or [])]
+            issues.extend(str(i) for i in (verdict.get('issues') or []))
             if not verdict.get('ok') and not issues:
-                issues = ['скилл улучшен, но агент не подтвердил соответствие правилам — запустите «Проверить по правилам»']
+                issues.append('скилл улучшен, но агент не подтвердил соответствие правилам — запустите «Проверить по правилам»')
         except json.JSONDecodeError:
-            issues = ['вердикт исправления не удалось разобрать — запустите «Проверить по правилам»']
+            issues.append('вердикт исправления не удалось разобрать — запустите «Проверить по правилам»')
     else:
-        issues = ['вердикт агента отсутствует — запустите «Проверить по правилам»']
+        issues.append('вердикт агента отсутствует — запустите «Проверить по правилам»')
     return {'content': content, 'issues': issues}
 
 
