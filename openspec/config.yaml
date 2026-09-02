@@ -1,0 +1,19 @@
+schema: spec-driven
+
+context: |
+  Проект: AI Reporter — веб-система генерации аналитических отчётов по текстовым скиллам.
+  Тексты спек: русский язык; структурные маркеры OpenSpec (ADDED/MODIFIED/REMOVED, Requirement, Scenario, SHALL/WHEN/THEN) — как в формате.
+
+  Стек:
+  - Backend: FastAPI (Python 3.12, venv в backend/.venv), пакеты app/{core,schemas,api,services,datasets,reports}.
+  - Хранилище: PostgreSQL, схема ai_reporter (PG* переменные backend/.env), psycopg 3 (ClientCursor, client_encoding=utf8).
+  - Frontend: React 19 + Vite + TypeScript, react-router-dom, recharts; страницы /reports, /datasets, /skills/<name>, /account, /admin.
+  - Генерация отчётов: фоновый воркер → compiler → opencode run (LLM пишет report.py) → report.py --output report.spec.json → валидация ReportSpec; fallback — демо-скрипт template_report.py.
+  - Артефакты: фасад services/storage.py (local-режим, ARTIFACTS_DIR; S3-реализация запланирована).
+  - Скиллы отчётов: backend/skills/<домен>/<файл>.md; правила — opencode-скилл report-skill (.opencode/skills/report-skill/SKILL.md).
+
+  Конвенции:
+  - Основной конвеншн-документ — AGENTS.md в корне репо.
+  - Все /api/* требуют Bearer-токен; CRUD отчётов/датасетов — только админ; доступ к отчётам — через report_access (пользователь или группа).
+  - Секреты (DSN, логины, пароли, хосты) не выводятся в API и UI: sanitize_error в datasets/base.py; поле dsn не отдаётся.
+  - Форматы отчёта: ReportSpec (camelCase, Pydantic alias) — markdown/kpi/chart/bar|line|area|pie|combo/table, детализация по клику (detail.rowsBy).

@@ -4,6 +4,18 @@
 
 - Отвечай всегда на русском.
 
+## Spec-driven development
+
+- Проект использует OpenSpec (`openspec/`): стартовые спеки возможностей —
+  в `openspec/specs/` (reports, datasets, skills, skill-drafts,
+  access-control, artifacts).
+- Значимые изменения начинать с `/opsx-propose <имя>` (proposal + дельта
+  спеки + design + tasks), реализация — `/opsx-apply`, закрытие —
+  `/opsx-archive` (дельта мержится в `openspec/specs/`). Каталог
+  `openspec/` коммитится вместе с кодом.
+- Существующие спеки сверять с поведением при изменениях в той области;
+  валидация — `openspec validate --all`.
+
 ## Структура проекта
 
 - `frontend/` — React 19 + Vite + TS, роутинг `react-router-dom`, графики `recharts`. Типы отчёта: `src/types/report.ts`, датасеты и черновики скиллов: `src/types/dataset.ts`, рендеры секций `src/components/`, страницы `src/pages/` (в т.ч. `/datasets`, `/skills/<name>`), сайдбар с деревом скиллов — в `App.tsx`.

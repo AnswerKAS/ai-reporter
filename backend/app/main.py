@@ -22,6 +22,7 @@ from .api import skills as skills_api
 from .core import database as db
 from .core.security import ensure_default_admin
 from .datasets import registry as dataset_registry
+from .services import skill_drafts
 from .services.worker import worker
 
 
@@ -32,6 +33,7 @@ async def lifespan(app: FastAPI):
     db.migrate_skill_names()
     ensure_default_admin()
     dataset_registry.ensure_default_datasets()
+    skill_drafts.rescue_interrupted_generations()
     await worker.start()
     yield
     await worker.stop()

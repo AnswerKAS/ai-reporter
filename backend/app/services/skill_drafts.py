@@ -117,7 +117,7 @@ async def generate_content(draft: dict, description: str | None = None) -> dict:
     unavailable_file.unlink(missing_ok=True)
     code, output = await _run_opencode(workdir, prompt_text)
     if code != 0:
-        raise RuntimeError(f'opencode завершился с кодом {code}:\n{output[-1500:]}')
+        raise AgentRuntimeError(code, output)
     if skill_file.exists():
         return {'content': skill_file.read_text(encoding='utf-8'), 'unavailable': None}
     if unavailable_file.exists():
@@ -169,6 +169,30 @@ async def _run_opencode(workdir: Path, prompt_text: str) -> tuple[int, str]:
 _tasks: set[asyncio.Task] = set()
 
 
+class AgentRuntimeError(RuntimeError):
+    """Сбой вызова opencode: несёт код возврата и хвост вывода."""
+
+    def __init__(self, code: int, output: str) -> None:
+        self.code = code
+        self.output = output
+        super().__init__(f'opencode завершился с кодом {code}')
+
+
+def _clean_agent_error(code: int, output: str) -> str:
+    """Человекочитаемое сообщение вместо сырого дампа логов opencode."""
+    if code in (-15, 143):
+        return 'opencode был остановлен во время генерации (SIGTERM) — обычно это перезапуск сервиса. Запустите перегенерацию.'
+    if code == -9 or code == 137:
+        return 'opencode был принудительно завершён (SIGKILL) — возможна нехватка памяти на сервере. Запустите перегенерацию.'
+    # из логов берём последнюю содержательную строку (не JSON-поток и не служебные поля)
+    for line in reversed(output.strip().splitlines()):
+        text = line.strip()
+        if not text or text.startswith('timestamp=') or text.startswith('{'):
+            continue
+        return f'opencode завершился с кодом {code}: {text[-300:]}'
+    return f'opencode завершился с кодом {code} (логов нет)'
+
+
 def spawn_generation(draft_id: str, description: str | None = None) -> None:
     """Запускает генерацию в фоне; статус черновика обновляется по завершении."""
     async def _job() -> None:
@@ -191,12 +215,24 @@ def spawn_generation(draft_id: str, description: str | None = None) -> None:
                 db.update_skill_draft(draft_id, status='unavailable', issues=issues)
             else:
                 db.update_skill_draft(draft_id, content=result['content'], status='draft', issues=[])
+        except AgentRuntimeError as exc:
+            db.update_skill_draft(draft_id, status='failed', issues=[_clean_agent_error(exc.code, exc.output)])
         except Exception as exc:
             db.update_skill_draft(draft_id, status='failed', issues=[str(exc)])
 
     task = asyncio.create_task(_job())
     _tasks.add(task)
     task.add_done_callback(_tasks.discard)
+
+
+def rescue_interrupted_generations() -> None:
+    """При старте бэкенда черновики в `generating` — жертвы перезапуска:
+    фоновая задача умерла вместе с процессом, обновить статус некому."""
+    for draft in db.list_skill_drafts():
+        if draft['status'] == 'generating':
+            db.update_skill_draft(draft['id'], status='failed', issues=[
+                'Генерация была прервана перезапуском сервиса — запустите перегенерацию.',
+            ])
 
 
 def spawn_check(draft_id: str) -> None:
@@ -211,6 +247,8 @@ def spawn_check(draft_id: str) -> None:
                 status='checked' if verdict['ok'] else 'rejected',
                 issues=verdict['issues'],
             )
+        except AgentRuntimeError as exc:
+            db.update_skill_draft(draft_id, status='rejected', issues=[_clean_agent_error(exc.code, exc.output)])
         except Exception as exc:
             db.update_skill_draft(draft_id, status='rejected', issues=[str(exc)])
 
