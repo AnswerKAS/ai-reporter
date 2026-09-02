@@ -24,11 +24,56 @@ def utcnow() -> str:
     return datetime.now(timezone.utc).isoformat(timespec='seconds')
 
 
+_pool = None
+_pool_failed = False
+
+
+def _get_pool():
+    """Пул соединений: до PG ~100ms RTT, новое соединение стоит ~1s
+    (TCP+TLS+SCRAM) — держим живые соединения переиспользуемо."""
+    global _pool, _pool_failed
+    if _pool is None and not _pool_failed:
+        try:
+            from psycopg_pool import ConnectionPool
+            _pool = ConnectionPool(
+                PG.conninfo,
+                kwargs={
+                    'row_factory': dict_row,
+                    'cursor_factory': psycopg.ClientCursor,
+                    'connect_timeout': 10,
+                    'keepalives': 1,
+                    'keepalives_idle': 30,
+                    'keepalives_interval': 10,
+                    'keepalives_count': 3,
+                    **PG.connect_kwargs,
+                },
+                min_size=1,
+                max_size=8,
+                open=True,
+                timeout=15,
+            )
+        except Exception as exc:
+            print(f'[db] пул недоступен ({exc}), работаем прямыми подключениями')
+            _pool_failed = True
+    return _pool
+
+
 @contextmanager
 def _conn():
-    """Новое соединение на вызов. До удалённого PG сеть бывает флакует
-    (SSL unexpected eof) — 3 попытки подключения с паузой; keepalive
-    рвёт мёртвые соединения через NAT."""
+    """Соединение из пула; при недоступности пула — прямое подключение
+    с тремя попытками (сеть до PG бывает флакует: SSL unexpected eof)."""
+    global _pool_failed
+    pool = None
+    if not _pool_failed:
+        try:
+            pool = _get_pool()
+        except Exception as exc:
+            print(f'[db] пул недоступен ({exc}), работаем прямыми подключениями')
+            _pool_failed = True
+    if pool is not None:
+        with pool.connection() as conn:
+            yield conn
+        return
     last_exc: Exception | None = None
     conn = None
     for attempt in range(3):
