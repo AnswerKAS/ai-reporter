@@ -108,6 +108,8 @@ async def _run(cmd: list[str], cwd: Path, timeout: int, env: dict | None = None)
             *cmd,
             cwd=str(cwd),
             env=full_env,
+            # opencode может ждать ввод при открытом stdin — всегда отрезаем
+            stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
