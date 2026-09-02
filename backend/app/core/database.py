@@ -7,6 +7,7 @@
 
 import json
 import sqlite3
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,9 +26,30 @@ def utcnow() -> str:
 
 @contextmanager
 def _conn():
-    conn = psycopg.connect(
-        PG.conninfo, row_factory=dict_row, cursor_factory=psycopg.ClientCursor, **PG.connect_kwargs
-    )
+    """Новое соединение на вызов. До удалённого PG сеть бывает флакует
+    (SSL unexpected eof) — 3 попытки подключения с паузой; keepalive
+    рвёт мёртвые соединения через NAT."""
+    last_exc: Exception | None = None
+    conn = None
+    for attempt in range(3):
+        try:
+            conn = psycopg.connect(
+                PG.conninfo,
+                row_factory=dict_row,
+                cursor_factory=psycopg.ClientCursor,
+                connect_timeout=10,
+                keepalives=1,
+                keepalives_idle=30,
+                keepalives_interval=10,
+                keepalives_count=3,
+                **PG.connect_kwargs,
+            )
+            break
+        except psycopg.OperationalError as exc:
+            last_exc = exc
+            time.sleep(1 + attempt)
+    if conn is None:
+        raise last_exc
     try:
         with conn:
             yield conn

@@ -26,19 +26,27 @@ class Worker:
 
     async def _loop(self) -> None:
         while True:
-            report = db.claim_queued()
-            if report is None:
+            try:
+                report = db.claim_queued()
+                if report is None:
+                    self._wake.clear()
+                    if time.monotonic() - self._last_rescue > RESCUE_INTERVAL:
+                        self._last_rescue = time.monotonic()
+                        skill_drafts.rescue_stale_drafts(compiler.OPENCODE_DRAFT_TIMEOUT + 60)
+                    try:
+                        await asyncio.wait_for(self._wake.wait(), timeout=30)
+                    except asyncio.TimeoutError:
+                        pass
+                    continue
                 self._wake.clear()
-                if time.monotonic() - self._last_rescue > RESCUE_INTERVAL:
-                    self._last_rescue = time.monotonic()
-                    skill_drafts.rescue_stale_drafts(compiler.OPENCODE_DRAFT_TIMEOUT + 60)
-                try:
-                    await asyncio.wait_for(self._wake.wait(), timeout=30)
-                except asyncio.TimeoutError:
-                    pass
-                continue
-            self._wake.clear()
-            await self._process(report)
+                await self._process(report)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                # сбой БД/сети не должен убивать цикл: потерянный queued-отчёт
+                # подхватится на следующей итерации, статус чинит watchdog
+                print(f'[worker] ошибка цикла (повтор через 10s): {exc}')
+                await asyncio.sleep(10)
 
     async def _process(self, report: dict) -> None:
         db.update_status(report['slug'], status='building')
