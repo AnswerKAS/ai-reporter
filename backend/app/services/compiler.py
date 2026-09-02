@@ -4,6 +4,7 @@ import os
 import shutil
 import signal
 import sys
+import uuid
 from pathlib import Path
 
 from ..core.config import DB, BASE_DIR
@@ -47,6 +48,31 @@ OPENCODE_STALL_TIMEOUT = int(os.environ.get('OPENCODE_STALL_TIMEOUT', '120'))
 PYTHON_BIN = sys.executable
 
 
+# Системные переменные, без которых не стартует Python и не работает TLS.
+_SYSTEM_ENV_KEYS = (
+    'PATH', 'HOME', 'LANG', 'LC_ALL', 'TZ', 'TMPDIR',
+    'PYTHONPATH', 'PYTHONHOME', 'PYTHONIOENCODING',
+    'SSL_CERT_FILE', 'SSL_CERT_DIR', 'REQUESTS_CA_BUNDLE',
+)
+# Настройки, которые читают сами скрипты отчётов: режим TLS для ClickHouse
+# (демо-скрипт и производные от него) и переопределения имён таблиц
+# (SALES_TABLE, MANAGER_TABLE и заданные оператором в .env — суффикс _TABLE).
+_REPORT_ENV_KEYS = ('CLICKHOUSE_SECURE',)
+_REPORT_ENV_SUFFIXES = ('_TABLE',)
+
+
+def _report_env() -> dict[str, str]:
+    """Окружение для сгенерированного report.py: системный минимум плюс его
+    собственные настройки. Креды метабазы приложения (PG*) и токены
+    провайдеров скрипту не нужны и не передаются."""
+    picked = {k: os.environ[k] for k in (*_SYSTEM_ENV_KEYS, *_REPORT_ENV_KEYS) if k in os.environ}
+    picked.update({
+        k: v for k, v in os.environ.items()
+        if k.endswith(_REPORT_ENV_SUFFIXES)
+    })
+    return picked
+
+
 class CompileError(RuntimeError):
     pass
 
@@ -54,6 +80,19 @@ class CompileError(RuntimeError):
 def skills_dir() -> Path:
     SKILLS_DIR.mkdir(parents=True, exist_ok=True)
     return SKILLS_DIR
+
+
+# Пересчёты одного отчёта сериализуются: каталог артефактов общий, а GET
+# (фронт опрашивает раз в 15с), /filters и /refresh могут прийти одновременно.
+_report_locks: dict[str, asyncio.Lock] = {}
+
+
+def _report_lock(report_id: str) -> asyncio.Lock:
+    lock = _report_locks.get(report_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _report_locks[report_id] = lock
+    return lock
 
 
 def report_workdir(report_id: str) -> Path:
@@ -132,13 +171,16 @@ async def _run(
     *,
     stall_timeout: int | None = None,
     proc_slot: dict | None = None,
+    inherit_env: bool = True,
 ) -> tuple[int, str]:
     """Запускает процесс; при таймауте или молчании (stall_timeout) убивает
     всё дерево процессов (opencode порождает детей — kill оставлял их жить
     и ломал следующие запуски). proc_slot — куда положить Process для отмены.
 
+    inherit_env=False отдаёт процессу только системный минимум и явный env
+    (для сгенерированных report.py: креды метабазы приложения им не нужны).
     """
-    full_env = os.environ.copy()
+    full_env = os.environ.copy() if inherit_env else _report_env()
     if env:
         full_env.update(env)
     try:
@@ -174,8 +216,15 @@ async def _run(
 
     async def _pump() -> None:
         while True:
-            read = proc.stdout.read(8192) if stall_timeout is None else asyncio.wait_for(proc.stdout.read(8192), timeout=stall_timeout)
-            chunk = await read
+            try:
+                if stall_timeout is None:
+                    chunk = await proc.stdout.read(8192)
+                else:
+                    chunk = await asyncio.wait_for(proc.stdout.read(8192), timeout=stall_timeout)
+            except asyncio.TimeoutError:
+                # молчание дольше stall_timeout — это зависание агента, а не
+                # превышение общего таймаута: разводим случаи по разным веткам
+                raise _Stall from None
             if not chunk:
                 return
             chunks.append(chunk)
@@ -246,7 +295,12 @@ async def _run_opencode(workdir: Path, skill_name: str, params: dict[str, str], 
         raise CompileError(f'opencode завершился с кодом {code}:\n{tail}')
 
 
-async def _run_report_script(workdir: Path, report: dict) -> None:
+async def _run_report_script(workdir: Path, report: dict) -> Path:
+    """Запускает report.py и возвращает путь к записанной спеке.
+
+    Имя файла уникально для каждого запуска: параллельные пересчёты одного
+    отчёта делят workdir и на общем report.spec.json затирали друг друга.
+    """
     script = workdir / 'report.py'
     if not script.exists():
         raise CompileError('report.py не создан')
@@ -275,29 +329,38 @@ async def _run_report_script(workdir: Path, report: dict) -> None:
     for key, value in (report.get('filter_values') or {}).items():
         if value:
             env[f'FILTER_{key.upper()}'] = str(value)
+    spec_name = f'report.spec.{uuid.uuid4().hex}.json'
     code, output = await _run(
-        [PYTHON_BIN, str(script), '--output', 'report.spec.json'],
+        [PYTHON_BIN, str(script), '--output', spec_name],
         workdir,
         timeout=120,
         env=env,
+        inherit_env=False,
     )
     if code != 0:
+        (workdir / spec_name).unlink(missing_ok=True)
         tail = output[-2000:]
         raise CompileError(f'report.py завершился с ошибкой:\n{tail}')
+    return workdir / spec_name
 
 
-def _read_spec(workdir: Path) -> dict:
+def _read_spec(spec_file: Path) -> dict:
     """Читает спеку, валидирует и удаляет файл — спека хранится только в БД."""
-    spec_file = workdir / 'report.spec.json'
     if not spec_file.exists():
-        raise CompileError('report.spec.json не создан')
-    raw = json.loads(spec_file.read_text(encoding='utf-8'))
-    spec = Report.model_validate(raw).model_dump(by_alias=True)
-    spec_file.unlink(missing_ok=True)
-    return spec
+        raise CompileError(f'{spec_file.name} не создан')
+    try:
+        raw = json.loads(spec_file.read_text(encoding='utf-8'))
+        return Report.model_validate(raw).model_dump(by_alias=True)
+    finally:
+        spec_file.unlink(missing_ok=True)
 
 
 async def compile_report(report: dict, mode: str = 'auto') -> dict:
+    async with _report_lock(report['id']):
+        return await _compile_report(report, mode)
+
+
+async def _compile_report(report: dict, mode: str) -> dict:
     workdir = report_workdir(report['id'])
     workdir.mkdir(parents=True, exist_ok=True)
     # старую спеку убираем; report.py НЕ удаляем — при сбое LLM останется
@@ -309,6 +372,9 @@ async def compile_report(report: dict, mode: str = 'auto') -> dict:
     if not skill_file.exists():
         raise CompileError(f'скилл не найден: {skill_file}')
     skill_text = skill_file.read_text(encoding='utf-8')
+    # единый шаблон: скилл, не прошедший валидацию, не доходит до генерации
+    from .skill_template import validate_skill_template
+    validate_skill_template(skill_text)
     datasets = _skill_datasets(skill_text)
     _write_datasets_json(workdir, datasets)
     generated = False
@@ -333,13 +399,12 @@ async def compile_report(report: dict, mode: str = 'auto') -> dict:
             params=params,
         )
 
-    await _run_report_script(workdir, report)
-    return _read_spec(workdir)
+    return _read_spec(await _run_report_script(workdir, report))
 
 
 async def refresh_report(report: dict) -> dict:
-    workdir = report_workdir(report['id'])
-    if not (workdir / 'report.py').exists():
-        raise CompileError('report.py отсутствует — сначала соберите отчёт')
-    await _run_report_script(workdir, report)
-    return _read_spec(workdir)
+    async with _report_lock(report['id']):
+        workdir = report_workdir(report['id'])
+        if not (workdir / 'report.py').exists():
+            raise CompileError('report.py отсутствует — сначала соберите отчёт')
+        return _read_spec(await _run_report_script(workdir, report))

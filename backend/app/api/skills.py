@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from ..core import database as db
 from ..core.security import get_current_user, require_admin
 from ..datasets import registry as ds_registry
-from ..services import compiler, skill_drafts
+from ..services import compiler, skill_drafts, storage
 
 router = APIRouter(prefix='/api', tags=['skills'])
 
@@ -15,7 +15,7 @@ router = APIRouter(prefix='/api', tags=['skills'])
 # --- файлы скиллов ----------------------------------------------------------
 
 @router.get('/skills')
-def list_skills() -> dict:
+def list_skills(user: dict = Depends(get_current_user)) -> dict:
     skills = []
     for path in compiler.list_skill_files():
         name = path.relative_to(compiler.skills_dir()).with_suffix('').as_posix()
@@ -28,7 +28,7 @@ def list_skills() -> dict:
 
 
 @router.get('/skills/{name:path}')
-def get_skill(name: str) -> dict:
+def get_skill(name: str, user: dict = Depends(get_current_user)) -> dict:
     if any(part.startswith('_') for part in name.split('/')):
         raise HTTPException(404, 'скилл не найден')
     path = compiler.skill_path(name)
@@ -42,7 +42,7 @@ def get_skill(name: str) -> dict:
 def _draft_meta(d: dict) -> dict:
     return {k: d[k] for k in (
         'id', 'domain', 'name', 'title', 'description', 'datasets',
-        'content', 'status', 'issues', 'author_id', 'republish',
+        'content', 'status', 'issues', 'author_id', 'republish', 'report_slug',
         'created_at', 'updated_at',
     ) if k in d}
 
@@ -134,6 +134,8 @@ def delete_draft(draft_id: str, user: dict = Depends(get_current_user)) -> dict:
     draft = _get_draft_or_404(draft_id, user)
     # опубликованный черновик удалять нельзя — удаляется сам скилл на диске (вне черновиков)
     db.delete_skill_draft(draft_id)
+    # артефакты черновика (skill.md, verdict.json, unavailable.json) — вместе с записью
+    storage.delete_owner('draft', draft_id)
     return {'ok': True}
 
 
@@ -214,11 +216,19 @@ async def publish_draft(draft_id: str, payload: dict | None = None, user: dict =
     is_republish = bool(draft.get('republish'))
     existing_report = None
     if is_republish:
-        # ищем отчёт прошлой публикации (он закреплён за автором)
-        for r in db.list_reports():
-            if r['skill'] == skill_name:
-                existing_report = r
-                break
+        # отчёт прошлой публикации: по сохранённому slug'у, иначе (черновики,
+        # опубликованные до появления report_slug) — первый отчёт по скиллу
+        if draft.get('report_slug'):
+            existing_report = db.get_report(draft['report_slug'])
+        if existing_report is None:
+            for r in db.list_reports():
+                if r['skill'] == skill_name:
+                    existing_report = r
+                    break
+
+    # единый шаблон: не даём опубликовать скилл, который потом не соберётся
+    from ..services.skill_template import validate_skill_template
+    validate_skill_template(content)
 
     skill_file.parent.mkdir(parents=True, exist_ok=True)
     skill_file.write_text(content + ('\n' if not content.endswith('\n') else ''), encoding='utf-8')
@@ -245,5 +255,5 @@ async def publish_draft(draft_id: str, payload: dict | None = None, user: dict =
         )
         db.grant_access(slug, user_id=draft['author_id'])
         report_slug = slug
-    db.update_skill_draft(draft_id, status='published')
-    return {'draft': _draft_meta(db.get_skill_draft(draft_id)), 'report_slug': report_slug if existing_report is None else existing_report['slug']}
+    db.update_skill_draft(draft_id, status='published', report_slug=report_slug)
+    return {'draft': _draft_meta(db.get_skill_draft(draft_id)), 'report_slug': report_slug}
