@@ -203,8 +203,8 @@ async def publish_draft(draft_id: str, payload: dict | None = None, user: dict =
     и его отчёт перезаписываются/переиспользуются вместо создания новых.
     """
     draft = _get_draft_or_404(draft_id, user)
-    if draft['status'] != 'checked':
-        raise HTTPException(409, 'перед публикацией скилл должен пройти проверку (status=checked)')
+    if draft['status'] not in PUBLISHABLE_STATUSES:
+        raise HTTPException(409, f"публикация невозможна из статуса {draft['status']}")
     content = (draft.get('content') or '').strip()
     if not content:
         raise HTTPException(409, 'скилл пуст')
