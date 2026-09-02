@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import type { SkillDraft, SkillDraftStatus } from '../types/dataset'
 import {
   ApiError,
+  cancelSkillDraft,
   checkSkillDraft,
   deleteSkillDraft,
   fetchSkillDraft,
@@ -21,6 +22,7 @@ export const DRAFT_STATUS_LABELS: Record<SkillDraftStatus, string> = {
   failed: 'ошибка генерации',
   unavailable: 'данных нет в датасетах',
   improving: 'исправление скилла…',
+  checking: 'проверка…',
   published: 'опубликован',
 }
 
@@ -33,6 +35,7 @@ export const DRAFT_STATUS_BADGES: Record<SkillDraftStatus, string> = {
   failed: 'badge badge-bad',
   unavailable: 'badge badge-warn',
   improving: 'badge',
+  checking: 'badge',
   published: 'badge badge-good',
 }
 
@@ -129,6 +132,11 @@ export function DraftCard({
         {REGENERABLE_STATUSES.includes(draft.status) && !editing && (
           <button type="button" className="btn btn-ghost" disabled={busy} onClick={startEditing}>
             Перегенерировать
+          </button>
+        )}
+        {['generating', 'improving', 'checking'].includes(draft.status) && (
+          <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => run(() => cancelSkillDraft(draft.id))}>
+            Отменить
           </button>
         )}
         {draft.status === 'published' && (

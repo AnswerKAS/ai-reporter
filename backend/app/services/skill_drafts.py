@@ -10,13 +10,22 @@ verdict.json {ok: bool, issues: [...]}.
 
 import asyncio
 import json
+import os
+import signal
 from pathlib import Path
 
 from ..core.config import BASE_DIR
 from ..core import database as db
 from ..datasets import registry as dataset_registry
 from ..services import storage
-from .compiler import OPENCODE_BIN, OPENCODE_MODEL, OPENCODE_TIMEOUT, _run
+from .compiler import (
+    OPENCODE_BIN,
+    OPENCODE_MODEL,
+    OPENCODE_DRAFT_TIMEOUT,
+    OPENCODE_STALL_TIMEOUT,
+    CompileError,
+    _run,
+)
 
 RULES_PATH = BASE_DIR / '.opencode' / 'skills' / 'report-skill' / 'SKILL.md'
 
@@ -151,7 +160,7 @@ async def generate_content(draft: dict, description: str | None = None) -> dict:
     unavailable_file = workdir / 'unavailable.json'
     skill_file.unlink(missing_ok=True)
     unavailable_file.unlink(missing_ok=True)
-    code, output = await _run_opencode(workdir, prompt_text)
+    code, output = await _run_opencode_with_retry(workdir, prompt_text, _slot(draft['id']))
     if code != 0:
         raise AgentRuntimeError(code, output)
     if skill_file.exists():
@@ -175,7 +184,7 @@ async def check_content(draft: dict) -> dict:
     prompt_text = CHECK_PROMPT.format(rules=rules, skill=draft.get('content') or '')
     verdict_file = workdir / 'verdict.json'
     verdict_file.unlink(missing_ok=True)
-    code, output = await _run_opencode(workdir, prompt_text)
+    code, output = await _run_opencode_with_retry(workdir, prompt_text, _slot(draft['id']))
     if code != 0:
         raise AgentRuntimeError(code, output)
     if not verdict_file.exists():
@@ -240,11 +249,84 @@ def _run_opencode_cmd(workdir: Path, prompt_text: str) -> list[str]:
     return cmd
 
 
-async def _run_opencode(workdir: Path, prompt_text: str) -> tuple[int, str]:
-    return await _run(_run_opencode_cmd(workdir, prompt_text), workdir, OPENCODE_TIMEOUT)
+async def _run_opencode(workdir: Path, prompt_text: str, proc_slot: dict | None = None) -> tuple[int, str]:
+    return await _run(
+        _run_opencode_cmd(workdir, prompt_text),
+        workdir,
+        OPENCODE_DRAFT_TIMEOUT,
+        stall_timeout=OPENCODE_STALL_TIMEOUT,
+        proc_slot=proc_slot,
+    )
+
+
+# --- ретраи и отмена ---------------------------------------------------------
+
+_RETRYABLE_CODES = {-9, 137, -15, 143, 124}  # SIGKILL/SIGTERM/timeout
+_RETRY_DELAY = 5
+
+
+async def _run_opencode_with_retry(workdir: Path, prompt_text: str, proc_slot: dict | None = None) -> tuple[int, str]:
+    """Один автоматический повтор при таймауте/stall/убийстве процесса;
+    остальные ошибки возвращаются сразу."""
+    last: Exception | None = None
+    for attempt in (1, 2):
+        try:
+            return await _run_opencode(workdir, prompt_text, proc_slot)
+        except CompileError as exc:
+            last = exc  # таймаут или stall — всегда повторяем
+        except AgentRuntimeError as exc:
+            if exc.code not in _RETRYABLE_CODES:
+                raise
+            last = exc
+        if attempt == 1:
+            print(f'[skill-drafts] попытка 1 не удалась ({last}), повтор через {_RETRY_DELAY}s')
+            await asyncio.sleep(_RETRY_DELAY)
+    assert last is not None
+    raise last
 
 
 _tasks: set[asyncio.Task] = set()
+# черновики с активной фоновой задачей — для отмены (draft_id → task/slot)
+_tasks_by_draft: dict[str, asyncio.Task] = {}
+_procs: dict[str, dict] = {}
+
+
+def _slot(draft_id: str) -> dict:
+    return _procs.setdefault(draft_id, {})
+
+
+def cancel_task(draft_id: str) -> bool:
+    """Отменяет фоновую задачу черновика и убивает процесс агента (дерево)."""
+    slot = _procs.get(draft_id)
+    proc = (slot or {}).get('proc')
+    if proc is not None:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+    task = _tasks_by_draft.get(draft_id)
+    cancelled = False
+    if task is not None and not task.done():
+        task.cancel()
+        cancelled = True
+    _procs.pop(draft_id, None)
+    _tasks_by_draft.pop(draft_id, None)
+    if cancelled or proc is not None:
+        draft = db.get_skill_draft(draft_id)
+        if draft and draft['status'] in ('generating', 'improving', 'checking'):
+            new_status = 'failed' if draft['status'] == 'generating' else 'review'
+            db.update_skill_draft(draft_id, status=new_status, issues=['Задача отменена пользователем.'])
+    return cancelled or proc is not None
+
+
+def _spawn(draft_id: str, job) -> None:
+    task = asyncio.create_task(job)
+    _tasks.add(task)
+    _tasks_by_draft[draft_id] = task
+    task.add_done_callback(lambda t, d=draft_id: (_tasks.discard(t), _tasks_by_draft.pop(d, None), _procs.pop(d, None)))
 
 
 class AgentRuntimeError(RuntimeError):
@@ -298,9 +380,7 @@ def spawn_generation(draft_id: str, description: str | None = None) -> None:
         except Exception as exc:
             db.update_skill_draft(draft_id, status='failed', issues=[str(exc)])
 
-    task = asyncio.create_task(_job())
-    _tasks.add(task)
-    task.add_done_callback(_tasks.discard)
+    _spawn(draft_id, _job())
 
 
 def rescue_interrupted_generations() -> None:
@@ -312,9 +392,9 @@ def rescue_interrupted_generations() -> None:
             db.update_skill_draft(draft['id'], status='failed', issues=[
                 'Генерация была прервана перезапуском сервиса — запустите перегенерацию.',
             ])
-        elif draft['status'] == 'improving':
+        elif draft['status'] in ('improving', 'checking'):
             db.update_skill_draft(draft['id'], status='review', issues=[
-                'Исправление скилла было прервано перезапуском сервиса — '
+                'Задача была прервана перезапуском сервиса — '
                 'запустите «Улучшить скилл» или «Проверить по правилам» заново.',
             ])
 
@@ -327,7 +407,7 @@ def rescue_stale_drafts(max_age_seconds: int) -> None:
 
     now = datetime.now(timezone.utc)
     for draft in db.list_skill_drafts():
-        if draft['status'] not in ('generating', 'improving'):
+        if draft['status'] not in ('generating', 'improving', 'checking'):
             continue
         try:
             upd = datetime.fromisoformat(draft['updated_at']).replace(tzinfo=timezone.utc)
@@ -341,16 +421,20 @@ def rescue_stale_drafts(max_age_seconds: int) -> None:
             ])
         else:
             db.update_skill_draft(draft['id'], status='review', issues=[
-                'Исправление скилла не завершилось за отведённое время — '
-                'запустите «Улучшить скилл» заново.',
+                'Задача не завершилась за отведённое время — '
+                'запустите «Улучшить скилл» или «Проверить по правилам» заново.',
             ])
 
 
 def spawn_check(draft_id: str) -> None:
+    """Проверка агентом-ревьюером; на время работы — статус `checking`."""
     async def _job() -> None:
         draft = db.get_skill_draft(draft_id)
         if draft is None:
             return
+        prior = draft['status']
+        if prior in ('review', 'checked', 'rejected'):
+            db.update_skill_draft(draft_id, status='checking')
         try:
             verdict = await check_content(draft)
             db.update_skill_draft(
@@ -359,13 +443,13 @@ def spawn_check(draft_id: str) -> None:
                 issues=verdict['issues'],
             )
         except AgentRuntimeError as exc:
-            db.update_skill_draft(draft_id, status='rejected', issues=[_clean_agent_error(exc.code, exc.output)])
+            db.update_skill_draft(draft_id, status=prior if prior != 'checking' else 'review',
+                                  issues=[_clean_agent_error(exc.code, exc.output)])
         except Exception as exc:
-            db.update_skill_draft(draft_id, status='rejected', issues=[str(exc)])
+            db.update_skill_draft(draft_id, status=prior if prior != 'checking' else 'review',
+                                  issues=[str(exc)])
 
-    task = asyncio.create_task(_job())
-    _tasks.add(task)
-    task.add_done_callback(_tasks.discard)
+    _spawn(draft_id, _job())
 
 
 def spawn_improve(draft_id: str) -> None:
@@ -396,6 +480,4 @@ def spawn_improve(draft_id: str) -> None:
                 '— прежний текст скилла сохранён.',
             ])
 
-    task = asyncio.create_task(_job())
-    _tasks.add(task)
-    task.add_done_callback(_tasks.discard)
+    _spawn(draft_id, _job())

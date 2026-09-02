@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import shutil
+import signal
 import sys
 from pathlib import Path
 
@@ -34,6 +35,11 @@ OPENCODE_BIN = _find_opencode()
 OPENCODE_MODEL = os.environ.get('OPENCODE_MODEL') or None
 
 OPENCODE_TIMEOUT = int(os.environ.get('OPENCODE_TIMEOUT', '900'))
+# Черновики скиллов (generate/check/improve): короче — зависание не должно
+# держать пользователя 15 минут. Watchdog черновиков считает от этого значения.
+OPENCODE_DRAFT_TIMEOUT = int(os.environ.get('OPENCODE_DRAFT_TIMEOUT', '180'))
+# Столько секунд без единого байта в stdout считаем зависанием агента.
+OPENCODE_STALL_TIMEOUT = int(os.environ.get('OPENCODE_STALL_TIMEOUT', '120'))
 PYTHON_BIN = sys.executable
 
 
@@ -114,7 +120,20 @@ def _write_datasets_json(workdir: Path, datasets: list[dict]) -> None:
     )
 
 
-async def _run(cmd: list[str], cwd: Path, timeout: int, env: dict | None = None) -> tuple[int, str]:
+async def _run(
+    cmd: list[str],
+    cwd: Path,
+    timeout: int,
+    env: dict | None = None,
+    *,
+    stall_timeout: int | None = None,
+    proc_slot: dict | None = None,
+) -> tuple[int, str]:
+    """Запускает процесс; при таймауте или молчании (stall_timeout) убивает
+    всё дерево процессов (opencode порождает детей — kill оставлял их жить
+    и ломал следующие запуски). proc_slot — куда положить Process для отмены.
+
+    """
     full_env = os.environ.copy()
     if env:
         full_env.update(env)
@@ -127,16 +146,57 @@ async def _run(cmd: list[str], cwd: Path, timeout: int, env: dict | None = None)
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            # своя группа процессов: killpg убивает и детей opencode
+            start_new_session=True,
         )
     except FileNotFoundError as exc:
         raise CompileError(f'исполняемый файл не найден: {cmd[0]} ({exc})') from exc
+    if proc_slot is not None:
+        proc_slot['proc'] = proc
+
+    def _kill_tree() -> None:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+
+    chunks: list[bytes] = []
+
+    class _Stall(Exception):
+        pass
+
+    async def _pump() -> None:
+        while True:
+            read = proc.stdout.read(8192) if stall_timeout is None else asyncio.wait_for(proc.stdout.read(8192), timeout=stall_timeout)
+            chunk = await read
+            if not chunk:
+                return
+            chunks.append(chunk)
+
+    pump = asyncio.create_task(_pump())
     try:
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        await asyncio.wait_for(asyncio.shield(pump), timeout=timeout)
     except asyncio.TimeoutError:
-        proc.kill()
-        raise CompileError(f'процесс превысил таймаут {timeout}s: {" ".join(cmd)}')
-    text = stdout.decode('utf-8', errors='replace')
-    return proc.returncode or 0, text
+        _kill_tree()
+        raise CompileError(f'процесс превысил таймаут {timeout}s: {" ".join(cmd[:2])}') from None
+    except _Stall:
+        _kill_tree()
+        try:
+            await asyncio.wait_for(asyncio.shield(pump), timeout=5)
+        except (Exception, asyncio.CancelledError):
+            pump.cancel()
+        raise CompileError(
+            f'агент не проявлял активности {stall_timeout}s — остановлен как зависший: {" ".join(cmd[:2])}'
+        ) from None
+    finally:
+        if proc_slot is not None and proc_slot.get('proc') is proc:
+            proc_slot.pop('proc', None)
+    rc = await proc.wait()
+    text = b''.join(chunks).decode('utf-8', errors='replace')
+    return rc or 0, text
 
 
 async def _run_opencode(workdir: Path, skill_name: str, params: dict[str, str], skill_text: str) -> None:

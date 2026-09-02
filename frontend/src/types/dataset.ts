@@ -55,6 +55,7 @@ export type SkillDraftStatus =
   | 'failed'
   | 'unavailable'
   | 'improving'
+  | 'checking'
   | 'published'
 
 export interface SkillDraft {

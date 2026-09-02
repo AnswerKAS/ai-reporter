@@ -31,7 +31,7 @@ class Worker:
                 self._wake.clear()
                 if time.monotonic() - self._last_rescue > RESCUE_INTERVAL:
                     self._last_rescue = time.monotonic()
-                    skill_drafts.rescue_stale_drafts(compiler.OPENCODE_TIMEOUT + 120)
+                    skill_drafts.rescue_stale_drafts(compiler.OPENCODE_DRAFT_TIMEOUT + 60)
                 try:
                     await asyncio.wait_for(self._wake.wait(), timeout=30)
                 except asyncio.TimeoutError:

@@ -149,6 +149,16 @@ def submit_draft(draft_id: str, user: dict = Depends(get_current_user)) -> dict:
     return {'draft': _draft_meta(updated)}
 
 
+@router.post('/skill-drafts/{draft_id}/cancel')
+async def cancel_draft(draft_id: str, user: dict = Depends(get_current_user)) -> dict:
+    """Отменяет фоновую задачу черновика (генерация/исправление/проверка)."""
+    draft = _get_draft_or_404(draft_id, user)
+    if draft['status'] not in ('generating', 'improving', 'checking'):
+        raise HTTPException(409, f"нечего отменять в статусе {draft['status']}")
+    skill_drafts.cancel_task(draft_id)
+    return {'draft': _draft_meta(db.get_skill_draft(draft_id))}
+
+
 @router.post('/skill-drafts/{draft_id}/check', status_code=202)
 async def check_draft(draft_id: str, user: dict = Depends(require_admin)) -> dict:
     """Запускает проверку скилла по правилам (агент-ревьюер, фоново)."""
