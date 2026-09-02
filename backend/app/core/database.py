@@ -6,10 +6,11 @@
 """
 
 import json
+import os
 import sqlite3
 import time
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import psycopg
@@ -19,9 +20,23 @@ from .config import BASE_DIR, PG
 
 DB_PATH = BASE_DIR / 'reports.db'
 
+# Срок жизни Bearer-сессии: токен старше этого возраста не принимается,
+# запись подчищает воркер (purge_expired_sessions).
+SESSION_TTL_DAYS = int(os.environ.get('SESSION_TTL_DAYS', '30'))
+
 
 def utcnow() -> str:
     return datetime.now(timezone.utc).isoformat(timespec='seconds')
+
+
+def _session_cutoff() -> str:
+    """Граница возраста сессии: created_at не старше SESSION_TTL_DAYS.
+
+    Формат utcnow() — ISO-8601 в UTC с фиксированной шириной, поэтому строки
+    корректно сравниваются лексикографически (сравнение идёт в SQL).
+    """
+    moment = datetime.now(timezone.utc) - timedelta(days=SESSION_TTL_DAYS)
+    return moment.isoformat(timespec='seconds')
 
 
 _pool = None
@@ -30,7 +45,8 @@ _pool_failed = False
 
 def _get_pool():
     """Пул соединений: до PG ~100ms RTT, новое соединение стоит ~1s
-    (TCP+TLS+SCRAM) — держим живые соединения переиспользуемо."""
+    (TCP+TLS+SCRAM) — держим живые соединения переиспользуемо.
+    check_liveness: сеть рвёт idle-сессии — протухшие не выдаются."""
     global _pool, _pool_failed
     if _pool is None and not _pool_failed:
         try:
@@ -51,6 +67,8 @@ def _get_pool():
                 max_size=8,
                 open=True,
                 timeout=15,
+                check=ConnectionPool.check_liveness,
+                max_idle=120,
             )
         except Exception as exc:
             print(f'[db] пул недоступен ({exc}), работаем прямыми подключениями')
@@ -71,8 +89,22 @@ def _conn():
             print(f'[db] пул недоступен ({exc}), работаем прямыми подключениями')
             _pool_failed = True
     if pool is not None:
-        with pool.connection() as conn:
+        cm = None
+        for attempt in range(3):
+            try:
+                cm = pool.connection()
+                conn = cm.__enter__()
+                break
+            except psycopg.OperationalError as exc:
+                cm = None
+                last_exc = exc
+                if attempt == 2:
+                    raise
+                time.sleep(0.5 * (attempt + 1))
+        try:
             yield conn
+        finally:
+            cm.__exit__(None, None, None)
         return
     last_exc: Exception | None = None
     conn = None
@@ -207,6 +239,7 @@ def init_db() -> None:
                 issues TEXT NOT NULL DEFAULT '[]',
                 author_id TEXT NOT NULL,
                 republish TEXT,
+                report_slug TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
@@ -221,7 +254,10 @@ def init_db() -> None:
             '''
         )
         # миграции существующих таблиц
-        for ddl in ('ALTER TABLE skill_drafts ADD COLUMN IF NOT EXISTS republish TEXT',):
+        for ddl in (
+            'ALTER TABLE skill_drafts ADD COLUMN IF NOT EXISTS republish TEXT',
+            'ALTER TABLE skill_drafts ADD COLUMN IF NOT EXISTS report_slug TEXT',
+        ):
             conn.execute(ddl)
 
 
@@ -567,8 +603,9 @@ def create_session(*, token: str, user_id: str) -> None:
 def get_session_user(token: str) -> dict | None:
     with _conn() as conn:
         row = conn.execute(
-            'SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = %s',
-            (token,),
+            'SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id '
+            'WHERE s.token = %s AND s.created_at > %s',
+            (token, _session_cutoff()),
         ).fetchone()
     return dict(row) if row is not None else None
 
@@ -576,6 +613,13 @@ def get_session_user(token: str) -> dict | None:
 def delete_session(token: str) -> None:
     with _conn() as conn:
         conn.execute('DELETE FROM sessions WHERE token = %s', (token,))
+
+
+def purge_expired_sessions() -> int:
+    """Удаляет просроченные сессии (иначе таблица растёт бесконечно)."""
+    with _conn() as conn:
+        cur = conn.execute('DELETE FROM sessions WHERE created_at <= %s', (_session_cutoff(),))
+    return cur.rowcount
 
 
 # --- миграции ------------------------------------------------------------
@@ -646,6 +690,7 @@ def list_skill_drafts(*, author_id: str | None = None) -> list[dict]:
 def update_skill_draft(draft_id: str, *, content: str | None = None, status: str | None = None,
                        issues: list | None = None, datasets: list[str] | None = None,
                        description: str | None = None, republish: str | None = None,
+                       report_slug: str | None = None,
                        clear_republish: bool = False) -> dict | None:
     fields, values = ['updated_at = %s'], [utcnow()]
     for column, value in (
@@ -655,6 +700,7 @@ def update_skill_draft(draft_id: str, *, content: str | None = None, status: str
         ('datasets', json.dumps(datasets) if datasets is not None else None),
         ('description', description),
         ('republish', republish),
+        ('report_slug', report_slug),
     ):
         if value is not None:
             fields.append(f'{column} = %s')
