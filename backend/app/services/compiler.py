@@ -212,7 +212,9 @@ async def _run_opencode(workdir: Path, skill_name: str, params: dict[str, str], 
     if OPENCODE_MODEL:
         cmd += ['-m', OPENCODE_MODEL]
 
-    code, output = await _run(cmd, workdir, OPENCODE_TIMEOUT)
+    # stall-детекция и для генерации отчётов: молчание агента не должно
+    # съедать весь таймаут — fallback на демо сработает быстрее
+    code, output = await _run(cmd, workdir, OPENCODE_TIMEOUT, stall_timeout=OPENCODE_STALL_TIMEOUT)
     if code != 0:
         tail = output[-2000:]
         raise CompileError(f'opencode завершился с кодом {code}:\n{tail}')
