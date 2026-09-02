@@ -3,7 +3,7 @@
 import clickhouse_connect
 
 from ..core.config import DbConfig
-from .base import DatasetAdapter, DatasetError, DatasetField
+from .base import DatasetAdapter, DatasetError, DatasetField, sanitize_error
 
 
 def _quote(name: str) -> str:
@@ -23,14 +23,14 @@ class ClickHouseAdapter(DatasetAdapter):
         try:
             return clickhouse_connect.get_client(**self._cfg.client_options)
         except Exception as exc:
-            raise DatasetError(f'ClickHouse недоступен: {exc}') from exc
+            raise DatasetError(f'ClickHouse недоступен: {sanitize_error(str(exc))}') from exc
 
     def test_connection(self) -> None:
         client = self._client()
         try:
             client.query('SELECT 1')
         except Exception as exc:
-            raise DatasetError(f'ClickHouse недоступен: {exc}') from exc
+            raise DatasetError(f'ClickHouse недоступен: {sanitize_error(str(exc))}') from exc
         finally:
             client.close()
 
@@ -39,7 +39,7 @@ class ClickHouseAdapter(DatasetAdapter):
         try:
             rows = client.query(f'DESCRIBE TABLE {_quote(self._table)}').result_rows
         except Exception as exc:
-            raise DatasetError(f'не удалось прочитать схему: {exc}') from exc
+            raise DatasetError(f'не удалось прочитать схему: {sanitize_error(str(exc))}') from exc
         finally:
             client.close()
         return [DatasetField(name=r[0], type=r[1]) for r in rows]
@@ -51,7 +51,7 @@ class ClickHouseAdapter(DatasetAdapter):
             cols = result.column_names
             rows = [[_fmt(v) for v in row] for row in result.result_rows]
         except Exception as exc:
-            raise DatasetError(f'не удалось прочитать данные: {exc}') from exc
+            raise DatasetError(f'не удалось прочитать данные: {sanitize_error(str(exc))}') from exc
         finally:
             client.close()
         return list(cols), rows

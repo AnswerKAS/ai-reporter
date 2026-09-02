@@ -1,11 +1,55 @@
 import { useEffect, useState } from 'react'
 import { useParams, Navigate, Link } from 'react-router-dom'
 import type { Report } from '../types/report'
-import { applyFilters, fetchReport } from '../lib/api'
+import { applyFilters, fetchReport, fetchSkillContent } from '../lib/api'
 import { SectionRenderer } from '../components/SectionRenderer'
 import { ReportFilters } from '../components/ReportFilters'
 
 const LIVE_INTERVAL_MS = 15000
+
+function SkillInline({ skill }: { skill: string }) {
+  const [open, setOpen] = useState(false)
+  const [content, setContent] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+
+  const toggle = () => {
+    const next = !open
+    setOpen(next)
+    if (next && content === null && !loading) {
+      setLoading(true)
+      fetchSkillContent(skill)
+        .then(setContent)
+        .catch(() => setError('не удалось загрузить текст скилла'))
+        .finally(() => setLoading(false))
+    }
+  }
+
+  return (
+    <>
+      <button type="button" className={open ? 'meta-chip meta-chip-link active' : 'meta-chip meta-chip-link'} onClick={toggle}>
+        Скилл: {skill}
+      </button>
+      {open && (
+        <section className="skill-inline">
+          <div className="skill-inline-head">
+            <h3>Текст скилла</h3>
+            <button type="button" className="btn btn-ghost" onClick={toggle}>
+              Скрыть
+            </button>
+          </div>
+          {error ? (
+            <p className="form-error">{error}</p>
+          ) : content === null ? (
+            <p className="muted">Загрузка…</p>
+          ) : (
+            <pre className="skill-source">{content}</pre>
+          )}
+        </section>
+      )}
+    </>
+  )
+}
 
 export function ReportViewPage() {
   const { slug } = useParams<{ slug: string }>()
@@ -128,7 +172,7 @@ export function ReportViewPage() {
         <h1>{report.title}</h1>
         {report.description && <p className="muted">{report.description}</p>}
         <div className="meta-line">
-          {report.skill && <span className="meta-chip">Скилл: {report.skill}</span>}
+          {report.skill && <SkillInline skill={report.skill} />}
           <span className="meta-chip">Обновлён: {report.updatedAt}</span>
           <span className="meta-chip meta-live" title="Данные пересчитываются при открытии страницы">live</span>
         </div>

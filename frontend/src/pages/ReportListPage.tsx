@@ -4,22 +4,7 @@ import type { ReportMeta } from '../types/report'
 import { fetchReports } from '../lib/api'
 import { useAuth } from '../lib/auth'
 import { ApiError } from '../lib/api'
-
-const DOMAIN_TITLES: Record<string, string> = {
-  sales: 'Продажи',
-  managers: 'Менеджеры',
-  support: 'Поддержка',
-  finance: 'Финансы',
-  reports: 'Прочие отчёты',
-}
-
-function domainOf(skill: string): string {
-  return skill.includes('/') ? skill.split('/')[0] : skill
-}
-
-function domainTitle(domain: string): string {
-  return DOMAIN_TITLES[domain] ?? domain
-}
+import { domainLabel, domainOf } from '../lib/domains'
 
 export function ReportListPage() {
   const { user } = useAuth()
@@ -47,7 +32,7 @@ export function ReportListPage() {
       if (!map.has(key)) map.set(key, [])
       map.get(key)!.push(r)
     }
-    return [...map.entries()].sort(([a], [b]) => domainTitle(a).localeCompare(domainTitle(b)))
+    return [...map.entries()].sort(([a], [b]) => domainLabel(a).localeCompare(domainLabel(b)))
   }, [reports])
 
   if (error) {
@@ -85,7 +70,7 @@ export function ReportListPage() {
       {groups.map(([domain, items]) => (
         <section key={domain} className="skill-group">
           <h2 className="skill-title">
-            {domainTitle(domain)} <span className="skill-name">{domain}</span>
+            {domainLabel(domain)} <span className="skill-name">{domain}</span>
           </h2>
           <div className="report-grid">
             {items.map((r) => (

@@ -38,6 +38,9 @@ class Worker:
             db.update_status(report['slug'], status='error', error=str(exc))
 
     async def start(self) -> None:
+        stale = db.reset_stale_building()
+        if stale:
+            print(f'[worker] восстановлено зависших отчётов (building → queued): {stale}')
         self._task = asyncio.create_task(self._loop())
 
     async def stop(self) -> None:

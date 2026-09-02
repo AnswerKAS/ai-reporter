@@ -3,6 +3,7 @@ import type { Dataset, DatasetDetail, DatasetSource } from '../types/dataset'
 import {
   ApiError,
   createDataset,
+  createSkillDraft,
   deleteDataset,
   fetchDataset,
   fetchDatasets,
@@ -10,6 +11,7 @@ import {
   uploadDatasetCsv,
 } from '../lib/api'
 import { useAuth } from '../lib/auth'
+import { DraftCard, useDraftReload } from '../components/SkillDraftViews'
 
 const SOURCE_LABELS: Record<DatasetSource, string> = {
   clickhouse: 'ClickHouse',
@@ -99,8 +101,9 @@ export function DatasetsPage() {
         </details>
       )}
 
-      <div className="dataset-grid">
-        {(datasets ?? []).map((d) => (
+      <MyDrafts />
+
+      <div className="dataset-grid">        {(datasets ?? []).map((d) => (
           <button
             key={d.slug}
             type="button"
@@ -126,6 +129,7 @@ export function DatasetsPage() {
       {detail && (
         <DatasetDetailPanel
           detail={detail}
+          datasets={datasets ?? []}
           isAdmin={isAdmin}
           busy={busy}
           onRefresh={() => runAdminAction(() => refreshDataset(detail.dataset.slug))}
@@ -187,8 +191,12 @@ function DatasetCreateForm({ busy, onCreated }: { busy: boolean; onCreated: (slu
       {source !== 'csv' && (
         <>
           <label>
-            DSN или env:VAR
-            <input value={dsn} onChange={(e) => setDsn(e.target.value)} placeholder="env:DATABASE_URL" />
+            DSN, env:VAR или app:postgres
+            <input
+              value={dsn}
+              onChange={(e) => setDsn(e.target.value)}
+              placeholder={source === 'postgres' ? 'app:postgres (сервер приложения) или postgresql://user:pass@host:5432/db' : 'clickhouse://user:pass@host:8123/db или env:VAR'}
+            />
           </label>
           <label>
             Таблица
@@ -207,6 +215,7 @@ function DatasetCreateForm({ busy, onCreated }: { busy: boolean; onCreated: (slu
 
 function DatasetDetailPanel({
   detail,
+  datasets,
   isAdmin,
   busy,
   onRefresh,
@@ -214,6 +223,7 @@ function DatasetDetailPanel({
   onUpload,
 }: {
   detail: DatasetDetail
+  datasets: Dataset[]
   isAdmin: boolean
   busy: boolean
   onRefresh: () => void
@@ -251,6 +261,8 @@ function DatasetDetailPanel({
       </div>
       {dataset.error && <p className="form-error">{dataset.error}</p>}
 
+      <SkillGenerator datasets={datasets} currentSlug={dataset.slug} />
+
       <h3 className="dataset-subtitle">Поля</h3>
       {dataset.fields.length > 0 ? (
         <div className="table-scroll">
@@ -285,6 +297,120 @@ function DatasetDetailPanel({
         </div>
       ) : (
         <p className="muted">Превью недоступно.</p>
+      )}
+    </section>
+  )
+}
+
+function SkillGenerator({ datasets, currentSlug }: { datasets: Dataset[]; currentSlug: string }) {
+  const [open, setOpen] = useState(false)
+  const [domain, setDomain] = useState('reports')
+  const [name, setName] = useState('')
+  const [title, setTitle] = useState('')
+  const [description, setDescription] = useState('')
+  const [extra, setExtra] = useState<string[]>([])
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [created, setCreated] = useState(false)
+
+  const picked = [currentSlug, ...extra.filter((s) => s !== currentSlug)]
+
+  const toggleExtra = (slug: string) => {
+    setExtra((prev) => (prev.includes(slug) ? prev.filter((s) => s !== slug) : [...prev, slug]))
+  }
+
+  const submit = async () => {
+    setError(null)
+    setBusy(true)
+    try {
+      await createSkillDraft({ domain, name, title, description, datasets: picked })
+      setCreated(true)
+      setName('')
+      setTitle('')
+      setDescription('')
+      setExtra([])
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'не удалось создать черновик')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <details className="dataset-create" open={open} onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}>
+      <summary className="btn btn-primary">Сгенерировать скилл по этому датасету</summary>
+      <div className="dataset-form">
+        <label>
+          Домен
+          <input value={domain} onChange={(e) => setDomain(e.target.value)} placeholder="sales" />
+        </label>
+        <label>
+          Имя скилла (slug)
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="region-report" />
+        </label>
+        <label>
+          Название
+          <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Отчёт по регионам" />
+        </label>
+        <label className="dataset-form-wide">
+          Какие данные нужны в отчёте (словами)
+          <textarea
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="Например: выручка по городам с детализацией по категориям, топ-5 менеджеров и динамика по неделям…"
+            rows={4}
+          />
+        </label>
+        <div className="dataset-form-wide">
+          <div className="muted" style={{ fontSize: 13, marginBottom: 6 }}>Датасеты для скилла:</div>
+          <div className="draft-pick">
+            {datasets.map((d) => {
+              const isCurrent = d.slug === currentSlug
+              const checked = isCurrent || extra.includes(d.slug)
+              return (
+                <label key={d.slug} className="draft-pick-item">
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    disabled={isCurrent}
+                    onChange={() => toggleExtra(d.slug)}
+                  />
+                  {d.title} <span className="skill-name">{d.slug}</span>
+                  {isCurrent && <span className="muted">(текущий)</span>}
+                </label>
+              )
+            })}
+          </div>
+        </div>
+        {error && <p className="form-error">{error}</p>}
+        <button type="button" className="btn btn-primary" disabled={busy || !name || !title || !description} onClick={submit}>
+          {busy ? 'Создаём…' : 'Сгенерировать скилл'}
+        </button>
+        {created && <p className="form-ok">Черновик создан — генерация идёт в фоне, следите в списке «Мои черновики».</p>}
+      </div>
+    </details>
+  )
+}
+
+function MyDrafts() {
+  const { drafts, reload } = useDraftReload()
+  const [error, setError] = useState<string | null>(null)
+
+  if (drafts !== null && drafts.length === 0) return null
+
+  return (
+    <section className="my-drafts">
+      <h2 className="skill-title">
+        Мои черновики скиллов{' '}
+        <button type="button" className="btn btn-ghost" onClick={reload}>
+          Обновить
+        </button>
+      </h2>
+      {error && <p className="form-error">{error}</p>}
+      {drafts === null ? (
+        <p className="muted">Загрузка…</p>
+      ) : (
+        drafts.map((d) => <DraftCard key={d.id} draft={d} isAdmin={false} onChanged={reload} onFail={setError} />)
       )}
     </section>
   )

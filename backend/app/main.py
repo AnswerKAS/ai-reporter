@@ -18,6 +18,7 @@ from .api import admin as admin_api
 from .api import auth as auth_api
 from .api import datasets as datasets_api
 from .api import reports as reports_api
+from .api import skills as skills_api
 from .core import database as db
 from .core.security import ensure_default_admin
 from .datasets import registry as dataset_registry
@@ -27,6 +28,7 @@ from .services.worker import worker
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_db()
+    db.migrate_from_sqlite()
     db.migrate_skill_names()
     ensure_default_admin()
     dataset_registry.ensure_default_datasets()
@@ -46,6 +48,7 @@ app.add_middleware(
 
 app.include_router(auth_api.router)
 app.include_router(reports_api.router)
+app.include_router(skills_api.router)
 app.include_router(datasets_api.router)
 app.include_router(admin_api.router)
 

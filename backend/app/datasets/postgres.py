@@ -2,27 +2,43 @@
 
 from urllib.parse import urlparse
 
-from .base import DatasetAdapter, DatasetError, DatasetField
+from .base import DatasetAdapter, DatasetError, DatasetField, sanitize_error
 
 
 def _dsn_postgres(dsn: str) -> str:
-    """Нормализует DSN к формату psycopg (postgres:// → postgresql://, url/creds)."""
+    """Проверяет и нормализует DSN: postgres:// → postgresql://.
+
+    Строго: только URL-форматы PostgreSQL — любой другой текст не доходит
+    до драйвера (иначе psycopg вернёт ошибку с полным DSN и кредами).
+    """
     text = dsn.strip()
     if text.startswith('postgres://'):
         text = 'postgresql://' + text[len('postgres://'):]
     if not text.startswith('postgresql://'):
-        # допускаем краткий формат user:pass@host:port/db
-        if '://' not in text:
-            text = 'postgresql://' + text
+        raise DatasetError('DSN для PostgreSQL должен начинаться с postgresql:// или postgres://')
     parsed = urlparse(text)
     if parsed.hostname is None:
-        raise DatasetError('некорректный DSN PostgreSQL')
-    # psycopg сам декодирует проценты в URL-конн-строке; auth через URL
+        raise DatasetError('некорректный DSN PostgreSQL (нет имени сервера)')
     return text
 
 
 def _quote(name: str) -> str:
     return '"' + name.replace('"', '') + '"'
+
+
+def _split_table(table: str) -> tuple[str | None, str]:
+    """'schema.table' → ('schema', 'table'); 'table' → (None, 'table')."""
+    if '.' in table:
+        schema, _, name = table.rpartition('.')
+        return schema.strip(), name.strip()
+    return None, table.strip()
+
+
+def _quote_table(table: str) -> str:
+    schema, name = _split_table(table)
+    if schema:
+        return f'{_quote(schema)}.{_quote(name)}'
+    return _quote(name)
 
 
 class PostgresAdapter(DatasetAdapter):
@@ -42,7 +58,7 @@ class PostgresAdapter(DatasetAdapter):
         try:
             return psycopg.connect(_dsn_postgres(self._dsn), connect_timeout=10)
         except Exception as exc:
-            raise DatasetError(f'PostgreSQL недоступен: {exc}') from exc
+            raise DatasetError(f'PostgreSQL недоступен: {sanitize_error(str(exc))}') from exc
 
     def test_connection(self) -> None:
         conn = self._connect()
@@ -51,15 +67,24 @@ class PostgresAdapter(DatasetAdapter):
     def fetch_schema(self) -> list[DatasetField]:
         conn = self._connect()
         try:
-            with conn.cursor() as cur:
-                cur.execute(
+            schema, name = _split_table(self._table)
+            if schema:
+                sql = (
                     "SELECT column_name, data_type FROM information_schema.columns "
-                    "WHERE table_name = %s ORDER BY ordinal_position",
-                    (self._table,),
+                    "WHERE table_schema = %s AND table_name = %s ORDER BY ordinal_position"
                 )
+                params: tuple = (schema, name)
+            else:
+                sql = (
+                    "SELECT column_name, data_type FROM information_schema.columns "
+                    "WHERE table_name = %s ORDER BY ordinal_position"
+                )
+                params = (name,)
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
                 rows = cur.fetchall()
         except Exception as exc:
-            raise DatasetError(f'не удалось прочитать схему: {exc}') from exc
+            raise DatasetError(f'не удалось прочитать схему: {sanitize_error(str(exc))}') from exc
         finally:
             conn.close()
         if not rows:
@@ -70,11 +95,11 @@ class PostgresAdapter(DatasetAdapter):
         conn = self._connect()
         try:
             with conn.cursor() as cur:
-                cur.execute(f'SELECT * FROM {_quote(self._table)} LIMIT {int(limit)}')
+                cur.execute(f'SELECT * FROM {_quote_table(self._table)} LIMIT {int(limit)}')
                 cols = [d[0] for d in cur.description or []]
                 rows = [[_fmt(v) for v in row] for row in cur.fetchall()]
         except Exception as exc:
-            raise DatasetError(f'не удалось прочитать данные: {exc}') from exc
+            raise DatasetError(f'не удалось прочитать данные: {sanitize_error(str(exc))}') from exc
         finally:
             conn.close()
         return cols, rows

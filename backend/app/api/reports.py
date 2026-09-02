@@ -116,7 +116,7 @@ async def refresh_report(slug: str, user: dict = Depends(require_admin)) -> dict
     report = db.get_report(slug)
     if report is None:
         raise HTTPException(404, 'отчёт не найден')
-    if not (compiler.artifacts_dir() / report['id'] / 'report.py').exists():
+    if not compiler.has_report_script(report['id']):
         raise HTTPException(409, 'нет report.py — выполните первичную сборку')
     db.update_status(slug, status='building')
     try:
@@ -145,7 +145,7 @@ async def recompile_report(
     report = db.get_report(slug)
     if report is None:
         raise HTTPException(404, 'отчёт не найден')
-    if not (compiler.artifacts_dir() / report['id'] / 'report.py').exists():
+    if not compiler.has_report_script(report['id']):
         raise HTTPException(409, 'нет report.py — используйте первичную сборку')
     mode = (patch.mode if patch else 'llm') or 'llm'
     db.set_mode(slug, mode)
@@ -163,7 +163,7 @@ async def set_report_filters(
     report = db.get_report(slug)
     if report is None:
         raise HTTPException(404, 'отчёт не найден')
-    if not (compiler.artifacts_dir() / report['id'] / 'report.py').exists():
+    if not compiler.has_report_script(report['id']):
         raise HTTPException(409, 'нет report.py — выполните первичную сборку')
     db.set_filters(slug, patch.values)
     report = db.get_report(slug)
@@ -179,30 +179,3 @@ async def set_report_filters(
     except Exception as exc:
         db.update_status(slug, status='error', error=str(exc))
         raise HTTPException(500, str(exc))
-
-
-# --- скиллы ----------------------------------------------------------------
-
-@router.get('/skills')
-def list_skills() -> dict:
-    skills = []
-    for path in sorted(compiler.list_skill_files()):
-        name = path.relative_to(compiler.skills_dir()).with_suffix('').as_posix()
-        if any(part.startswith('_') for part in path.parts):
-            continue  # служебные файлы (шаблоны, правила)
-        skills.append({
-            'name': name,
-            'domain': name.split('/')[0] if '/' in name else '',
-            'path': str(path.relative_to(compiler.BASE_DIR)),
-        })
-    return {'skills': skills}
-
-
-@router.get('/skills/{name:path}')
-def get_skill(name: str) -> dict:
-    if any(part.startswith('_') for part in name.split('/')):
-        raise HTTPException(404, 'скилл не найден')
-    path = compiler.skill_path(name)
-    if not path.exists():
-        raise HTTPException(404, 'скилл не найден')
-    return {'name': name, 'content': path.read_text(encoding='utf-8')}

@@ -8,10 +8,10 @@ from pathlib import Path
 from ..core.config import DB, BASE_DIR
 from ..schemas.report import Report
 from . import prompt
+from . import storage
 from .template_report import write_demo_script
 from ..datasets import registry as dataset_registry
 
-ARTIFACTS_DIR = BASE_DIR / 'artifacts'
 SKILLS_DIR = BASE_DIR / 'skills'
 
 OPENCODE_BIN = shutil.which('opencode') or 'opencode'
@@ -31,9 +31,15 @@ def skills_dir() -> Path:
     return SKILLS_DIR
 
 
-def artifacts_dir() -> Path:
-    ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
-    return ARTIFACTS_DIR
+def report_workdir(report_id: str) -> Path:
+    """Каталог артефактов отчёта (через фасад хранилища)."""
+    workdir = storage.path('report', report_id, 'report.py').parent
+    workdir.mkdir(parents=True, exist_ok=True)
+    return workdir
+
+
+def has_report_script(report_id: str) -> bool:
+    return storage.exists('report', report_id, 'report.py')
 
 
 def list_skill_files() -> list[Path]:
@@ -137,7 +143,10 @@ async def _run_report_script(workdir: Path, report: dict) -> None:
     }
     # DSN каждого датасета → DATASET_<SLUG>_DSN (для скриптов с произвольными источниками)
     for d in datasets:
-        resolved = dataset_registry.resolve_dsn(d.get('dsn') or '')
+        try:
+            resolved = dataset_registry.resolve_dataset_dsn(d)
+        except Exception:
+            continue  # DSN не резолвится (не задан/невалиден) — скрипт узнает из samples
         if resolved:
             env[f"DATASET_{d['slug'].upper()}_DSN"] = resolved
     for key, value in (report.get('filter_values') or {}).items():
@@ -166,7 +175,7 @@ def _read_spec(workdir: Path) -> dict:
 
 
 async def compile_report(report: dict, mode: str = 'auto') -> dict:
-    workdir = artifacts_dir() / report['id']
+    workdir = report_workdir(report['id'])
     workdir.mkdir(parents=True, exist_ok=True)
     # старую спеку убираем; report.py НЕ удаляем — при сбое LLM останется
     # прошлая рабочая версия (self-healing: GET пересчитает её заново)
@@ -206,7 +215,7 @@ async def compile_report(report: dict, mode: str = 'auto') -> dict:
 
 
 async def refresh_report(report: dict) -> dict:
-    workdir = artifacts_dir() / report['id']
+    workdir = report_workdir(report['id'])
     if not (workdir / 'report.py').exists():
         raise CompileError('report.py отсутствует — сначала соберите отчёт')
     await _run_report_script(workdir, report)

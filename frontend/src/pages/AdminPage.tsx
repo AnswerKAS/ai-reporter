@@ -16,6 +16,34 @@ import {
   fetchReports,
 } from '../lib/api'
 import { useAuth } from '../lib/auth'
+import { DraftCard, useDraftReload } from '../components/SkillDraftViews'
+
+function SkillDraftsAdmin() {
+  const { drafts, reload } = useDraftReload()
+  const [error, setError] = useState<string | null>(null)
+
+  if (drafts !== null && drafts.length === 0) return null
+
+  return (
+    <section className="admin-drafts">
+      <h2 className="skill-title">
+        Черновики скиллов{' '}
+        <button type="button" className="btn btn-ghost" onClick={reload}>
+          Обновить
+        </button>
+      </h2>
+      <p className="muted">
+        Проверьте скилл по правилам (агент-ревьюер) и опубликуйте: появится файл скилла и отчёт с доступом для автора.
+      </p>
+      {error && <p className="form-error">{error}</p>}
+      {drafts === null ? (
+        <p className="muted">Загрузка…</p>
+      ) : (
+        drafts.map((d) => <DraftCard key={d.id} draft={d} isAdmin onChanged={reload} onFail={setError} />)
+      )}
+    </section>
+  )
+}
 
 export function AdminPage() {
   const { isAdmin } = useAuth()
@@ -69,6 +97,8 @@ export function AdminPage() {
         <p className="muted">Пользователи, группы и назначение отчётов.</p>
       </header>
       {error && <div className="auth-error admin-error">{error}</div>}
+
+      <SkillDraftsAdmin />
 
       <div className="admin-grid">
         <UsersPanel

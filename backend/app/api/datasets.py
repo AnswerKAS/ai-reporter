@@ -5,7 +5,7 @@ from fastapi.responses import JSONResponse
 
 from ..core.security import get_current_user, require_admin
 from ..datasets import registry as ds_registry
-from ..datasets.base import DatasetError
+from ..datasets.base import DatasetError, sanitize_error
 from ..schemas.dataset import (
     DatasetCreate,
     DatasetDetail,
@@ -21,8 +21,31 @@ PREVIEW_LIMIT = 50
 
 def _meta(d: dict) -> dict:
     data = dict(d)
+    data.pop('dsn', None)  # креды не покидают бэкенд
     data['fields'] = data.pop('schema')
+    if data.get('error'):
+        data['error'] = sanitize_error(str(data['error']))
     return DatasetMeta.model_validate(data).model_dump(by_alias=True)
+
+
+def _validate_dsn(source: str, dsn: str) -> str:
+    """Проверяет формат DSN по типу источника; возвращает понятную ошибку или ''."""
+    text = (dsn or '').strip()
+    if source == 'csv':
+        return ''
+    if text.lower().startswith('env:') or text.lower() == 'app:postgres':
+        return ''
+    if source == 'postgres':
+        if not text:
+            return ''  # пусто — сервер приложения (PG* из .env)
+        if not text.lower().startswith(('postgres://', 'postgresql://')):
+            return 'DSN для PostgreSQL должен начинаться с postgresql:// или postgres://'
+        return ''
+    if not text:
+        return 'для clickhouse нужен DSN или ссылка env:VAR'
+    if source == 'clickhouse' and not text.lower().startswith(('clickhouse://', 'clickhouses://')):
+        return 'DSN для ClickHouse должен начинаться с clickhouse:// или clickhouses://'
+    return ''
 
 
 def _get_or_404(slug: str) -> dict:
@@ -49,7 +72,7 @@ def get_dataset(slug: str, user: dict = Depends(get_current_user)) -> dict:
             # схема известна, источник временно недоступен — отдаём без превью
             preview = DatasetPreview(columns=[], rows=[], truncated=False).model_dump(by_alias=True)
         else:
-            return JSONResponse(status_code=502, content={'detail': str(exc)})
+            return JSONResponse(status_code=502, content={'detail': sanitize_error(str(exc))})
     return DatasetDetail(dataset=_meta(dataset), preview=preview).model_dump(by_alias=True)
 
 
@@ -66,8 +89,9 @@ def create_dataset(patch: DatasetCreate, user: dict = Depends(require_admin)) ->
             source='csv', dsn='', table_name='', schema=[], status='new', error=None,
         )
         return {'dataset': _meta(created)}
-    if not patch.dsn.strip():
-        raise HTTPException(422, 'для clickhouse/postgres нужен DSN или env:VAR')
+    dsn_error = _validate_dsn(patch.source, patch.dsn)
+    if dsn_error:
+        raise HTTPException(422, dsn_error)
     created = ds_registry.create(
         slug=slug, title=patch.title, description=patch.description,
         source=patch.source, dsn=patch.dsn.strip(), table_name=patch.table_name.strip(),
@@ -78,7 +102,11 @@ def create_dataset(patch: DatasetCreate, user: dict = Depends(require_admin)) ->
 
 @router.patch('/{slug}')
 def patch_dataset(slug: str, patch: DatasetPatch, user: dict = Depends(require_admin)) -> dict:
-    _get_or_404(slug)
+    dataset = _get_or_404(slug)
+    if patch.dsn is not None and patch.dsn.strip():
+        dsn_error = _validate_dsn(dataset['source'], patch.dsn)
+        if dsn_error:
+            raise HTTPException(422, dsn_error)
     updated = ds_registry.update(
         slug,
         title=patch.title, description=patch.description,
@@ -93,7 +121,7 @@ def refresh_dataset(slug: str, user: dict = Depends(require_admin)) -> dict:
     try:
         return {'dataset': _meta(ds_registry.refresh_schema(slug))}
     except DatasetError as exc:
-        raise HTTPException(502, str(exc))
+        raise HTTPException(502, sanitize_error(str(exc)))
 
 
 @router.post('/{slug}/upload')

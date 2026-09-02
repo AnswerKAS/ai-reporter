@@ -6,21 +6,22 @@
 
 ## Структура проекта
 
-- `frontend/` — React 19 + Vite + TS, роутинг `react-router-dom`, графики `recharts`. Типы отчёта: `src/types/report.ts`, датасеты: `src/types/dataset.ts`, рендеры секций `src/components/`, страницы `src/pages/` (в т.ч. `/datasets`), демо-данные `src/data/reports.ts`.
-- `backend/app/` — FastAPI, Python 3.12, свой venv в `backend/.venv`. Пакеты:
-  - `core/` — `config.py` (DB/DSN, BASE_DIR), `database.py` (SQLite `backend/reports.db`: reports, users, groups, sessions, datasets; миграция имён скиллов), `security.py` (pbkdf2, Bearer-сессии);
+- `frontend/` — React 19 + Vite + TS, роутинг `react-router-dom`, графики `recharts`. Типы отчёта: `src/types/report.ts`, датасеты и черновики скиллов: `src/types/dataset.ts`, рендеры секций `src/components/`, страницы `src/pages/` (в т.ч. `/datasets`, `/skills/<name>`), сайдбар с деревом скиллов — в `App.tsx`.
+- `backend/app/` — FastAPI, Python 3.12, свой venv в `backend/.venv`. Хранилище — PostgreSQL (схема `ai_reporter`, см. `PG*` переменные в `backend/.env`; `PG_SCHEMA` переопределяет имя схемы). Разовая миграция из legacy-SQLite `backend/reports.db` — при первом старте. Пакеты:
+  - `core/` — `config.py` (ClickHouse DSN, PG-коннект из `PG*` env, BASE_DIR), `database.py` (PostgreSQL схема `ai_reporter`: reports, users, groups, sessions, datasets, skill_drafts; миграции), `security.py` (pbkdf2, Bearer-сессии);
   - `schemas/` — `report.py` (ReportSpec, camelCase через Pydantic alias), `dataset.py`, `user.py` — зеркала фронтовых типов;
-  - `api/` — роутеры: `auth.py`, `reports.py` (+ `/api/skills`), `datasets.py`, `admin.py`;
-  - `services/` — `compiler.py` (сборка отчёта: `opencode run` → `report.py --output report.spec.json` → валидация), `prompt.py` (промпт + схема ReportSpec + блок датасетов), `template_report.py` (демо-скрипт), `worker.py` (queued → building → ready | error);
+  - `api/` — роутеры: `auth.py`, `reports.py`, `skills.py` (+ черновики скиллов), `datasets.py`, `admin.py`;
+  - `services/` — `compiler.py` (сборка отчёта: `opencode run` → `report.py --output report.spec.json` → валидация), `prompt.py` (промпт + схема ReportSpec + блок датасетов), `template_report.py` (демо-скрипт), `skill_drafts.py` (генерация/проверка скиллов через opencode), `worker.py` (queued → building → ready | error);
   - `datasets/` — реестр датасетов (`registry.py`, SQLite-таблица `datasets`) и адаптеры источников: `clickhouse.py`, `postgres.py`, `csvsource.py` (интерфейс `base.py`: test_connection / fetch_schema / sample_rows);
   - `reports/` — `warehouse.py` (витрина ClickHouse + сиды), `seed.py` (CLI `python -m app.reports.seed`).
 - `backend/skills/` — скиллы по доменам: `sales/sales.md`, `sales/drilldown.md`, `managers/manager.md`, `support/support.md`, `finance/cost.md`. Имя скилла = `домен/файл` (например `sales/sales`); файлы/папки с префиксом `_` служебные: не видны в `/api/skills` и запрещены для создания отчётов.
-- `backend/artifacts/<report_id>/` — сгенерированные `report.py`, `report.spec.json`, `datasets.json`; CSV-датасеты — `backend/artifacts/datasets/<slug>/data.csv`.
+- `backend/artifacts/` — артефакты через фасад `services/storage.py` (env `ARTIFACTS_DIR`, по умолчанию `backend/artifacts`; `ARTIFACTS_STORAGE=local|s3`, пока реализован local; каталог можно указать на бэкапируемый том): `artifacts/<report_id>/` — сгенерированные `report.py`, `report.spec.json`, `datasets.json`; `artifacts/datasets/<slug>/data.csv` — CSV-датасеты; `artifacts/skill_drafts/<id>/` — `skill.md`, `unavailable.json`, `verdict.json`.
 
 ## Датасеты
 
-Датасет = именованный источник: `source` (`clickhouse` | `postgres` | `csv`),
-`dsn` (литерал или `env:VAR`), `table_name` (CH/PG) или CSV-файл, вычитанная
+- Датасет = именованный источник: `source` (`clickhouse` | `postgres` | `csv`),
+  `dsn` (литерал | `env:VAR` | `app:postgres`/пусто — сервер метаданных),
+  `table_name` (CH/PG) или CSV-файл, вычитанная
 схема полей (`fields`), статус подключения. Реестр в SQLite, сид дефолтных
 `sales_orders` / `manager_stats` (`env:DATABASE_URL`) при пустом реестре.
 
@@ -34,7 +35,9 @@
   все зарегистрированные). Компилятор передаёт описание этих датасетов в
   промпт и пишет `datasets.json` рядом со скриптом; скрипту доступны env
   `DATASET_<SLUG>_DSN` (резолв `env:VAR`).
-- Пароли/DSN в API не отдаются; произвольный SQL от пользователя запрещён.
+- Пароли/DSN в API не отдаются (поле `dsn` не выводится); тексты ошибок
+  источников маскируются (`datasets/base.py:sanitize_error` — DSN, логины,
+  пароли, хосты). Произвольный SQL от пользователя запрещён.
 
 ## Данные (ClickHouse)
 
@@ -114,6 +117,32 @@ rowsBy}` — ключи `rowsBy` = значения xKey точек, фронт 
 Правила и каркас для новых скиллов — opencode-скилл `report-skill`
 (`.opencode/skills/report-skill/SKILL.md`).
 
+## Черновики скиллов (генерация по описанию)
+
+Любой авторизованный пользователь на `/datasets` описывает словами нужный
+отчёт, выбирает домен/slug/название и датасеты → `POST /api/skill-drafts`
+создаёт черновик (статус `generating`) и фоново запускает opencode-агента
+(правила из `report-skill` + метаданные датасетов + описание) → `draft`.
+Дальше: автор смотрит текст, может перегенерировать и `POST /{id}/submit`
+→ `review`.
+
+Админ в `/admin` («Черновики скиллов»): `POST /api/skill-drafts/{id}/check`
+— агент-ревьюер проверяет скилл по правилам и пишет вердикт
+`{ok, issues[]}` → статус `checked`/`rejected`; `POST /{id}/publish` —
+пишет `backend/skills/<domain>/<name>.md`, создаёт отчёт (`mode auto`,
+slug `домен-имя-<hex>`) и выдаёт доступ автору (`report_access`) — отчёт
+виден только автору и админу. Статусы: generating/draft/review/checked/
+rejected/**unavailable**/failed/published. Ревьюер-агент пишет `verdict.json` в
+`backend/artifacts/skill_drafts/<id>/`.
+
+Отказ генерации: агент сверяет запрос пользователя с полями датасетов
+(придумывать поля запрещено); если данных недостаточно — пишет
+`unavailable.json {reason, suggestions}` вместо `skill.md` → черновик в
+статусе `unavailable` (жёлтый бейдж, причина+предложения в issues).
+Если у всех выбранных датасетов схемы не вычитаны — отказ сразу, без
+вызова агента. Перегенерация: кнопка раскрывает редактор запроса
+(`POST /{id}/regenerate {description}`).
+
 Изменение скилла (новый фильтр/секция) требует **перекомпиляции**:
 `POST /api/reports/{slug}/recompile` `{mode?: "llm"|"auto"|"demo"}` (только
 админ) — ставит отчёт в очередь, воркер заново генерирует `report.py`
@@ -150,6 +179,6 @@ rowsBy}` — ключи `rowsBy` = значения xKey точек, фронт 
   `/api/admin/groups` (+`/{id}/members`), `/api/admin/access` (назначение
   отчёта пользователю ИЛИ группе), `/api/admin/access/{slug}` — список.
 - Фронт: `/login`, `/reports` (группировка по доменам скиллов), `/datasets`,
-  `/account` (свои отчёты + смена пароля), `/admin` (пользователи/группы/
-  назначения). Демо-fallback данных на фронте удалён — при ошибке API
-  заглушка.
+  `/skills/<name>` (текст скилла + его отчёты, админу — создание отчёта),
+  сайдбар с деревом скиллов, `/account` (свои отчёты + смена пароля),
+  `/admin` (пользователи/группы/назначения + черновики скиллов).

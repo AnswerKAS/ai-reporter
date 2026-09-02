@@ -45,3 +45,28 @@ export interface SkillInfo {
   domain: string
   path: string
 }
+
+export type SkillDraftStatus =
+  | 'generating'
+  | 'draft'
+  | 'review'
+  | 'checked'
+  | 'rejected'
+  | 'failed'
+  | 'unavailable'
+  | 'published'
+
+export interface SkillDraft {
+  id: string
+  domain: string
+  name: string
+  title: string
+  description: string
+  datasets: string[]
+  content: string
+  status: SkillDraftStatus
+  issues: string[]
+  authorId: string
+  createdAt: string
+  updatedAt: string
+}

@@ -76,3 +76,47 @@ class DbConfig:
 
 
 DB = DbConfig(os.environ.get('DATABASE_URL'))
+
+
+class PgConfig:
+    """Подключение к PostgreSQL: переменные PG* из .env (libpq-формат).
+
+    Приложение хранит все данные в отдельной схеме (PG_SCHEMA, по умолчанию
+    ai_reporter) — search_path выставляется на каждом соединении.
+    """
+
+    def __init__(self) -> None:
+        self.host = os.environ.get('PGHOST', 'localhost')
+        self.port = int(os.environ.get('PGPORT', '5432'))
+        self.database = os.environ.get('PGDATABASE', 'postgres')
+        self.user = os.environ.get('PGUSER', 'postgres')
+        self.password = os.environ.get('PGPASSWORD', '')
+        self.sslmode = os.environ.get('PGSSLMODE', 'prefer')
+        self.schema = os.environ.get('PG_SCHEMA', 'ai_reporter').strip() or 'ai_reporter'
+
+    @property
+    def conninfo(self) -> str:
+        """URI-формат: спецсимволы пароля безопасны через URL-кодирование."""
+        from urllib.parse import quote
+
+        auth = quote(self.user, safe='')
+        if self.password:
+            auth += ':' + quote(self.password, safe='')
+        dsn = f'postgresql://{auth}@{self.host}:{self.port}/{self.database}'
+        params = []
+        if self.sslmode:
+            params.append(f'sslmode={self.sslmode}')
+        # сервер может работать в SQL_ASCII — принудительно UTF-8 для корректного декодирования
+        params.append('client_encoding=utf8')
+        dsn += '?' + '&'.join(params)
+        return dsn
+
+    @property
+    def connect_kwargs(self) -> dict:
+        return {'options': f'-c search_path={self.schema},public'}
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f'PgConfig(host={self.host}, port={self.port}, db={self.database}, schema={self.schema})'
+
+
+PG = PgConfig()
