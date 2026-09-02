@@ -33,6 +33,10 @@ def _find_opencode() -> str:
 OPENCODE_BIN = _find_opencode()
 # Модель opencode для генерации report.py; при пустом значении opencode выбирает сам.
 OPENCODE_MODEL = os.environ.get('OPENCODE_MODEL') or None
+# Резервная модель: при таймауте/stall основной модели попытка делается ей
+# (провайдеры бывают неработоспособны с конкретных IP — glm через OpenRouter
+# на VPS зависает после step_start, deepseek работает).
+OPENCODE_FALLBACK_MODEL = os.environ.get('OPENCODE_FALLBACK_MODEL') or None
 
 OPENCODE_TIMEOUT = int(os.environ.get('OPENCODE_TIMEOUT', '900'))
 # Черновики скиллов (generate/check/improve): короче — зависание не должно
@@ -177,11 +181,17 @@ async def _run(
             chunks.append(chunk)
 
     pump = asyncio.create_task(_pump())
+
+    def _tail(limit: int = 1200) -> str:
+        return b''.join(chunks).decode('utf-8', errors='replace')[-limit:]
+
     try:
         await asyncio.wait_for(asyncio.shield(pump), timeout=timeout)
     except asyncio.TimeoutError:
         _kill_tree()
-        raise CompileError(f'процесс превысил таймаут {timeout}s: {" ".join(cmd[:2])}') from None
+        raise CompileError(
+            f'процесс превысил таймаут {timeout}s: {" ".join(cmd[:2])}\n--- последний вывод ---\n{_tail()}'
+        ) from None
     except _Stall:
         _kill_tree()
         try:
@@ -190,6 +200,7 @@ async def _run(
             pump.cancel()
         raise CompileError(
             f'агент не проявлял активности {stall_timeout}s — остановлен как зависший: {" ".join(cmd[:2])}'
+            f'\n--- последний вывод ---\n{_tail()}'
         ) from None
     finally:
         if proc_slot is not None and proc_slot.get('proc') is proc:
@@ -199,22 +210,37 @@ async def _run(
     return rc or 0, text
 
 
-async def _run_opencode(workdir: Path, skill_name: str, params: dict[str, str], skill_text: str) -> None:
-    datasets = _skill_datasets(skill_text)
-    _write_datasets_json(workdir, datasets)
-    prompt_text = prompt.build_prompt(skill_text, params, datasets)
-
+def _opencode_cmd(workdir: Path, prompt_text: str, model: str | None) -> list[str]:
     cmd = [
         OPENCODE_BIN, 'run', prompt_text,
         '--dir', str(workdir.resolve()),  # абсолютный путь: opencode кладёт файлы сюда
         '--format', 'json', '--auto', '--print-logs',
     ]
-    if OPENCODE_MODEL:
-        cmd += ['-m', OPENCODE_MODEL]
+    if model:
+        cmd += ['-m', model]
+    return cmd
+
+
+async def _run_opencode(workdir: Path, skill_name: str, params: dict[str, str], skill_text: str) -> None:
+    datasets = _skill_datasets(skill_text)
+    _write_datasets_json(workdir, datasets)
+    prompt_text = prompt.build_prompt(skill_text, params, datasets)
 
     # stall-детекция и для генерации отчётов: молчание агента не должно
     # съедать весь таймаут — fallback на демо сработает быстрее
-    code, output = await _run(cmd, workdir, OPENCODE_TIMEOUT, stall_timeout=OPENCODE_STALL_TIMEOUT)
+    try:
+        code, output = await _run(
+            _opencode_cmd(workdir, prompt_text, OPENCODE_MODEL),
+            workdir, OPENCODE_TIMEOUT, stall_timeout=OPENCODE_STALL_TIMEOUT,
+        )
+    except CompileError:
+        if not OPENCODE_FALLBACK_MODEL:
+            raise
+        print(f'[compiler] модель {OPENCODE_MODEL} не сработала, повторяю с {OPENCODE_FALLBACK_MODEL}')
+        code, output = await _run(
+            _opencode_cmd(workdir, prompt_text, OPENCODE_FALLBACK_MODEL),
+            workdir, OPENCODE_TIMEOUT, stall_timeout=OPENCODE_STALL_TIMEOUT,
+        )
     if code != 0:
         tail = output[-2000:]
         raise CompileError(f'opencode завершился с кодом {code}:\n{tail}')

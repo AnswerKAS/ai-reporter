@@ -20,6 +20,7 @@ from ..datasets import registry as dataset_registry
 from ..services import storage
 from .compiler import (
     OPENCODE_BIN,
+    OPENCODE_FALLBACK_MODEL,
     OPENCODE_MODEL,
     OPENCODE_DRAFT_TIMEOUT,
     OPENCODE_STALL_TIMEOUT,
@@ -242,16 +243,17 @@ async def improve_content(draft: dict) -> dict:
     return {'content': content, 'issues': issues}
 
 
-def _run_opencode_cmd(workdir: Path, prompt_text: str) -> list[str]:
+def _run_opencode_cmd(workdir: Path, prompt_text: str, model: str | None = None) -> list[str]:
     cmd = [OPENCODE_BIN, 'run', prompt_text, '--dir', str(workdir.resolve()), '--format', 'json', '--auto', '--print-logs']
-    if OPENCODE_MODEL:
-        cmd += ['-m', OPENCODE_MODEL]
+    model = model if model is not None else OPENCODE_MODEL
+    if model:
+        cmd += ['-m', model]
     return cmd
 
 
-async def _run_opencode(workdir: Path, prompt_text: str, proc_slot: dict | None = None) -> tuple[int, str]:
+async def _run_opencode(workdir: Path, prompt_text: str, proc_slot: dict | None = None, model: str | None = None) -> tuple[int, str]:
     return await _run(
-        _run_opencode_cmd(workdir, prompt_text),
+        _run_opencode_cmd(workdir, prompt_text, model),
         workdir,
         OPENCODE_DRAFT_TIMEOUT,
         stall_timeout=OPENCODE_STALL_TIMEOUT,
@@ -266,20 +268,24 @@ _RETRY_DELAY = 5
 
 
 async def _run_opencode_with_retry(workdir: Path, prompt_text: str, proc_slot: dict | None = None) -> tuple[int, str]:
-    """Один автоматический повтор при таймауте/stall/убийстве процесса;
-    остальные ошибки возвращаются сразу."""
+    """Попытки: основная модель, затем резервная (если задана) — провайдеры
+    бывают неработоспособны выборочно (glm через OpenRouter зависает с IP
+    нашего VPS, deepseek работает). Остальные ошибки возвращаются сразу."""
+    models = [OPENCODE_MODEL, OPENCODE_FALLBACK_MODEL]
+    if not models[1]:
+        models = [OPENCODE_MODEL]
     last: Exception | None = None
-    for attempt in (1, 2):
+    for i, model in enumerate(models):
         try:
-            return await _run_opencode(workdir, prompt_text, proc_slot)
+            return await _run_opencode(workdir, prompt_text, proc_slot, model)
         except CompileError as exc:
-            last = exc  # таймаут или stall — всегда повторяем
+            last = exc  # таймаут или stall — пробуем следующую модель
         except AgentRuntimeError as exc:
             if exc.code not in _RETRYABLE_CODES:
                 raise
             last = exc
-        if attempt == 1:
-            print(f'[skill-drafts] попытка 1 не удалась ({last}), повтор через {_RETRY_DELAY}s')
+        if i < len(models) - 1:
+            print(f'[skill-drafts] модель {model or "(default)"} не сработала ({last}), пробуем {models[i + 1]}')
             await asyncio.sleep(_RETRY_DELAY)
     assert last is not None
     raise last
