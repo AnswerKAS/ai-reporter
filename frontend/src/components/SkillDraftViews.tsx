@@ -33,7 +33,7 @@ export const DRAFT_STATUS_BADGES: Record<SkillDraftStatus, string> = {
   published: 'badge badge-good',
 }
 
-const REGENERABLE_STATUSES: SkillDraftStatus[] = ['draft', 'rejected', 'failed', 'unavailable']
+const REGENERABLE_STATUSES: SkillDraftStatus[] = ['draft', 'rejected', 'failed', 'unavailable', 'published']
 
 export function useSkillDraftPolling(drafts: SkillDraft[] | null, reload: () => void) {
   const active = (drafts ?? []).some((d) => d.status === 'generating' || d.status === 'review')
@@ -127,6 +127,11 @@ export function DraftCard({
           <button type="button" className="btn btn-ghost" disabled={busy} onClick={startEditing}>
             Перегенерировать
           </button>
+        )}
+        {draft.status === 'published' && (
+          <p className="muted draft-datasets">
+            Перегенерация запустит цикл повторной модерации: существующие скилл и отчёт остаются рабочими до новой публикации.
+          </p>
         )}
         {draft.status !== 'published' && (
           <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => run(() => deleteSkillDraft(draft.id))}>

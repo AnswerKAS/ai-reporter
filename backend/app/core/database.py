@@ -139,6 +139,7 @@ def init_db() -> None:
                 status TEXT NOT NULL DEFAULT 'generating',
                 issues TEXT NOT NULL DEFAULT '[]',
                 author_id TEXT NOT NULL,
+                republish TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
@@ -152,6 +153,9 @@ def init_db() -> None:
             )
             '''
         )
+        # миграции существующих таблиц
+        for ddl in ('ALTER TABLE skill_drafts ADD COLUMN IF NOT EXISTS republish TEXT',):
+            conn.execute(ddl)
 
 
 def _meta_get(conn, key: str) -> str | None:
@@ -574,7 +578,8 @@ def list_skill_drafts(*, author_id: str | None = None) -> list[dict]:
 
 def update_skill_draft(draft_id: str, *, content: str | None = None, status: str | None = None,
                        issues: list | None = None, datasets: list[str] | None = None,
-                       description: str | None = None) -> dict | None:
+                       description: str | None = None, republish: str | None = None,
+                       clear_republish: bool = False) -> dict | None:
     fields, values = ['updated_at = %s'], [utcnow()]
     for column, value in (
         ('content', content),
@@ -582,10 +587,13 @@ def update_skill_draft(draft_id: str, *, content: str | None = None, status: str
         ('issues', json.dumps(issues, ensure_ascii=False) if issues is not None else None),
         ('datasets', json.dumps(datasets) if datasets is not None else None),
         ('description', description),
+        ('republish', republish),
     ):
         if value is not None:
             fields.append(f'{column} = %s')
             values.append(value)
+    if clear_republish:
+        fields.append('republish = NULL')
     with _conn() as conn:
         conn.execute(f'UPDATE skill_drafts SET {", ".join(fields)} WHERE id = %s', (*values, draft_id))
     return get_skill_draft(draft_id)

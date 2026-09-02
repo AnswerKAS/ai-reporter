@@ -42,8 +42,9 @@ def get_skill(name: str) -> dict:
 def _draft_meta(d: dict) -> dict:
     return {k: d[k] for k in (
         'id', 'domain', 'name', 'title', 'description', 'datasets',
-        'content', 'status', 'issues', 'author_id', 'created_at', 'updated_at',
-    )}
+        'content', 'status', 'issues', 'author_id', 'republish',
+        'created_at', 'updated_at',
+    ) if k in d}
 
 
 def _get_draft_or_404(draft_id: str, user: dict) -> dict:
@@ -106,14 +107,24 @@ def get_draft(draft_id: str, user: dict = Depends(get_current_user)) -> dict:
 @router.post('/skill-drafts/{draft_id}/regenerate', status_code=202)
 async def regenerate_draft(draft_id: str, payload: dict | None = None, user: dict = Depends(get_current_user)) -> dict:
     draft = _get_draft_or_404(draft_id, user)
-    if draft['status'] == 'published':
-        raise HTTPException(409, 'опубликованный скилл нельзя перегенерировать')
     if draft['status'] == 'generating':
         raise HTTPException(409, 'генерация уже идёт')
+    # опубликованный черновик можно дорабатывать: правка запроса запускает
+    # цикл повторной модерации (файл скилла и отчёт остаются рабочими,
+    # пока новая версия не пройдёт проверку и публикацию заново)
     description = (payload or {}).get('description')
     if description:
         db.update_skill_draft(draft_id, description=str(description).strip())
-    db.update_skill_draft(draft_id, status='generating', issues=[])
+    if draft['status'] == 'published':
+        # запоминаем предыдущую публикацию, чтобы publish мог перезаписать её же файлом
+        db.update_skill_draft(
+            draft_id,
+            status='generating',
+            issues=[],
+            republish=f"{draft['domain']}/{draft['name']}",
+        )
+    else:
+        db.update_skill_draft(draft_id, status='generating', issues=[])
     skill_drafts.spawn_generation(draft_id)
     return {'draft': _draft_meta(db.get_skill_draft(draft_id))}
 
@@ -121,8 +132,7 @@ async def regenerate_draft(draft_id: str, payload: dict | None = None, user: dic
 @router.delete('/skill-drafts/{draft_id}')
 def delete_draft(draft_id: str, user: dict = Depends(get_current_user)) -> dict:
     draft = _get_draft_or_404(draft_id, user)
-    if draft['status'] == 'published':
-        raise HTTPException(409, 'опубликованный скилл нельзя удалить через черновик')
+    # опубликованный черновик удалять нельзя — удаляется сам скилл на диске (вне черновиков)
     db.delete_skill_draft(draft_id)
     return {'ok': True}
 
@@ -159,33 +169,53 @@ PUBLISHABLE_STATUSES = ('draft', 'review', 'checked', 'rejected')
 
 @router.post('/skill-drafts/{draft_id}/publish', status_code=202)
 async def publish_draft(draft_id: str, payload: dict | None = None, user: dict = Depends(require_admin)) -> dict:
-    """Публикует скилл: пишет файл, создаёт отчёт (mode auto), доступ — автору."""
+    """Публикует скилл: пишет файл, создаёт отчёт (mode auto), доступ — автору.
+
+    Если черновик уже был опубликован (republish), существующий файл скилла
+    и его отчёт перезаписываются/переиспользуются вместо создания новых.
+    """
     draft = _get_draft_or_404(draft_id, user)
-    if draft['status'] not in PUBLISHABLE_STATUSES:
-        raise HTTPException(409, f"публикация невозможна из статуса {draft['status']}")
+    if draft['status'] != 'checked':
+        raise HTTPException(409, 'перед публикацией скилл должен пройти проверку (status=checked)')
     content = (draft.get('content') or '').strip()
     if not content:
         raise HTTPException(409, 'скилл пуст')
     skill_name = f"{draft['domain']}/{draft['name']}"
     skill_file = compiler.skill_path(skill_name)
-    if skill_file.exists():
-        raise HTTPException(409, f'скилл {skill_name} уже существует')
+
+    is_republish = bool(draft.get('republish'))
+    existing_report = None
+    if is_republish:
+        # ищем отчёт прошлой публикации (он закреплён за автором)
+        for r in db.list_reports():
+            if r['skill'] == skill_name:
+                existing_report = r
+                break
+
     skill_file.parent.mkdir(parents=True, exist_ok=True)
     skill_file.write_text(content + ('\n' if not content.endswith('\n') else ''), encoding='utf-8')
 
     mode = (payload or {}).get('mode', 'auto')
     if mode not in ('auto', 'demo', 'llm'):
         mode = 'auto'
-    slug = f"{draft['domain']}-{draft['name']}-{uuid.uuid4().hex[:6]}"
-    db.create_report(
-        id=uuid.uuid4().hex,
-        slug=slug,
-        title=draft['title'],
-        description='Скилл создан агентом по описанию и согласован администратором.',
-        skill=skill_name,
-        params={},
-        mode=mode,
-    )
-    db.grant_access(slug, user_id=draft['author_id'])
+
+    if existing_report is not None:
+        # отчёт уже существует: пересобираем его по обновлённому скиллу
+        db.update_report(existing_report['slug'], mode=mode if mode != 'auto' else existing_report.get('mode'))
+        db.update_status(existing_report['slug'], status='queued')
+        report_slug = existing_report['slug']
+    else:
+        slug = f"{draft['domain']}-{draft['name']}-{uuid.uuid4().hex[:6]}"
+        db.create_report(
+            id=uuid.uuid4().hex,
+            slug=slug,
+            title=draft['title'],
+            description='Скилл создан агентом по описанию и согласован администратором.',
+            skill=skill_name,
+            params={},
+            mode=mode,
+        )
+        db.grant_access(slug, user_id=draft['author_id'])
+        report_slug = slug
     db.update_skill_draft(draft_id, status='published')
-    return {'draft': _draft_meta(db.get_skill_draft(draft_id)), 'report_slug': slug}
+    return {'draft': _draft_meta(db.get_skill_draft(draft_id)), 'report_slug': report_slug if existing_report is None else existing_report['slug']}
