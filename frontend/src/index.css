@@ -821,6 +821,30 @@ a {
   gap: 10px;
 }
 
+.dataset-card-head-side {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dataset-card-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.dataset-card-delete:hover {
+  color: var(--bad);
+  background: rgba(220, 38, 38, 0.08);
+}
+
 .dataset-card-head h3 {
   font-size: 15px;
 }

@@ -72,8 +72,23 @@ def skill_path(name: str) -> Path:
 
 
 def _skill_datasets(skill_text: str) -> list[dict]:
-    """Датасеты, объявленные секцией '## Датасеты' скилла (без секции — все)."""
-    return dataset_registry.for_slugs(dataset_registry.parse_skill_datasets(skill_text))
+    """Датасеты, объявленные секцией '## Датасеты' скилла.
+
+    Секция обязательна: без неё сборка падает с понятной ошибкой — иначе
+    отчёт молча строится по всем датасетам реестра (лишние таблицы,
+    нерелевантные данные). Секция есть, но пустая — то же самое.
+    """
+    slugs = dataset_registry.parse_skill_datasets(skill_text)
+    if slugs is None or not slugs:
+        raise CompileError(
+            'в скилле нет секции «## Датасеты: <slug>, ...» — укажите, какие датасеты '
+            'использует отчёт (slug\'и из реестра), и перекомпилируйте отчёт'
+        )
+    known = {d['slug'] for d in dataset_registry.list_all()}
+    unknown = [s for s in slugs if s not in known]
+    if unknown:
+        raise CompileError(f'в реестре нет датасетов: {", ".join(unknown)} — исправьте секцию «## Датасеты»')
+    return dataset_registry.for_slugs(slugs)
 
 
 def _datasets_meta(datasets: list[dict]) -> list[dict]:

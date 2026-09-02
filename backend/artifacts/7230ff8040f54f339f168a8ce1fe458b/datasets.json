@@ -1,0 +1,94 @@
+[
+  {
+    "slug": "pyrus",
+    "title": "ЗАдапайрус",
+    "description": "",
+    "source": "postgres",
+    "table": "public.pyrus_general",
+    "file": "",
+    "fields": [
+      {
+        "name": "form_id",
+        "type": "bigint"
+      },
+      {
+        "name": "form_name",
+        "type": "text"
+      },
+      {
+        "name": "steps",
+        "type": "jsonb"
+      },
+      {
+        "name": "fields",
+        "type": "jsonb"
+      },
+      {
+        "name": "fields_count",
+        "type": "integer"
+      },
+      {
+        "name": "deleted_or_closed",
+        "type": "boolean"
+      },
+      {
+        "name": "last_task_id",
+        "type": "bigint"
+      },
+      {
+        "name": "last_sync_at",
+        "type": "timestamp with time zone"
+      },
+      {
+        "name": "raw",
+        "type": "jsonb"
+      },
+      {
+        "name": "created_at",
+        "type": "timestamp with time zone"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamp with time zone"
+      }
+    ]
+  },
+  {
+    "slug": "tast-field-details",
+    "title": "Детали по задачам в Pyrus",
+    "description": "Детализация по задачам",
+    "source": "postgres",
+    "table": "public.pyrus_form_fields",
+    "file": "",
+    "fields": [
+      {
+        "name": "form_id",
+        "type": "bigint"
+      },
+      {
+        "name": "task_id",
+        "type": "bigint"
+      },
+      {
+        "name": "field_id",
+        "type": "bigint"
+      },
+      {
+        "name": "row_id",
+        "type": "bigint"
+      },
+      {
+        "name": "field_name",
+        "type": "text"
+      },
+      {
+        "name": "field_type",
+        "type": "text"
+      },
+      {
+        "name": "field_value",
+        "type": "text"
+      }
+    ]
+  }
+]

@@ -128,7 +128,7 @@ def create(
 def update(slug: str, *, title: str | None = None, description: str | None = None,
            dsn: str | None = None, table_name: str | None = None,
            schema: list[dict] | None = None, status: str | None = None,
-           error: str | None = None) -> dict | None:
+           error: str | None = None, clear_error: bool = False) -> dict | None:
     fields, values = ['updated_at = %s'], [utcnow()]
     for column, value in (
         ('title', title), ('description', description), ('dsn', dsn),
@@ -138,6 +138,8 @@ def update(slug: str, *, title: str | None = None, description: str | None = Non
         if value is not None:
             fields.append(f'{column} = %s')
             values.append(value)
+    if clear_error:
+        fields.append('error = NULL')
     with _conn() as conn:
         conn.execute(f'UPDATE datasets SET {", ".join(fields)} WHERE slug = %s', (*values, slug))
     return get(slug)
@@ -181,7 +183,7 @@ def refresh_schema(slug: str) -> dict:
         adapter = adapter_for(dataset)
         adapter.test_connection()
         fields = [f.as_dict() for f in adapter.fetch_schema()]
-        return update(slug, schema=fields, status='ok', error=None) or get(slug)  # type: ignore[return-value]
+        return update(slug, schema=fields, status='ok', clear_error=True) or get(slug)  # type: ignore[return-value]
     except DatasetError as exc:
         return update(slug, status='error', error=sanitize_error(str(exc))) or get(slug)  # type: ignore[return-value]
 

@@ -495,9 +495,19 @@ def pg_rows(dsn, table, limit=30):
         return None, None
     try:
         import psycopg
+
+        def _q(name):
+            return '"' + name.replace('"', "") + '"'
+
+        # 'schema.table' квотируется по частям
+        if "." in table:
+            schema, _, name = table.rpartition(".")
+            ident = f'{_q(schema.strip())}.{_q(name.strip())}'
+        else:
+            ident = _q(table.strip())
         with psycopg.connect(dsn, connect_timeout=10) as conn:
             with conn.cursor() as cur:
-                cur.execute(f'SELECT * FROM "{table}" LIMIT {int(limit)}')
+                cur.execute(f"SELECT * FROM {ident} LIMIT {int(limit)}")
                 cols = [d[0] for d in (cur.description or [])]
                 return cols, [[_cell(v) for v in row] for row in cur.fetchall()]
     except Exception:

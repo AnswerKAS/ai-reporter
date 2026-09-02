@@ -103,7 +103,8 @@ export function DatasetsPage() {
 
       <MyDrafts />
 
-      <div className="dataset-grid">        {(datasets ?? []).map((d) => (
+      <div className="dataset-grid">
+        {(datasets ?? []).map((d) => (
           <button
             key={d.slug}
             type="button"
@@ -112,7 +113,34 @@ export function DatasetsPage() {
           >
             <div className="dataset-card-head">
               <h3>{d.title}</h3>
-              <span className={STATUS_BADGES[d.status] ?? 'badge'}>{d.status}</span>
+              <span className="dataset-card-head-side">
+                <span className={STATUS_BADGES[d.status] ?? 'badge'}>{d.status}</span>
+                {isAdmin && (
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    className="dataset-card-delete"
+                    title={`Удалить датасет ${d.slug}`}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      if (window.confirm(`Удалить датасет «${d.title}» (${d.slug})? Отчёты, использующие его, сломаются.`)) {
+                        runAdminAction(async () => {
+                          await deleteDataset(d.slug)
+                          if (selected === d.slug) setSelected(null)
+                        })
+                      }
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        e.stopPropagation()
+                      }
+                    }}
+                  >
+                    ×
+                  </span>
+                )}
+              </span>
             </div>
             <p className="muted">{d.description ?? '—'}</p>
             <span className="dataset-card-meta">
