@@ -14,7 +14,22 @@ from ..datasets import registry as dataset_registry
 
 SKILLS_DIR = BASE_DIR / 'skills'
 
-OPENCODE_BIN = shutil.which('opencode') or 'opencode'
+def _find_opencode() -> str:
+    """Бинарник opencode: PATH, затем типовые каталоги установки."""
+    found = shutil.which('opencode')
+    if found:
+        return found
+    for candidate in (
+        Path.home() / '.opencode' / 'bin' / 'opencode',
+        Path('/usr/local/bin/opencode'),
+        Path('/opt/homebrew/bin/opencode'),
+    ):
+        if candidate.is_file():
+            return str(candidate)
+    return 'opencode'  # упадёт с FileNotFoundError → fallback на demo
+
+
+OPENCODE_BIN = _find_opencode()
 # Модель opencode для генерации report.py; при пустом значении opencode выбирает сам.
 OPENCODE_MODEL = os.environ.get('OPENCODE_MODEL') or None
 
@@ -88,13 +103,16 @@ async def _run(cmd: list[str], cwd: Path, timeout: int, env: dict | None = None)
     full_env = os.environ.copy()
     if env:
         full_env.update(env)
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        cwd=str(cwd),
-        env=full_env,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-    )
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            cwd=str(cwd),
+            env=full_env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+    except FileNotFoundError as exc:
+        raise CompileError(f'исполняемый файл не найден: {cmd[0]} ({exc})') from exc
     try:
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except asyncio.TimeoutError:
