@@ -1,15 +1,25 @@
-"""Фоновый воркер сборки отчётов: забирает queued-отчёты и компилирует."""
+"""Фоновый воркер сборки отчётов: забирает queued-отчёты и компилирует.
+
+Попутно раз в минуту подчищает зависшие фоновые задачи черновиков
+(skill_drafts.rescue_stale_drafts) — на случай, если opencode завис
+или сервер умер без рестарта.
+"""
 
 import asyncio
+import time
 
 from ..core import database as db
 from . import compiler
+from . import skill_drafts
+
+RESCUE_INTERVAL = 60
 
 
 class Worker:
     def __init__(self) -> None:
         self._wake = asyncio.Event()
         self._task: asyncio.Task | None = None
+        self._last_rescue = 0.0
 
     def wake(self) -> None:
         self._wake.set()
@@ -19,6 +29,9 @@ class Worker:
             report = db.claim_queued()
             if report is None:
                 self._wake.clear()
+                if time.monotonic() - self._last_rescue > RESCUE_INTERVAL:
+                    self._last_rescue = time.monotonic()
+                    skill_drafts.rescue_stale_drafts(compiler.OPENCODE_TIMEOUT + 120)
                 try:
                     await asyncio.wait_for(self._wake.wait(), timeout=30)
                 except asyncio.TimeoutError:

@@ -295,6 +295,33 @@ def rescue_interrupted_generations() -> None:
             ])
 
 
+def rescue_stale_drafts(max_age_seconds: int) -> None:
+    """Watchdog: фоновые задачи черновиков, не подававшие признаков жизни
+    дольше таймаута opencode (например, процесс завис или сервер умер без
+    рестарта), возвращаются в состояние, из которого их можно продолжить."""
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
+    for draft in db.list_skill_drafts():
+        if draft['status'] not in ('generating', 'improving'):
+            continue
+        try:
+            upd = datetime.fromisoformat(draft['updated_at']).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        if (now - upd).total_seconds() < max_age_seconds:
+            continue
+        if draft['status'] == 'generating':
+            db.update_skill_draft(draft['id'], status='failed', issues=[
+                'Генерация не завершилась за отведённое время — запустите перегенерацию.',
+            ])
+        else:
+            db.update_skill_draft(draft['id'], status='review', issues=[
+                'Исправление скилла не завершилось за отведённое время — '
+                'запустите «Улучшить скилл» заново.',
+            ])
+
+
 def spawn_check(draft_id: str) -> None:
     async def _job() -> None:
         draft = db.get_skill_draft(draft_id)
