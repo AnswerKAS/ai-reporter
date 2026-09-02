@@ -1,11 +1,73 @@
 import { useEffect, useState } from 'react'
-import { useParams, Navigate, Link } from 'react-router-dom'
+import { useParams, Navigate, Link, useNavigate } from 'react-router-dom'
 import type { Report } from '../types/report'
-import { applyFilters, fetchReport, fetchSkillContent } from '../lib/api'
+import { applyFilters, deleteReport, fetchReport, fetchSkillContent, updateReport } from '../lib/api'
 import { SectionRenderer } from '../components/SectionRenderer'
 import { ReportFilters } from '../components/ReportFilters'
+import { useAuth } from '../lib/auth'
 
 const LIVE_INTERVAL_MS = 15000
+
+function ReportEdit({ report, onSaved }: { report: Report; onSaved: () => void }) {
+  const [open, setOpen] = useState(false)
+  const [title, setTitle] = useState(report.title)
+  const [description, setDescription] = useState(report.description ?? '')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (open) {
+      setTitle(report.title)
+      setDescription(report.description ?? '')
+      setError(null)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, report.slug])
+
+  const save = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      await updateReport(report.slug, { title: title.trim(), description: description.trim() || undefined })
+      setOpen(false)
+      onSaved()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'не удалось сохранить')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (!open) {
+    return (
+      <button type="button" className="btn btn-ghost" onClick={() => setOpen(true)}>
+        Редактировать
+      </button>
+    )
+  }
+
+  return (
+    <div className="report-edit">
+      <label>
+        Название
+        <input value={title} onChange={(e) => setTitle(e.target.value)} />
+      </label>
+      <label>
+        Описание
+        <input value={description} onChange={(e) => setDescription(e.target.value)} />
+      </label>
+      {error && <p className="form-error">{error}</p>}
+      <div className="dataset-actions">
+        <button type="button" className="btn btn-primary" disabled={busy || !title.trim()} onClick={save}>
+          {busy ? 'Сохраняем…' : 'Сохранить'}
+        </button>
+        <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => setOpen(false)}>
+          Отмена
+        </button>
+      </div>
+    </div>
+  )
+}
 
 function SkillInline({ skill }: { skill: string }) {
   const [open, setOpen] = useState(false)
@@ -53,9 +115,12 @@ function SkillInline({ skill }: { skill: string }) {
 
 export function ReportViewPage() {
   const { slug } = useParams<{ slug: string }>()
+  const navigate = useNavigate()
+  const { isAdmin } = useAuth()
   const [report, setReport] = useState<Report | null>(null)
   const [status, setStatus] = useState<string>('loading')
   const [refreshing, setRefreshing] = useState(false)
+  const [deleting, setDeleting] = useState(false)
 
   useEffect(() => {
     if (!slug) return
@@ -114,6 +179,18 @@ export function ReportViewPage() {
     }
   }
 
+  const onDelete = async () => {
+    if (!slug || !window.confirm('Удалить отчёт? Назначения доступа и артефакты будут удалены тоже.')) return
+    setDeleting(true)
+    try {
+      await deleteReport(slug)
+      navigate('/reports')
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'не удалось удалить отчёт')
+      setDeleting(false)
+    }
+  }
+
   if (!slug) return <Navigate to="/reports" replace />
   if (!report && status === 'loading') return <main className="page">Загрузка…</main>
 
@@ -169,7 +246,22 @@ export function ReportViewPage() {
         <Link to="/reports" className="crumb-link">← Отчёты</Link>
       </nav>
       <header className="page-header">
-        <h1>{report.title}</h1>
+        <div className="report-head-row">
+          <h1>{report.title}</h1>
+          <div className="dataset-actions">
+            <ReportEdit report={report} onSaved={() => {
+              if (!slug) return
+              fetchReport(slug).then((fresh) => {
+                if (fresh?.sections) setReport(fresh)
+              })
+            }} />
+            {isAdmin && (
+              <button type="button" className="btn btn-danger" disabled={deleting} onClick={onDelete}>
+                Удалить отчёт
+              </button>
+            )}
+          </div>
+        </div>
         {report.description && <p className="muted">{report.description}</p>}
         <div className="meta-line">
           {report.skill && <SkillInline skill={report.skill} />}

@@ -12,8 +12,10 @@ from ..schemas.report import (
     RecompilePatch,
     ReportMeta,
     ReportPatch,
+    ReportUpdate,
 )
 from ..services import compiler
+from ..services import storage
 from ..services.worker import worker
 
 router = APIRouter(prefix='/api', tags=['reports'])
@@ -95,6 +97,60 @@ async def get_report(slug: str, user: dict = Depends(get_current_user)) -> dict:
             payload['sections'] = spec['sections']
             payload['filters'] = spec.get('filters') or []
     return {'report': payload}
+
+
+@router.patch('/reports/{slug}')
+def update_report(slug: str, patch: ReportUpdate, user: dict = Depends(get_current_user)) -> dict:
+    """Правка опубликованного отчёта.
+
+    Название/описание — любой пользователь с доступом; скилл и режим
+    сборки — только администратор (смена скилла ставит отчёт в очередь
+    на перекомпиляцию).
+    """
+    _check_access(user, slug)
+    report = db.get_report(slug)
+    if report is None:
+        raise HTTPException(404, 'отчёт не найден')
+    is_admin = user.get('role') == 'admin'
+    if not is_admin and (patch.skill is not None or patch.mode is not None):
+        raise HTTPException(403, 'изменять скилл и режим сборки может только администратор')
+
+    if patch.title is not None and not patch.title.strip():
+        raise HTTPException(422, 'название не может быть пустым')
+
+    skill_changed = False
+    if patch.skill is not None and patch.skill != report['skill']:
+        skill_file = compiler.skill_path(patch.skill)
+        if not skill_file.exists():
+            raise HTTPException(404, f'скилл {patch.skill} не найден')
+        if any(part.startswith('_') for part in patch.skill.split('/')):
+            raise HTTPException(400, 'служебные файлы скиллов (с префиксом _) не могут быть использованы для отчёта')
+        skill_changed = True
+
+    db.update_report(
+        slug,
+        title=patch.title.strip() if patch.title is not None else None,
+        description=patch.description,
+        skill=patch.skill,
+        mode=patch.mode,
+    )
+    if skill_changed:
+        # новый скилл требует новой сборки report.py (прошлая версия
+        # сохраняется до успеха — self-healing компилятора)
+        db.update_status(slug, status='queued')
+        worker.wake()
+    return {'report': _report_meta(db.get_report(slug))}
+
+
+@router.delete('/reports/{slug}')
+def delete_report(slug: str, user: dict = Depends(require_admin)) -> dict:
+    """Удаление отчёта (только админ): запись, назначения и артефакты."""
+    report = db.get_report(slug)
+    if report is None:
+        raise HTTPException(404, 'отчёт не найден')
+    db.delete_report(slug)
+    storage.delete_owner('report', report['id'])
+    return {'ok': True}
 
 
 @router.get('/reports/{slug}/spec')

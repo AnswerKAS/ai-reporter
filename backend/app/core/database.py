@@ -303,6 +303,36 @@ def claim_queued() -> dict | None:
     return _row_to_dict(row) if row is not None else None
 
 
+def update_report(slug: str, *, title: str | None = None, description: str | None = None,
+                  skill: str | None = None, mode: str | None = None) -> dict | None:
+    """Обновляет метаданные отчёта; None = не менять."""
+    fields, values = ['updated_at = %s'], [utcnow()]
+    for column, value in (
+        ('title', title),
+        ('description', description),
+        ('skill', skill),
+        ('mode', mode),
+    ):
+        if value is not None:
+            fields.append(f'{column} = %s')
+            values.append(value)
+    with _conn() as conn:
+        conn.execute(f'UPDATE reports SET {", ".join(fields)} WHERE slug = %s', (*values, slug))
+    return get_report(slug)
+
+
+def delete_report(slug: str) -> str | None:
+    """Удаляет отчёт и его назначения; возвращает artifact_dir (report_id) или None."""
+    with _conn() as conn:
+        row = conn.execute('SELECT id FROM reports WHERE slug = %s', (slug,)).fetchone()
+        if row is None:
+            return None
+        report_id = row['id']
+        conn.execute('DELETE FROM reports WHERE slug = %s', (slug,))
+        conn.execute('DELETE FROM report_access WHERE report_slug = %s', (slug,))
+    return report_id
+
+
 def reset_stale_building() -> int:
     """Возвращает зависшие в building отчёты в очередь (crash/reload recovery).
 

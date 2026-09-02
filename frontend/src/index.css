@@ -442,6 +442,47 @@ a {
   margin: 0;
 }
 
+.report-head-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.report-head-row h1 {
+  margin-bottom: 0;
+}
+
+.report-edit {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px;
+  max-width: 560px;
+}
+
+.report-edit label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.report-edit input {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px 12px;
+  font-size: 14px;
+  background: var(--bg);
+  color: var(--text);
+}
+
 .filter-bar {
   display: flex;
   flex-wrap: wrap;

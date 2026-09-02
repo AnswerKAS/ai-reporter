@@ -136,6 +136,22 @@ export async function applyFilters(
   }
 }
 
+export async function updateReport(
+  slug: string,
+  patch: { title?: string; description?: string; skill?: string; mode?: 'auto' | 'demo' | 'llm' },
+): Promise<ReportMeta> {
+  const json = await request<{ report: ReportMeta }>(`/reports/${slug}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  })
+  return json.report
+}
+
+export async function deleteReport(slug: string): Promise<void> {
+  await request(`/reports/${slug}`, { method: 'DELETE' })
+}
+
 // --- admin ---
 
 export async function adminListUsers(): Promise<User[]> {

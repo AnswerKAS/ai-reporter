@@ -130,6 +130,16 @@ class ReportPatch(CamelModel):
     mode: Literal['auto', 'demo', 'llm'] = 'auto'
 
 
+class ReportUpdate(CamelModel):
+    """Правка опубликованного отчёта: название/описание — любой с доступом,
+    скилл и режим сборки — только админ (все поля опциональны)."""
+
+    title: str | None = None
+    description: str | None = None
+    skill: str | None = None
+    mode: Literal['auto', 'demo', 'llm'] | None = None
+
+
 class FiltersPatch(CamelModel):
     values: dict[str, str]
 
