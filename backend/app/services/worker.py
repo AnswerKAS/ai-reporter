@@ -46,7 +46,7 @@ class Worker:
             mode = report.get('mode', 'auto')
             spec = await compiler.compile_report(report, mode=mode)
             db.set_spec(report['slug'], spec)
-            db.update_status(report['slug'], status='ready', artifact_dir=report['id'])
+            db.update_status(report['slug'], status='ready', error='', artifact_dir=report['id'])
         except Exception as exc:
             db.update_status(report['slug'], status='error', error=str(exc))
 
