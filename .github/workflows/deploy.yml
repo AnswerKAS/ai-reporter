@@ -1,0 +1,90 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  APP_DIR: /opt/ai-reporter
+  SERVICE_NAME: ai-reporter
+
+jobs:
+  build:
+    name: Сборка и проверки
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: "Frontend: lint + build"
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run lint
+          npm run build
+
+      - name: "Backend: зависимости + smoke-импорт"
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python -c "import sys; sys.path.insert(0, '.'); import app.main; print('backend import ok')"
+
+      - name: Загрузить frontend/dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist/
+          retention-days: 7
+
+  deploy:
+    name: Деплой на VPS
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist/
+
+      - name: Установить sshpass
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
+
+      - name: Синхронизация кода (rsync)
+        env:
+          SSHPASS: ${{ secrets.SSH_PASSWORD }}
+          SERVER: ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}
+        run: |
+          RSH="sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+          rsync -az --delete --rsh="$RSH" backend/app/      $SERVER:$APP_DIR/backend/app/
+          rsync -az --delete --rsh="$RSH" backend/skills/   $SERVER:$APP_DIR/backend/skills/
+          rsync -az           --rsh="$RSH" backend/requirements.txt $SERVER:$APP_DIR/backend/
+          rsync -az --delete --rsh="$RSH" frontend/dist/    $SERVER:$APP_DIR/frontend/dist/
+          rsync -az --delete --rsh="$RSH" deploy/           $SERVER:$APP_DIR/deploy/
+
+      - name: Установка зависимостей и перезапуск сервиса
+        env:
+          SSHPASS: ${{ secrets.SSH_PASSWORD }}
+          SERVER: ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}
+        run: |
+          sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null $SERVER \
+            "cd $APP_DIR/backend && .venv/bin/pip install -q -r requirements.txt && sudo systemctl restart $SERVICE_NAME && systemctl is-active $SERVICE_NAME"

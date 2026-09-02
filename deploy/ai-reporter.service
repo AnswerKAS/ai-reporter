@@ -1,0 +1,25 @@
+# systemd-юнит для бэкенда AI Reporter.
+# Установка на сервере:
+#   sudo cp deploy/ai-reporter.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now ai-reporter
+# Лог: journalctl -u ai-reporter -f
+
+[Unit]
+Description=AI Reporter backend (FastAPI/uvicorn)
+After=network.target
+
+[Service]
+Type=simple
+# Пользователь, из-под которого работает приложение (создайте отдельного, не root)
+User=deploy
+Group=deploy
+WorkingDirectory=/opt/ai-reporter/backend
+# .env читает сам код (app/core/config.py → load_dotenv), переменные PG*/DATABASE_URL — там
+ExecStart=/opt/ai-reporter/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=3
+PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
