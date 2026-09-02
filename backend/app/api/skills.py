@@ -167,6 +167,24 @@ async def check_draft(draft_id: str, user: dict = Depends(require_admin)) -> dic
 PUBLISHABLE_STATUSES = ('draft', 'review', 'checked', 'rejected')
 
 
+@router.post('/skill-drafts/{draft_id}/improve', status_code=202)
+async def improve_draft(draft_id: str, user: dict = Depends(require_admin)) -> dict:
+    """Агент-редактор проверяет скилл по правилам и исправляет ошибки.
+
+    После исправления автоматически запускается повторная проверка
+    (spawn_check). Существующие файл скилла и отчёт не трогаются до
+    повторной публикации.
+    """
+    draft = _get_draft_or_404(draft_id, user)
+    if draft['status'] not in ('review', 'rejected', 'checked'):
+        raise HTTPException(409, f"улучшение доступно на модерации (сейчас: {draft['status']})")
+    if not (draft.get('content') or '').strip():
+        raise HTTPException(409, 'скилл ещё не сгенерирован')
+    db.update_skill_draft(draft_id, status='improving')
+    skill_drafts.spawn_improve(draft_id)
+    return {'draft': _draft_meta(db.get_skill_draft(draft_id))}
+
+
 @router.post('/skill-drafts/{draft_id}/publish', status_code=202)
 async def publish_draft(draft_id: str, payload: dict | None = None, user: dict = Depends(require_admin)) -> dict:
     """Публикует скилл: пишет файл, создаёт отчёт (mode auto), доступ — автору.

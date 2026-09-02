@@ -359,6 +359,11 @@ export async function checkSkillDraft(id: string): Promise<SkillDraft> {
   return json.draft
 }
 
+export async function improveSkillDraft(id: string): Promise<SkillDraft> {
+  const json = await request<{ draft: SkillDraft }>(`/skill-drafts/${id}/improve`, { method: 'POST' })
+  return json.draft
+}
+
 export async function publishSkillDraft(id: string, mode: 'auto' | 'demo' | 'llm' = 'auto'): Promise<{ draft: SkillDraft; reportSlug: string }> {
   const json = await request<{ draft: SkillDraft; report_slug: string }>(`/skill-drafts/${id}/publish`, {
     method: 'POST',

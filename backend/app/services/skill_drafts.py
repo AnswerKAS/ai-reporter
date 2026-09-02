@@ -80,6 +80,34 @@ CHECK_PROMPT = '''
 Файл должен содержать только JSON.
 '''
 
+IMPROVE_PROMPT = '''
+Ты — редактор скилл-файлов отчётов ai-reporter.
+
+=== ПРАВИЛА СОЗДАНИЯ СКИЛЛОВ ===
+{rules}
+=== КОНЕЦ ПРАВИЛ ===
+
+=== СКИЛЛ К ИСПРАВЛЕНИЮ ===
+{skill}
+=== КОНЕЦ СКИЛЛА ===
+
+=== ЗАМЕЧАНИЯ РЕВЬЮЕРА ===
+{issues}
+=== КОНЕЦ ЗАМЕЧАНИЙ ===
+
+Задание:
+1. Проверь скилл по правилам: обязательные секции и их порядок
+   (Датасеты сразу после заголовка, Цель, Источник данных, Что должно
+   быть в отчёте, Формат вывода, Параметры), конкретность «Что должно
+   быть в отчёте» (форматы money/percent/date, сортировки, LIMIT),
+   разумность фильтров, опечатки.
+2. Исправь все найденные ошибки и улучши формулировки. Суть отчёта
+   и поля датасетов не меняй: добавлять поля/источники, которых нет,
+   запрещено.
+3. Запиши улучшенный скилл в файл `skill.md` в текущей директории
+   (только файл, ничего больше не запускай).
+'''
+
 
 def _datasets_text(slugs: list[str]) -> str:
     items = dataset_registry.for_slugs(slugs)
@@ -141,18 +169,39 @@ async def check_content(draft: dict) -> dict:
     verdict_file.unlink(missing_ok=True)
     code, output = await _run_opencode(workdir, prompt_text)
     if code != 0:
-        raise RuntimeError(f'opencode завершился с кодом {code}:\n{output[-1500:]}')
+        raise AgentRuntimeError(code, output)
     if not verdict_file.exists():
-        raise RuntimeError('агент не создал verdict.json:\n' + output[-1500:])
+        raise AgentRuntimeError(code, 'агент не создал verdict.json:\n' + output[-1500:])
     try:
         verdict = json.loads(verdict_file.read_text(encoding='utf-8'))
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f'невалидный вердикт: {exc}') from exc
+        raise AgentRuntimeError(0, f'невалидный вердикт: {exc}') from exc
     ok = bool(verdict.get('ok'))
     issues = [str(i) for i in (verdict.get('issues') or [])]
     if not ok and not issues:
         issues = ['скилл не соответствует правилам (детализацию агент не дал)']
     return {'ok': ok, 'issues': issues}
+
+
+async def improve_content(draft: dict) -> str:
+    """Агент-редактор проверяет скилл по правилам и исправляет ошибки."""
+    workdir = _draft_dir(draft['id'])
+    rules = RULES_PATH.read_text(encoding='utf-8') if RULES_PATH.exists() else ''
+    issues = draft.get('issues') or []
+    issues_text = '\n'.join(f'- {i}' for i in issues) if issues else '(нет формальных замечаний — улучши скилл по правилам)'
+    prompt_text = IMPROVE_PROMPT.format(
+        rules=rules,
+        skill=draft.get('content') or '',
+        issues=issues_text,
+    )
+    skill_file = workdir / 'skill.md'
+    skill_file.unlink(missing_ok=True)
+    code, output = await _run_opencode(workdir, prompt_text)
+    if code != 0:
+        raise AgentRuntimeError(code, output)
+    if not skill_file.exists():
+        raise AgentRuntimeError(code, 'агент не создал skill.md:\n' + output[-1500:])
+    return skill_file.read_text(encoding='utf-8')
 
 
 def _run_opencode_cmd(workdir: Path, prompt_text: str) -> list[str]:
@@ -251,6 +300,31 @@ def spawn_check(draft_id: str) -> None:
             db.update_skill_draft(draft_id, status='rejected', issues=[_clean_agent_error(exc.code, exc.output)])
         except Exception as exc:
             db.update_skill_draft(draft_id, status='rejected', issues=[str(exc)])
+
+    task = asyncio.create_task(_job())
+    _tasks.add(task)
+    task.add_done_callback(_tasks.discard)
+
+
+def spawn_improve(draft_id: str) -> None:
+    """Агент-редактор исправляет скилл по правилам, затем автоматически
+    запускает повторную проверку (статус черновика на время исправления —
+    `improving`, после — `review`)."""
+    async def _job() -> None:
+        draft = db.get_skill_draft(draft_id)
+        if draft is None:
+            return
+        prior_status = draft['status']
+        try:
+            content = await improve_content(draft)
+            if not content.strip():
+                raise RuntimeError('агент вернул пустой скилл')
+            db.update_skill_draft(draft_id, content=content, status='review', issues=[])
+            spawn_check(draft_id)
+        except AgentRuntimeError as exc:
+            db.update_skill_draft(draft_id, status=prior_status, issues=[_clean_agent_error(exc.code, exc.output)])
+        except Exception as exc:
+            db.update_skill_draft(draft_id, status=prior_status, issues=[str(exc)])
 
     task = asyncio.create_task(_job())
     _tasks.add(task)

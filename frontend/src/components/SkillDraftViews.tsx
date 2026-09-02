@@ -6,6 +6,7 @@ import {
   deleteSkillDraft,
   fetchSkillDraft,
   fetchSkillDrafts,
+  improveSkillDraft,
   publishSkillDraft,
   regenerateSkillDraft,
   submitSkillDraft,
@@ -19,6 +20,7 @@ export const DRAFT_STATUS_LABELS: Record<SkillDraftStatus, string> = {
   rejected: 'отклонён',
   failed: 'ошибка генерации',
   unavailable: 'данных нет в датасетах',
+  improving: 'исправление скилла…',
   published: 'опубликован',
 }
 
@@ -30,13 +32,14 @@ export const DRAFT_STATUS_BADGES: Record<SkillDraftStatus, string> = {
   rejected: 'badge badge-bad',
   failed: 'badge badge-bad',
   unavailable: 'badge badge-warn',
+  improving: 'badge',
   published: 'badge badge-good',
 }
 
 const REGENERABLE_STATUSES: SkillDraftStatus[] = ['draft', 'rejected', 'failed', 'unavailable', 'published']
 
 export function useSkillDraftPolling(drafts: SkillDraft[] | null, reload: () => void) {
-  const active = (drafts ?? []).some((d) => d.status === 'generating' || d.status === 'review')
+  const active = (drafts ?? []).some((d) => ['generating', 'review', 'improving'].includes(d.status))
   useEffect(() => {
     if (!active) return
     const timer = setInterval(reload, 3000)
@@ -118,7 +121,7 @@ export function DraftCard({
       )}
 
       <div className="dataset-actions">
-        {draft.status === 'draft' && (
+        {['draft', 'rejected'].includes(draft.status) && (
           <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => run(() => submitSkillDraft(draft.id))}>
             Отправить на публикацию
           </button>
@@ -133,7 +136,7 @@ export function DraftCard({
             Перегенерация запустит цикл повторной модерации: существующие скилл и отчёт остаются рабочими до новой публикации.
           </p>
         )}
-        {draft.status !== 'published' && (
+        {!['published', 'generating', 'improving'].includes(draft.status) && (
           <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => run(() => deleteSkillDraft(draft.id))}>
             Удалить
           </button>
@@ -141,6 +144,11 @@ export function DraftCard({
         {isAdmin && ['review', 'rejected', 'checked'].includes(draft.status) && (
           <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => run(() => checkSkillDraft(draft.id))}>
             Проверить по правилам
+          </button>
+        )}
+        {isAdmin && ['review', 'rejected', 'checked'].includes(draft.status) && (
+          <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => run(() => improveSkillDraft(draft.id))}>
+            Улучшить скилл
           </button>
         )}
         {isAdmin && ['draft', 'review', 'checked', 'rejected'].includes(draft.status) && (
