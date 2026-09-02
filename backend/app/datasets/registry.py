@@ -235,7 +235,9 @@ def parse_skill_datasets(skill_text: str) -> list[str] | None:
         if ':' in stripped:
             rest = stripped.split(':', 1)[1]
             return [p.strip().strip('`') for p in rest.replace(',', ' ').split() if p.strip().strip('`')] or []
-        # формат списком: slug'и в обратных кавычках у буллетов до следующего заголовка
+        # формат списком: имя датасета — первый slug-подобный токен в кавычках
+        # каждого буллета (дальше в буллете могут быть кавычковые имена полей —
+        # их брать нельзя, иначе «form_id» станет «датасетом»)
         names: list[str] = []
         for bullet in lines[i + 1:]:
             b = bullet.strip()
@@ -245,8 +247,10 @@ def parse_skill_datasets(skill_text: str) -> list[str] | None:
                 break
             for token in re.findall(r'`([^`]+)`', b):
                 token = token.strip()
-                if re.fullmatch(r'[a-z0-9][a-z0-9_-]*', token) and token not in names:
-                    names.append(token)
+                if re.fullmatch(r'[a-z0-9][a-z0-9_-]*', token):
+                    if token not in names:
+                        names.append(token)
+                    break
         return names
     return None
 
