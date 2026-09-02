@@ -217,16 +217,36 @@ def for_slugs(slugs: list[str] | None) -> list[dict]:
 
 
 def parse_skill_datasets(skill_text: str) -> list[str] | None:
-    """Секция '## Датасеты' скилла → список slug'ов (None, если секции нет)."""
-    for line in skill_text.splitlines():
+    """Секция '## Датасеты' скилла → список slug'ов (None, если секции нет).
+
+    Поддерживаются два формата:
+    - инлайн: '## Датасеты: slug1, slug2';
+    - список: '## Датасеты' + буллеты вида '- `slug` — описание'.
+    """
+    lines = skill_text.splitlines()
+    for i, line in enumerate(lines):
         stripped = line.strip()
-        if stripped.startswith('#'):
-            header = stripped.lstrip('#').strip().lower()
-            if not header.startswith('датасет'):
+        if not stripped.startswith('#'):
+            continue
+        header = stripped.lstrip('#').strip().lower()
+        if not header.startswith('датасет'):
+            continue
+        if ':' in stripped:
+            rest = stripped.split(':', 1)[1]
+            return [p.strip().strip('`') for p in rest.replace(',', ' ').split() if p.strip().strip('`')] or []
+        # формат списком: slug'и в обратных кавычках у буллетов до следующего заголовка
+        names: list[str] = []
+        for bullet in lines[i + 1:]:
+            b = bullet.strip()
+            if not b:
                 continue
-            rest = stripped.split(':', 1)[1] if ':' in stripped else ''
-            names = [p.strip().strip('`') for p in rest.replace(',', ' ').split()]
-            return names or []
+            if b.startswith('#') or not b.startswith(('-', '*', '•')):
+                break
+            for token in re.findall(r'`([^`]+)`', b):
+                token = token.strip()
+                if re.fullmatch(r'[a-z0-9][a-z0-9_-]*', token) and token not in names:
+                    names.append(token)
+        return names
     return None
 
 

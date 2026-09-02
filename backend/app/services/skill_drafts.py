@@ -83,7 +83,8 @@ Slug'и датасетов из секции «## Датасеты» фикси�
 '''
 
 IMPROVE_PROMPT = '''
-Ты — редактор скилл-файлов отчётов ai-reporter.
+Ты — редактор скилл-файлов отчётов ai-reporter. Ты исправляешь скилл
+и сразу оцениваешь результат — за один проход, без лишних действий.
 
 === ПРАВИЛА СОЗДАНИЯ СКИЛЛОВ ===
 {rules}
@@ -97,7 +98,7 @@ IMPROVE_PROMPT = '''
 {issues}
 === КОНЕЦ ЗАМЕЧАНИЙ ===
 
-Задание:
+Задание (сделай всё за один проход):
 1. Проверь скилл по правилам: обязательные секции и их порядок
    (Датасеты сразу после заголовка, Цель, Источник данных, Что должно
    быть в отчёте, Формат вывода, Параметры), конкретность «Что должно
@@ -109,8 +110,10 @@ IMPROVE_PROMPT = '''
 3. Исправь все найденные ошибки и улучши формулировки. Суть отчёта
    и поля датасетов не меняй: добавлять поля/источники, которых нет,
    запрещено.
-4. Запиши улучшенный скилл в файл `skill.md` в текущей директории
-   (только файл, ничего больше не запускай).
+4. Запиши исправленный скилл в файл `skill.md`, а вердикт — в файл
+   `verdict.json` строго в формате:
+   {{"ok": true/false, "issues": ["оставшиеся замечания; пустой, если ok"]}}
+   Больше ничего не делай и ничего не запускай.
 '''
 
 
@@ -188,8 +191,11 @@ async def check_content(draft: dict) -> dict:
     return {'ok': ok, 'issues': issues}
 
 
-async def improve_content(draft: dict) -> str:
-    """Агент-редактор проверяет скилл по правилам и исправляет ошибки."""
+async def improve_content(draft: dict) -> dict:
+    """Агент-редактор исправляет скилл и сразу выдаёт вердикт (один вызов).
+
+    Возвращает {'content': markdown, 'ok': bool, 'issues': [...]}.
+    """
     workdir = _draft_dir(draft['id'])
     rules = RULES_PATH.read_text(encoding='utf-8') if RULES_PATH.exists() else ''
     issues = draft.get('issues') or []
@@ -200,13 +206,31 @@ async def improve_content(draft: dict) -> str:
         issues=issues_text,
     )
     skill_file = workdir / 'skill.md'
+    verdict_file = workdir / 'verdict.json'
     skill_file.unlink(missing_ok=True)
+    verdict_file.unlink(missing_ok=True)
     code, output = await _run_opencode(workdir, prompt_text)
     if code != 0:
         raise AgentRuntimeError(code, output)
     if not skill_file.exists():
         raise AgentRuntimeError(code, 'агент не создал skill.md:\n' + output[-1500:])
-    return skill_file.read_text(encoding='utf-8')
+    content = skill_file.read_text(encoding='utf-8')
+    # валидация результата: каркас (секция Датасеты, существующие slug'и)
+    # должен остаться на месте — иначе исправление отклоняется целиком
+    from ..services.compiler import _skill_datasets
+    _skill_datasets(content)  # бросает CompileError при нарушении каркаса
+    issues: list[str] = []
+    if verdict_file.exists():
+        try:
+            verdict = json.loads(verdict_file.read_text(encoding='utf-8'))
+            issues = [str(i) for i in (verdict.get('issues') or [])]
+            if not verdict.get('ok') and not issues:
+                issues = ['скилл улучшен, но агент не подтвердил соответствие правилам — запустите «Проверить по правилам»']
+        except json.JSONDecodeError:
+            issues = ['вердикт исправления не удалось разобрать — запустите «Проверить по правилам»']
+    else:
+        issues = ['вердикт агента отсутствует — запустите «Проверить по правилам»']
+    return {'content': content, 'issues': issues}
 
 
 def _run_opencode_cmd(workdir: Path, prompt_text: str) -> list[str]:
@@ -345,24 +369,32 @@ def spawn_check(draft_id: str) -> None:
 
 
 def spawn_improve(draft_id: str) -> None:
-    """Агент-редактор исправляет скилл по правилам, затем автоматически
-    запускает повторную проверку (статус черновика на время исправления —
-    `improving`, после — `review`)."""
+    """Агент-редактор исправляет скилл и сразу даёт вердикт (один вызов).
+
+    Статусы: `improving` → `checked` (ok) / `rejected` (замечания остались).
+    Существующие файл скилла и отчёт не трогаются до повторной публикации.
+    """
     async def _job() -> None:
         draft = db.get_skill_draft(draft_id)
         if draft is None:
             return
         prior_status = draft['status']
         try:
-            content = await improve_content(draft)
-            if not content.strip():
-                raise RuntimeError('агент вернул пустой скилл')
-            db.update_skill_draft(draft_id, content=content, status='review', issues=[])
-            spawn_check(draft_id)
+            result = await improve_content(draft)
+            db.update_skill_draft(
+                draft_id,
+                content=result['content'],
+                status='checked' if result['ok'] else 'rejected',
+                issues=result['issues'],
+            )
         except AgentRuntimeError as exc:
             db.update_skill_draft(draft_id, status=prior_status, issues=[_clean_agent_error(exc.code, exc.output)])
         except Exception as exc:
-            db.update_skill_draft(draft_id, status=prior_status, issues=[str(exc)])
+            # включая CompileError валидации каркаса: старый текст сохраняется
+            db.update_skill_draft(draft_id, status=prior_status, issues=[
+                f'Исправление отклонено (скилл-агент нарушил каркас): {exc} '
+                '— прежний текст скилла сохранён.',
+            ])
 
     task = asyncio.create_task(_job())
     _tasks.add(task)
