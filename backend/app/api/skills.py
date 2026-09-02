@@ -151,12 +151,18 @@ async def check_draft(draft_id: str, user: dict = Depends(require_admin)) -> dic
     return {'draft': _draft_meta(db.get_skill_draft(draft_id))}
 
 
+# Статусы, из которых админ может согласовать публикацию: агент-ревьюер
+# полезен, но решение остаётся за админом — он может опубликовать в любой
+# момент, пока у черновика есть текст скилла.
+PUBLISHABLE_STATUSES = ('draft', 'review', 'checked', 'rejected')
+
+
 @router.post('/skill-drafts/{draft_id}/publish', status_code=202)
 async def publish_draft(draft_id: str, payload: dict | None = None, user: dict = Depends(require_admin)) -> dict:
     """Публикует скилл: пишет файл, создаёт отчёт (mode auto), доступ — автору."""
     draft = _get_draft_or_404(draft_id, user)
-    if draft['status'] != 'checked':
-        raise HTTPException(409, 'перед публикацией скилл должен пройти проверку (status=checked)')
+    if draft['status'] not in PUBLISHABLE_STATUSES:
+        raise HTTPException(409, f"публикация невозможна из статуса {draft['status']}")
     content = (draft.get('content') or '').strip()
     if not content:
         raise HTTPException(409, 'скилл пуст')
@@ -175,7 +181,7 @@ async def publish_draft(draft_id: str, payload: dict | None = None, user: dict =
         id=uuid.uuid4().hex,
         slug=slug,
         title=draft['title'],
-        description=f'Скилл создан агентом по описанию и проверен администратором.',
+        description='Скилл создан агентом по описанию и согласован администратором.',
         skill=skill_name,
         params={},
         mode=mode,

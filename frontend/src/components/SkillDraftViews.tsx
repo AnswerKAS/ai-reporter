@@ -138,7 +138,7 @@ export function DraftCard({
             Проверить по правилам
           </button>
         )}
-        {isAdmin && draft.status === 'checked' && (
+        {isAdmin && ['draft', 'review', 'checked', 'rejected'].includes(draft.status) && (
           <button type="button" className="btn btn-primary" disabled={busy} onClick={() => run(() => publishSkillDraft(draft.id))}>
             Опубликовать скилл и создать отчёт
           </button>
