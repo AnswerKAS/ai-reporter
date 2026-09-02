@@ -201,8 +201,6 @@ async def recompile_report(
     report = db.get_report(slug)
     if report is None:
         raise HTTPException(404, 'отчёт не найден')
-    if not compiler.has_report_script(report['id']):
-        raise HTTPException(409, 'нет report.py — используйте первичную сборку')
     mode = (patch.mode if patch else 'llm') or 'llm'
     db.set_mode(slug, mode)
     db.update_status(slug, status='queued')
