@@ -1,7 +1,7 @@
 from enum import Enum
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
 
 
@@ -11,6 +11,13 @@ class CamelModel(BaseModel):
         populate_by_name=True,
         extra='allow',
     )
+
+
+def _stringify_params(v: Any) -> Any:
+    """LLM-скрипты кладут в params числа (id форм и т.п.) — приводим к строкам."""
+    if isinstance(v, dict):
+        return {k: str(x) if isinstance(x, (int, float)) and not isinstance(x, bool) else x for k, x in v.items()}
+    return v
 
 
 class NumberFormat(str, Enum):
@@ -103,6 +110,7 @@ class Report(CamelModel):
     created_at: str
     updated_at: str
     params: dict[str, str] | None = None
+    _stringify = field_validator('params', mode='before')(_stringify_params)
     filters: list[ReportFilter] | None = None
     sections: list[ReportSection]
 
