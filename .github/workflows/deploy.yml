@@ -89,7 +89,7 @@ jobs:
         run: |
           RSH="sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
           rsync -az --delete --rsh="$RSH" backend/app/      $SERVER:$APP_DIR/backend/app/
-          rsync -az --delete --rsh="$RSH" backend/skills/   $SERVER:$APP_DIR/backend/skills/
+          rsync -az           --rsh="$RSH" backend/skills/   $SERVER:$APP_DIR/backend/skills/  # без --delete: скиллы, опубликованные на сервере, не стираются
           rsync -az           --rsh="$RSH" backend/requirements.txt $SERVER:$APP_DIR/backend/
           rsync -az --delete --rsh="$RSH" frontend/dist/    $SERVER:$APP_DIR/frontend/dist/
           rsync -az --delete --rsh="$RSH" deploy/           $SERVER:$APP_DIR/deploy/
