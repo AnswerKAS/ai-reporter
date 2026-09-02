@@ -67,7 +67,7 @@ def _get_pool():
                 max_size=8,
                 open=True,
                 timeout=15,
-                check=ConnectionPool.check_liveness,
+                check=ConnectionPool.check_connection,
                 max_idle=120,
             )
         except Exception as exc:
