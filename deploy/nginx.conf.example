@@ -9,7 +9,7 @@ server {
     listen 80;
     server_name _;  # замените на домен/IP
 
-    root /opt/ai-reporter/frontend/dist;
+    root /home/deploy/ai-reporter/frontend/dist;
     index index.html;
 
     # SPA: все не-файловые пути отдаём через index.html

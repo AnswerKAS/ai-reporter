@@ -14,9 +14,9 @@ Type=simple
 # Пользователь, из-под которого работает приложение (создайте отдельного, не root)
 User=deploy
 Group=deploy
-WorkingDirectory=/opt/ai-reporter/backend
+WorkingDirectory=/home/deploy/ai-reporter/backend
 # .env читает сам код (app/core/config.py → load_dotenv), переменные PG*/DATABASE_URL — там
-ExecStart=/opt/ai-reporter/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+ExecStart=/home/deploy/ai-reporter/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
 Restart=always
 RestartSec=3
 PYTHONUNBUFFERED=1

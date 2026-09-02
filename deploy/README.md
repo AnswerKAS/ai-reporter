@@ -21,13 +21,13 @@ Ubuntu/Debian, от root:
 adduser --disabled-password --gecos "" deploy
 usermod -aG sudo deploy
 
-# 2. Питон 3.12 и venv
-apt update && apt install -y python3.12 python3.12-venv nginx rsync
-sudo -u deploy python3.12 -m venv /opt/ai-reporter/backend/.venv
+# 2. venv (системный python3.10 достаточно, код совместим)
+apt update && apt install -y nginx rsync
+sudo -u deploy python3 -m venv /home/deploy/ai-reporter/backend/.venv
 
 # 3. Каталоги
-mkdir -p /opt/ai-reporter/backend /opt/ai-reporter/frontend/dist
-chown -R deploy:deploy /opt/ai-reporter
+mkdir -p /home/deploy/ai-reporter/backend /home/deploy/ai-reporter/frontend/dist
+chown -R deploy:deploy /home/deploy/ai-reporter
 
 # 4. Разрешить деплой-пользователю рестарт сервиса без пароля
 cat >/etc/sudoers.d/ai-reporter <<'EOF'
@@ -40,10 +40,10 @@ chmod 440 /etc/sudoers.d/ai-reporter
 
 ```bash
 # 5. .env (секреты вручную, в git не попадает)
-nano /opt/ai-reporter/backend/.env    # PGHOST/PGUSER/..., DATABASE_URL, OPENCODE_MODEL
+nano /home/deploy/ai-reporter/backend/.env    # PGHOST/PGUSER/..., DATABASE_URL, OPENCODE_MODEL
 
 # 6. Юнит systemd (приедет на сервер rsync-ом при первом деплое)
-sudo cp /opt/ai-reporter/deploy/ai-reporter.service /etc/systemd/system/
+sudo cp /home/deploy/ai-reporter/deploy/ai-reporter.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable ai-reporter
 ```
 
