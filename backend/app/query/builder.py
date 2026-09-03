@@ -70,6 +70,9 @@ class Catalog:
         self.links = semantic.list_links()
         self.datasets = {d['slug']: d for d in dataset_registry.list_all()}
         self._adapters: dict[str, object] = {}
+        # уникальность по ключу связи стоит полного скана таблицы, а на
+        # сборку отчёта ответ один — держим его здесь, а не в каждой секции
+        self.unique_checks: dict[tuple[str, str], bool] = {}
 
     def adapter(self, slug: str):
         """Адаптер с живым соединением: один на датасет за всю сборку отчёта."""
@@ -110,17 +113,34 @@ class Catalog:
         return dataset
 
 
+# Строковый литерал SQL: одинарные кавычки, удвоенная кавычка внутри.
+_LITERAL_RE = re.compile(r"'(?:[^']|'')*'")
+
+
 def _qualify(expression: str, fields: list[str], alias: str) -> str:
     """Дописывает алиас таблицы к именам полей внутри выражения метрики.
 
     Нужно только при джойнах: без них имена однозначны. Заменяются лишь
     известные поля датасета и только как отдельные слова, уже
     квалифицированные (`t.field`) не трогаются.
+
+    Строковые литералы пропускаются целиком: в выражении вида
+    `sum(if(category = 'orders', revenue, 0))` слово orders — значение, а не
+    колонка, и превращать его в 't0.orders' значит тихо сломать условие,
+    получив 0 вместо суммы.
     """
-    out = expression
-    for name in sorted(fields, key=len, reverse=True):
-        out = re.sub(rf'(?<![\w.]){re.escape(name)}\b', f'{alias}.{name}', out)
-    return out
+    def qualify_code(chunk: str) -> str:
+        for name in sorted(fields, key=len, reverse=True):
+            chunk = re.sub(rf'(?<![\w.]){re.escape(name)}\b', f'{alias}.{name}', chunk)
+        return chunk
+
+    out, last = [], 0
+    for found in _LITERAL_RE.finditer(expression):
+        out.append(qualify_code(expression[last:found.start()]))
+        out.append(found.group(0))
+        last = found.end()
+    out.append(qualify_code(expression[last:]))
+    return ''.join(out)
 
 
 def _dataset_fields(dataset: dict) -> list[str]:
@@ -150,9 +170,16 @@ def _is_unique_on(dataset: dict, field: str, adapter=None) -> bool:
 # Признаки того, что в тексте ошибки — наши внутренности, а не что-то,
 # что пользователь может исправить сам.
 _SQL_NOISE = re.compile(
-    r'\bLINE \d|missing FROM-clause|Unknown expression|Unknown identifier|'
-    r'ILLEGAL_AGGREGATION|syntax error|column .* does not exist|'
+    r'\bLINE \d|missing FROM-clause|ILLEGAL_AGGREGATION|syntax error|'
     r'\bSELECT\b|\bFROM\b|\bJOIN\b|\b[tq]\d+\.|\b[md]_\w+',
+    re.IGNORECASE,
+)
+# Пропавшая колонка — не наш дефект, а рассинхрон поля отчёта со схемой
+# источника, и починить его может сам автор отчёта. Имя колонки в таком
+# сообщении — самое ценное, поэтому оно должно дойти до человека.
+_MISSING_COLUMN_RE = re.compile(
+    r'column\s+"?([\w.]+)"?\s+does not exist|'
+    r'Unknown (?:expression or function )?identifier\s+`?([\w.]+)`?',
     re.IGNORECASE,
 )
 _UNAVAILABLE = re.compile(
@@ -173,6 +200,11 @@ def explain_source_error(text: str) -> str:
     """
     if _UNAVAILABLE.search(text):
         return 'источник данных сейчас не отвечает — попробуйте ещё раз через минуту'
+    missing = _MISSING_COLUMN_RE.search(text)
+    if missing:
+        column = (missing.group(1) or missing.group(2) or '').split('.')[-1]
+        return (f'в источнике больше нет колонки «{column}» — поле отчёта, '
+                'которое на неё ссылается, нужно пересоздать или убрать')
     if _SQL_NOISE.search(text):
         return ('не удалось собрать запрос по этому набору полей — это ошибка '
                 'конструктора, а не ваша. Уберите последнее добавленное поле, '
@@ -224,6 +256,22 @@ def _safe_datasets(holder: str, edges: dict, unique) -> set[str]:
             seen.add(other)
             queue.append(other)
     return seen
+
+
+def _plan_link_graph(plan: list[tuple[str, dict | None]]) -> dict[str, list[tuple[str, dict]]]:
+    """Связи внутри плана — с самими связями, а не только с полями.
+
+    Нужен, чтобы путь для подзапроса искался среди датасетов, которые уже
+    есть в плане: иначе подзапрос может выбрать мост, которого нет ни в
+    self.datasets, ни в self.aliases.
+    """
+    graph: dict[str, list[tuple[str, dict]]] = {}
+    for _, link in plan:
+        if link is None:
+            continue
+        graph.setdefault(link['left_slug'], []).append((link['right_slug'], link))
+        graph.setdefault(link['right_slug'], []).append((link['left_slug'], link))
+    return graph
 
 
 def _link_graph(catalog: 'Catalog') -> dict[str, list[tuple[str, dict]]]:
@@ -325,7 +373,7 @@ class SectionQuery:
         self.local_metrics, self.local_dimensions = self._resolve_fields(fields or [])
         if self.local_dimensions:
             self.dimension_defs = {
-                s: self.dimension_defs.get(s) or self.local_dimensions[s] for s in by
+                s: self.dimension_defs.get(s) or self.local_dimensions.get(s) for s in by
             }
 
         # вычисляемые поля отчёта: сами в источник не ходят, их выражение
@@ -356,7 +404,6 @@ class SectionQuery:
         # разрезы, по которым фильтруют: их датасеты тоже нужны в запросе,
         # иначе фильтр молча отбрасывается — карточка KPI осталась бы
         # нефильтрованной рядом с отфильтрованной таблицей
-        self._unique_cache: dict[tuple[str, str], bool] = {}
         self.filter_dims = {}
         for filter_slug, value in (filters or {}).items():
             if value in (None, ''):
@@ -453,10 +500,10 @@ class SectionQuery:
 
     def _is_unique(self, slug: str, field: str) -> bool:
         key = (slug, field)
-        if key not in self._unique_cache:
-            probe = self.catalog.adapter(slug) if self.catalog else None
-            self._unique_cache[key] = _is_unique_on(self.datasets[slug], field, probe)
-        return self._unique_cache[key]
+        cache = self.catalog.unique_checks
+        if key not in cache:
+            cache[key] = _is_unique_on(self.datasets[slug], field, self.catalog.adapter(slug))
+        return cache[key]
 
     def _check_dimensions(self) -> None:
         """Разрез должен быть достижим из каждого держателя метрик безопасно.
@@ -616,6 +663,8 @@ class SectionQuery:
         parts = []
         plan = self.plan if slugs is None else _join_plan(slugs, self.catalog)
         for slug, link in plan:
+            if slug not in self.datasets:
+                raise DatasetError(f'датасет {slug} не входит в план секции')
             dataset = self.datasets[slug]
             table = self.catalog.adapter(slug).quoted_table(dataset.get('table_name') or '')
             alias = self.aliases[slug]
@@ -685,18 +734,26 @@ class SectionQuery:
                      dimension_slugs=list(self.dimension_defs))
 
     def _subquery_slugs(self, holder: str) -> list[str]:
-        """Датасеты, нужные агрегату holder: он сам, разрезы и путь до них."""
+        """Датасеты, нужные агрегату holder: он сам, разрезы и путь до них.
+
+        Путь ищется по связям основного плана: подзапрос не вправе
+        притащить датасет, для которого нет ни алиаса, ни таблицы.
+        """
         needed = {holder}
         needed.update(d['dataset_slug'] for d in self.dimension_defs.values())
         needed.update(d['dataset_slug'] for d in self.filter_dims.values()
                       if d['dataset_slug'] in self.aliases)
-        graph = _link_graph(self.catalog)
+        graph = _plan_link_graph(self.plan)
         ordered = [holder]
-        for target in list(needed):
+        for target in sorted(needed):
             if target == holder:
                 continue
             path = _bridge(set(ordered), target, graph)
-            for slug, _ in (path or []):
+            if path is None:
+                raise DatasetError(
+                    f'не удалось соединить {holder} и {target} внутри секции'
+                )
+            for slug, _ in path:
                 if slug not in ordered:
                     ordered.append(slug)
         return ordered

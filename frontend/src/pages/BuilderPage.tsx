@@ -1071,18 +1071,18 @@ function StepData({
   )
 
   const toggleDataset = (slug: string) => {
-    setPickedDatasets((prev) => {
-      if (prev.includes(slug)) {
-        // вместе с датасетом уходят и его поля: иначе отчёт ссылается на то,
-        // чего пользователь уже не выбирал
-        setPickedMetrics((ms) => ms.filter((m) => metrics.find((x) => x.slug === m)?.datasetSlug !== slug))
-        setPickedDimensions((ds) =>
-          ds.filter((d) => dimensions.find((x) => x.slug === d)?.datasetSlug !== slug),
-        )
-        return prev.filter((s) => s !== slug)
-      }
-      return [...prev, slug]
-    })
+    // снятие датасета и очистка его полей — два независимых обновления:
+    // побочные эффекты внутри функции-апдейтера React вправе выполнить
+    // дважды, и любая неидемпотентная правка начала бы терять состояние
+    const off = pickedDatasets.includes(slug)
+    setPickedDatasets((prev) => (off ? prev.filter((s) => s !== slug) : [...prev, slug]))
+    if (!off) return
+    // вместе с датасетом уходят и его поля: иначе отчёт ссылается на то,
+    // чего пользователь уже не выбирал
+    setPickedMetrics((ms) => ms.filter((m) => metrics.find((x) => x.slug === m)?.datasetSlug !== slug))
+    setPickedDimensions((ds) =>
+      ds.filter((d) => dimensions.find((x) => x.slug === d)?.datasetSlug !== slug),
+    )
   }
 
   const toggle = (setList: (fn: (prev: string[]) => string[]) => void, key: string) =>

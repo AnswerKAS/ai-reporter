@@ -16,6 +16,7 @@
 import json
 import os
 import re
+import threading
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as _Timeout
 from pathlib import Path
 
@@ -26,6 +27,15 @@ from . import phrase
 # Разбор — одно обращение к модели, а не диалог, поэтому таймаут человеческий.
 TIMEOUT = int(os.environ.get('INTERPRET_TIMEOUT', '25'))
 OPENROUTER_URL = os.environ.get('OPENROUTER_URL') or 'https://openrouter.ai/api/v1'
+# ChatOpenAI не соблюдает ни timeout, ни request_timeout, ни переданный
+# http_client — проверено: при пределе в 1 с запрос спокойно шёл 2.3 с.
+# Поэтому предел ставим по часам, а брошенный запрос продолжает занимать
+# место в пуле, пока не завершится: так число повисших потоков ограничено
+# сверху, а не растёт с каждым таймаутом.
+MAX_PARALLEL = int(os.environ.get('INTERPRET_PARALLEL', '4'))
+_POOL = ThreadPoolExecutor(max_workers=MAX_PARALLEL, thread_name_prefix='interpret')
+_SLOTS = threading.Semaphore(MAX_PARALLEL)
+
 _AUTH_PATHS = (
     Path.home() / '.local/share/opencode/auth.json',
     Path.home() / '.config/opencode/auth.json',
@@ -105,22 +115,24 @@ def _ask(prompt_text: str, model: str, key: str) -> str:
         api_key=key,
         base_url=OPENROUTER_URL,
         temperature=0,
-        # именно request_timeout: параметр timeout langchain-openai не
-        # прокидывает, и медленная модель висит до таймаута по умолчанию
-        request_timeout=TIMEOUT,
         max_retries=0,
     )
-    # жёсткий предел по часам: request_timeout клиент не соблюдает, а медленная
-    # модель не должна держать пользователя. Пул не закрываем через with —
-    # его выход дожидается брошенного запроса и съедает весь выигрыш.
-    pool = ThreadPoolExecutor(max_workers=1)
-    future = pool.submit(chat.invoke, [HumanMessage(content=prompt_text)])
+
+    def call():
+        try:
+            return chat.invoke([HumanMessage(content=prompt_text)])
+        finally:
+            _SLOTS.release()
+
+    if not _SLOTS.acquire(blocking=False):
+        raise DatasetError(
+            'сейчас разбирается слишком много описаний — попробуйте через минуту'
+        )
+    future = _POOL.submit(call)
     try:
         answer = future.result(timeout=TIMEOUT)
     except _Timeout:
         raise DatasetError(f'модель не ответила за {TIMEOUT} с')
-    finally:
-        pool.shutdown(wait=False, cancel_futures=True)
     content = answer.content
     if isinstance(content, list):
         # некоторые модели отдают ответ частями
