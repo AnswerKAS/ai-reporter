@@ -6,6 +6,7 @@ __pycache__/
 *.db
 .env
 .DS_Store
-nohup.outbackend/report.py
+nohup.out
+backend/report.py
 backend/report.spec.json
 backend/artifacts/

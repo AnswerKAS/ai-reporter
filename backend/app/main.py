@@ -9,6 +9,7 @@
 - reports/    — витрина ClickHouse, сиды, миграции.
 """
 
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -18,6 +19,7 @@ from .api import admin as admin_api
 from .api import auth as auth_api
 from .api import datasets as datasets_api
 from .api import reports as reports_api
+from .api import semantic as semantic_api
 from .api import skills as skills_api
 from .core import database as db
 from .core.security import ensure_default_admin
@@ -41,9 +43,17 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title='AI Reporter API', lifespan=lifespan)
 
+# Источники для CORS: по умолчанию локальный Vite, переопределяются
+# переменной CORS_ORIGINS (список через запятую) — для дев-серверов на
+# других портах и для отдельного домена фронта.
+_DEFAULT_ORIGINS = 'http://localhost:5173,http://127.0.0.1:5173'
+CORS_ORIGINS = [
+    o.strip() for o in os.environ.get('CORS_ORIGINS', _DEFAULT_ORIGINS).split(',') if o.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=['http://localhost:5173', 'http://127.0.0.1:5173'],
+    allow_origins=CORS_ORIGINS,
     allow_methods=['*'],
     allow_headers=['*'],
 )
@@ -52,6 +62,7 @@ app.include_router(auth_api.router)
 app.include_router(reports_api.router)
 app.include_router(skills_api.router)
 app.include_router(datasets_api.router)
+app.include_router(semantic_api.router)
 app.include_router(admin_api.router)
 
 

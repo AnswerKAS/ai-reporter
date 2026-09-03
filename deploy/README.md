@@ -8,7 +8,24 @@
 |---|---|
 | `SSH_HOST` | IP/домен VPS |
 | `SSH_USER` | логин (деплой-пользователь, не root) |
-| `SSH_PASSWORD` | пароль пользователя |
+| `SSH_PRIVATE_KEY` | приватный ключ деплоя целиком (ed25519, без пароля) |
+| `SSH_KNOWN_HOSTS` | вывод `ssh-keyscan -H <SSH_HOST>` — отпечаток сервера |
+
+Деплой ходит по ключу со строгой проверкой хоста: пароль в секретах больше
+не нужен, `StrictHostKeyChecking` включён (без `SSH_KNOWN_HOSTS` workflow
+упадёт на «Host key verification failed» — это ожидаемо).
+
+Завести ключ (на своей машине):
+
+```bash
+ssh-keygen -t ed25519 -N '' -f ~/.ssh/ai-reporter-deploy -C 'github-actions'
+ssh-copy-id -i ~/.ssh/ai-reporter-deploy.pub deploy@<SSH_HOST>
+ssh-keyscan -H <SSH_HOST>                 # → секрет SSH_KNOWN_HOSTS
+cat ~/.ssh/ai-reporter-deploy             # → секрет SSH_PRIVATE_KEY
+```
+
+После первого успешного деплоя по ключу стоит закрыть парольный вход:
+`PasswordAuthentication no` в `/etc/ssh/sshd_config` + `systemctl reload ssh`.
 
 Сервер хранит своё состояние сам: `backend/.env` (PG*, DATABASE_URL, OPENCODE_MODEL) и `backend/artifacts/` rsync-ом не перетираются — в репо только код и skills.
 

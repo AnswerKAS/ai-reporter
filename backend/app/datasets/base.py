@@ -47,9 +47,12 @@ def sanitize_error(text: str) -> str:
 class DatasetField:
     name: str
     type: str
+    # комментарий колонки в источнике: единственное место, где смысл поля
+    # описан теми, кто владеет данными, — тянем его как есть
+    comment: str = ''
 
     def as_dict(self) -> dict:
-        return {'name': self.name, 'type': self.type}
+        return {'name': self.name, 'type': self.type, 'comment': self.comment}
 
 
 class DatasetAdapter(ABC):
@@ -66,3 +69,18 @@ class DatasetAdapter(ABC):
     @abstractmethod
     def sample_rows(self, limit: int = 50) -> tuple[list[str], list[list]]:
         """Превью: (заголовки колонок, строки). Не более limit строк."""
+
+    @abstractmethod
+    def run_query(self, sql: str, params: dict | None = None) -> tuple[list[str], list[list]]:
+        """Выполняет SELECT, собранный построителем запросов.
+
+        SQL приходит только из семантического слоя (выражения метрик пишет
+        админ); значения пользователя передаются параметрами.
+        """
+
+    @abstractmethod
+    def quoted_table(self, table: str) -> str:
+        """Имя таблицы, процитированное по правилам источника."""
+
+    def close(self) -> None:
+        """Освобождает переиспользуемое соединение (если оно есть)."""

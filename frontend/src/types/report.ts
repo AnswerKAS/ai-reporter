@@ -36,6 +36,8 @@ export interface MarkdownSection {
 export interface KpiSection {
   type: 'kpi'
   items: KpiItem[]
+  /** Фильтр отчёта, который к этой секции неприменим. */
+  filterNote?: string
 }
 
 export interface ChartSection {
@@ -46,6 +48,7 @@ export interface ChartSection {
   xKey?: string
   series: ChartSeries[]
   detail?: ChartDetail
+  filterNote?: string
 }
 
 export interface TableColumn {
@@ -59,6 +62,7 @@ export interface TableSection {
   title?: string
   columns: TableColumn[]
   rows: Record<string, unknown>[]
+  filterNote?: string
 }
 
 export type ReportSection =
@@ -80,6 +84,8 @@ export interface Report {
   slug: string
   title: string
   description?: string
+  /** 'builder' — отчёт-декларация, правится в конструкторе; 'llm' — старый стек. */
+  kind?: 'builder' | 'llm'
   skill?: string
   status?: string
   createdAt: string
@@ -95,6 +101,7 @@ export interface ReportMeta {
   slug: string
   title: string
   description?: string
+  kind?: 'builder' | 'llm'
   status?: string
   error?: string
   skill?: string

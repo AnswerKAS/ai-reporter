@@ -8,6 +8,7 @@ from .user import CamelModel
 class DatasetField(CamelModel):
     name: str
     type: str
+    comment: str | None = None
 
 
 class DatasetMeta(CamelModel):

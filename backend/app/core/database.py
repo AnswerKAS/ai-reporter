@@ -44,9 +44,19 @@ _pool_failed = False
 
 
 def _get_pool():
-    """Пул соединений: до PG ~100ms RTT, новое соединение стоит ~1s
+    """Пул соединений: до PG ~100ms RTT, новое соединение стоит ~0.5s
     (TCP+TLS+SCRAM) — держим живые соединения переиспользуемо.
-    check_liveness: сеть рвёт idle-сессии — протухшие не выдаются."""
+
+    max_idle подобран замером, а не на глаз: на этой сети соединение живо
+    через 1s простоя и уже разорвано через 3s (SSL unexpected eof). При
+    max_idle=120 пул хранил заведомые трупы до двух минут и раздавал их —
+    пачка запросов при загрузке страницы упиралась в восемь мёртвых
+    соединений разом и выбирала весь таймаут выдачи.
+
+    Отсюда же min_size=0: единственное «тёплое» соединение всё равно не
+    доживает до следующего запроса, а протухнув, достаётся первому же.
+    Пул остаётся полезен внутри пачки запросов — там соединения идут
+    подряд и не успевают умереть."""
     global _pool, _pool_failed
     if _pool is None and not _pool_failed:
         try:
@@ -63,12 +73,12 @@ def _get_pool():
                     'keepalives_count': 3,
                     **PG.connect_kwargs,
                 },
-                min_size=1,
+                min_size=0,
                 max_size=8,
                 open=True,
                 timeout=15,
                 check=ConnectionPool.check_connection,
-                max_idle=120,
+                max_idle=2,
             )
         except Exception as exc:
             print(f'[db] пул недоступен ({exc}), работаем прямыми подключениями')
@@ -245,6 +255,52 @@ def init_db() -> None:
             )
             '''
         )
+        # --- семантический слой: что означают колонки датасетов ---
+        conn.execute(
+            '''
+            CREATE TABLE IF NOT EXISTS metrics (
+                slug TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                description TEXT,
+                dataset_slug TEXT NOT NULL,
+                expression TEXT NOT NULL,
+                format TEXT NOT NULL DEFAULT 'number',
+                unit TEXT,
+                status TEXT NOT NULL DEFAULT 'new',
+                error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            '''
+        )
+        conn.execute(
+            '''
+            CREATE TABLE IF NOT EXISTS dimensions (
+                slug TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                description TEXT,
+                dataset_slug TEXT NOT NULL,
+                field TEXT NOT NULL,
+                type TEXT NOT NULL DEFAULT 'string',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            '''
+        )
+        conn.execute(
+            '''
+            CREATE TABLE IF NOT EXISTS dataset_links (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                left_slug TEXT NOT NULL,
+                right_slug TEXT NOT NULL,
+                left_field TEXT NOT NULL,
+                right_field TEXT NOT NULL,
+                kind TEXT NOT NULL DEFAULT 'inner',
+                created_at TEXT NOT NULL
+            )
+            '''
+        )
         conn.execute(
             '''
             CREATE TABLE IF NOT EXISTS app_meta (
@@ -257,6 +313,9 @@ def init_db() -> None:
         for ddl in (
             'ALTER TABLE skill_drafts ADD COLUMN IF NOT EXISTS republish TEXT',
             'ALTER TABLE skill_drafts ADD COLUMN IF NOT EXISTS report_slug TEXT',
+            # отчёт-конструктор: декларация вместо сгенерированного report.py
+            "ALTER TABLE reports ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'llm'",
+            'ALTER TABLE reports ADD COLUMN IF NOT EXISTS definition TEXT',
         ):
             conn.execute(ddl)
 
@@ -339,15 +398,43 @@ def create_report(
     skill: str,
     params: dict[str, str],
     mode: str = 'auto',
+    kind: str = 'llm',
+    definition: dict | None = None,
 ) -> dict:
+    """Отчёт в реестре.
+
+    kind='builder' — отчёт-конструктор: логика лежит в definition (декларация),
+    сборка не нужна, статус сразу ready. kind='llm' — прежний путь через
+    скилл и генерацию report.py, стартует в очереди.
+    """
     now = utcnow()
+    status = 'ready' if kind == 'builder' else 'queued'
     with _conn() as conn:
         conn.execute(
-            'INSERT INTO reports (id, slug, title, description, skill, params, mode, status, created_at, updated_at) '
-            'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)',
-            (id, slug, title, description, skill, json.dumps(params), mode, 'queued', now, now),
+            'INSERT INTO reports (id, slug, title, description, skill, params, mode, status, '
+            'kind, definition, created_at, updated_at) '
+            'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)',
+            (id, slug, title, description, skill, json.dumps(params), mode, status, kind,
+             json.dumps(definition, ensure_ascii=False) if definition is not None else None,
+             now, now),
         )
     return get_report(slug)
+
+
+def set_definition(slug: str, definition: dict) -> None:
+    with _conn() as conn:
+        conn.execute(
+            'UPDATE reports SET definition = %s, updated_at = %s WHERE slug = %s',
+            (json.dumps(definition, ensure_ascii=False), utcnow(), slug),
+        )
+
+
+def get_definition(slug: str) -> dict | None:
+    report = get_report(slug)
+    if report is None or not report.get('definition'):
+        return None
+    raw = report['definition']
+    return json.loads(raw) if isinstance(raw, str) else raw
 
 
 def get_report(slug: str) -> dict | None:

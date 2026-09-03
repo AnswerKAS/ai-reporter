@@ -12,6 +12,8 @@ import { LoginPage } from './pages/LoginPage'
 import { AccountPage } from './pages/AccountPage'
 import { AdminPage } from './pages/AdminPage'
 import { DatasetsPage } from './pages/DatasetsPage'
+import { BuilderPage } from './pages/BuilderPage'
+import { ModelPage } from './pages/ModelPage'
 import { AuthProvider, useAuth } from './lib/auth'
 
 function SkillTree() {
@@ -117,9 +119,17 @@ function Navbar() {
         <NavLink to="/reports" className={({ isActive }) => (isActive ? 'nav-link active' : 'nav-link')}>
           Отчёты
         </NavLink>
+        <NavLink to="/builder" className={({ isActive }) => (isActive ? 'nav-link active' : 'nav-link')}>
+          Конструктор
+        </NavLink>
         <NavLink to="/datasets" className={({ isActive }) => (isActive ? 'nav-link active' : 'nav-link')}>
           Датасеты
         </NavLink>
+        {isAdmin && (
+          <NavLink to="/model" className={({ isActive }) => (isActive ? 'nav-link active' : 'nav-link')}>
+            Модель данных
+          </NavLink>
+        )}
         {user && (
           <NavLink to="/account" className={({ isActive }) => (isActive ? 'nav-link active' : 'nav-link')}>
             Кабинет
@@ -197,6 +207,22 @@ function Layout() {
               }
             />
             <Route
+              path="/builder"
+              element={
+                <RequireAuth>
+                  <BuilderPage />
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/builder/:slug"
+              element={
+                <RequireAuth>
+                  <BuilderPage />
+                </RequireAuth>
+              }
+            />
+            <Route
               path="/reports/:slug"
               element={
                 <RequireAuth>
@@ -217,6 +243,14 @@ function Layout() {
               element={
                 <RequireAuth>
                   <DatasetsPage />
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/model"
+              element={
+                <RequireAuth>
+                  <ModelPage />
                 </RequireAuth>
               }
             />

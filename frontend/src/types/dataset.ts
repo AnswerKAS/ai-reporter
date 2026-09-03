@@ -4,6 +4,8 @@ export type DatasetStatus = 'new' | 'ok' | 'error'
 export interface DatasetField {
   name: string
   type: string
+  /** Комментарий колонки в источнике — что поле означает по мнению владельцев данных. */
+  comment?: string | null
 }
 
 export interface Dataset {

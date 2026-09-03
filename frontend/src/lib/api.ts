@@ -8,6 +8,17 @@ import type {
   SkillDraftStatus,
   SkillInfo,
 } from '../types/dataset'
+import type {
+  ComputedField,
+  DatasetLink,
+  Dimension,
+  DimensionInput,
+  LinkInput,
+  Metric,
+  MetricInput,
+  ReportDefinition,
+  ReportField,
+} from '../types/semantic'
 import { TOKEN_KEY } from '../types/user'
 
 const BASE = import.meta.env.VITE_API_BASE ?? '/api'
@@ -45,14 +56,39 @@ async function request<T>(
   if (!res.ok) {
     let detail = `HTTP ${res.status}`
     try {
-      const body = (await res.json()) as { detail?: string }
-      if (body?.detail) detail = body.detail
+      const body = (await res.json()) as { detail?: unknown }
+      if (body?.detail) detail = describeDetail(body.detail)
     } catch {
       // тело не JSON
     }
     throw new ApiError(res.status, detail)
   }
   return (await res.json()) as T
+}
+
+/** Ошибка от сервера в читаемый вид.
+
+    FastAPI при несовпадении схемы отвечает списком объектов; напечатанный
+    как есть, он превращается в «[object Object]» и не говорит ничего. */
+function describeDetail(detail: unknown): string {
+  if (typeof detail === 'string') return detail
+  if (Array.isArray(detail)) {
+    const parts = detail.map((item) => {
+      if (typeof item === 'string') return item
+      const row = item as { loc?: unknown[]; msg?: string }
+      const where = Array.isArray(row.loc)
+        ? row.loc.filter((x) => typeof x === 'string' && x !== 'body').join('.')
+        : ''
+      return where ? `${where}: ${row.msg ?? 'некорректное значение'}` : (row.msg ?? '')
+    })
+    const text = parts.filter(Boolean).join('; ')
+    if (text) return text
+  }
+  try {
+    return JSON.stringify(detail)
+  } catch {
+    return 'сервер вернул ошибку без описания'
+  }
 }
 
 export class ApiError extends Error {
@@ -383,3 +419,155 @@ export async function deleteSkillDraft(id: string): Promise<void> {
 }
 
 export type { SkillDraftStatus }
+
+// --- семантический слой и конструктор отчётов ---
+
+export async function fetchMetrics(): Promise<Metric[]> {
+  const json = await request<{ metrics: Metric[] }>('/metrics')
+  return json.metrics
+}
+
+export async function fetchDimensions(): Promise<Dimension[]> {
+  const json = await request<{ dimensions: Dimension[] }>('/dimensions')
+  return json.dimensions
+}
+
+export async function createMetric(input: MetricInput): Promise<Metric> {
+  const json = await request<{ metric: Metric }>('/metrics', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  return json.metric
+}
+
+export async function patchMetric(slug: string, patch: Partial<MetricInput>): Promise<Metric> {
+  const json = await request<{ metric: Metric }>(`/metrics/${slug}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  })
+  return json.metric
+}
+
+/** Прогоняет выражение по источнику: битая метрика не должна дожить до отчёта. */
+export async function testMetric(slug: string): Promise<Metric> {
+  const json = await request<{ metric: Metric }>(`/metrics/${slug}/test`, { method: 'POST' })
+  return json.metric
+}
+
+export async function deleteMetric(slug: string): Promise<void> {
+  await request(`/metrics/${slug}`, { method: 'DELETE' })
+}
+
+export async function createDimension(input: DimensionInput): Promise<Dimension> {
+  const json = await request<{ dimension: Dimension }>('/dimensions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  return json.dimension
+}
+
+export async function patchDimension(slug: string, patch: Partial<DimensionInput>): Promise<Dimension> {
+  const json = await request<{ dimension: Dimension }>(`/dimensions/${slug}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  })
+  return json.dimension
+}
+
+export async function deleteDimension(slug: string): Promise<void> {
+  await request(`/dimensions/${slug}`, { method: 'DELETE' })
+}
+
+/** Связи датасетов: по ним конструктор строит JOIN между показателями. */
+export async function fetchLinks(): Promise<DatasetLink[]> {
+  const json = await request<{ links: DatasetLink[] }>('/dataset-links')
+  return json.links
+}
+
+export async function createLink(input: LinkInput): Promise<DatasetLink> {
+  const json = await request<{ link: DatasetLink }>('/dataset-links', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  return json.link
+}
+
+export async function deleteLink(id: string): Promise<void> {
+  await request(`/dataset-links/${id}`, { method: 'DELETE' })
+}
+
+/** Выполняет определение, ничего не сохраняя — предпросмотр конструктора.
+ *  Значения фильтров идут рядом с определением и в него не попадают. */
+export async function previewDefinition(
+  definition: ReportDefinition,
+  filterValues: Record<string, string> = {},
+): Promise<Report> {
+  const json = await request<{ report: Report }>('/reports/preview', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...definition, filterValues }),
+  })
+  return json.report
+}
+
+export async function createBuilderReport(payload: {
+  title: string
+  slug?: string
+  description?: string
+  definition: ReportDefinition
+}): Promise<ReportMeta> {
+  const json = await request<{ report: ReportMeta }>('/reports/builder', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  return json.report
+}
+
+export interface DefinitionResponse {
+  definition: ReportDefinition
+  title?: string
+  description?: string
+}
+
+export async function fetchDefinition(slug: string): Promise<DefinitionResponse> {
+  return await request<DefinitionResponse>(`/reports/${slug}/definition`)
+}
+
+export async function saveDefinition(slug: string, definition: ReportDefinition): Promise<ReportMeta> {
+  const json = await request<{ report: ReportMeta }>(`/reports/${slug}/definition`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(definition),
+  })
+  return json.report
+}
+
+/** Разбор словесного ТЗ в декларацию (детерминированный, по словарю метрик). */
+export interface ParseNote {
+  text: string
+  problem?: string | null
+  matchedMetrics?: string[]
+  matchedDimensions?: string[]
+  unmatched?: string[]
+  /** 'модель' или разбор по словарю — читателю полезно знать, чем понято. */
+  source?: string
+}
+
+/** Разбор описания. Поля и формулы отчёта передаются вместе с текстом:
+ *  в общем словаре их нет, но для этого отчёта это полноценные показатели. */
+export async function parsePhrase(
+  text: string,
+  own: { fields?: ReportField[]; computed?: ComputedField[] } = {},
+): Promise<{ definition: ReportDefinition; notes: ParseNote[]; source?: 'llm' | 'parser' }> {
+  return request<{ definition: ReportDefinition; notes: ParseNote[]; source?: 'llm' | 'parser' }>('/reports/parse', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, fields: own.fields ?? [], computed: own.computed ?? [] }),
+  })
+}

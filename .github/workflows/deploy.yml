@@ -66,38 +66,56 @@ jobs:
           name: frontend-dist
           path: frontend/dist/
 
-      - name: Установить sshpass
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
+      - name: Настроить SSH (ключ + known_hosts)
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+          # параметры в config, а не в командной строке: rsync передаёт строку
+          # --rsh в exec без раскрытия ~, а ssh свой config читает сам
+          {
+            printf 'Host %s\n' "$SSH_HOST"
+            printf '  User %s\n' "$SSH_USER"
+            printf '  IdentityFile ~/.ssh/id_deploy\n'
+            printf '  IdentitiesOnly yes\n'
+            printf '  BatchMode yes\n'
+            printf '  StrictHostKeyChecking yes\n'
+          } > ~/.ssh/config
+          chmod 600 ~/.ssh/config
 
       - name: Проверка SSH-доступа
         env:
-          SSHPASS: ${{ secrets.SSH_PASSWORD }}
           SERVER: ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}
         run: |
-          sshpass -e ssh -v -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+          ssh -v -o ConnectTimeout=15 \
             $SERVER 'echo SSH-OK' 2>&1 | tee /tmp/ssh-check.log | tail -5
           grep -q "SSH-OK" /tmp/ssh-check.log && echo "✓ SSH-подключение работает" || {
             echo "::error::SSH не подключился — см. /tmp/ssh-check.log ниже"
-            grep -E "Authentications that|Permission denied|Connection (timed out|refused|reset)|invalid user|docker: " /tmp/ssh-check.log || true
+            grep -E "Authentications that|Permission denied|Host key verification|Connection (timed out|refused|reset)|invalid user|docker: " /tmp/ssh-check.log || true
             exit 1
           }
 
       - name: Синхронизация кода (rsync)
         env:
-          SSHPASS: ${{ secrets.SSH_PASSWORD }}
           SERVER: ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}
         run: |
-          RSH="sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+          RSH="ssh"
           rsync -az --delete --rsh="$RSH" backend/app/      $SERVER:$APP_DIR/backend/app/
-          rsync -az           --rsh="$RSH" backend/skills/   $SERVER:$APP_DIR/backend/skills/  # без --delete: скиллы, опубликованные на сервере, не стираются
+          rsync -az --ignore-existing --rsh="$RSH" backend/skills/   $SERVER:$APP_DIR/backend/skills/  # не перезаписываем скиллы, опубликованные на сервере
           rsync -az           --rsh="$RSH" backend/requirements.txt $SERVER:$APP_DIR/backend/
           rsync -az --delete --rsh="$RSH" frontend/dist/    $SERVER:$APP_DIR/frontend/dist/
           rsync -az --delete --rsh="$RSH" deploy/           $SERVER:$APP_DIR/deploy/
 
       - name: Установка зависимостей и перезапуск сервиса
         env:
-          SSHPASS: ${{ secrets.SSH_PASSWORD }}
           SERVER: ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}
         run: |
-          sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null $SERVER \
+          ssh $SERVER \
             "cd $APP_DIR/backend && .venv/bin/pip install -q -r requirements.txt && sudo systemctl restart $SERVICE_NAME && systemctl is-active $SERVICE_NAME"

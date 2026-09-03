@@ -42,6 +42,18 @@ class CsvAdapter(DatasetAdapter):
         return header, rows
 
 
+    def run_query(self, sql: str, params: dict | None = None) -> tuple[list[str], list[list]]:
+        raise DatasetError(
+            'агрегация по CSV пока не поддерживается — нужен локальный движок запросов'
+        )
+
+    def quoted_table(self, table: str) -> str:
+        return str(self._file)
+
+    def close(self) -> None:
+        """Файлу закрывать нечего — метод для единообразия интерфейса."""
+
+
 def _sniff_delimiter(file: Path) -> str:
     try:
         with Path(file).open(encoding='utf-8-sig') as f:

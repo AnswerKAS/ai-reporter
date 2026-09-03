@@ -42,11 +42,28 @@ def _quote_table(table: str) -> str:
 
 
 class PostgresAdapter(DatasetAdapter):
-    def __init__(self, dsn: str, table: str) -> None:
+    """reuse=True держит одно соединение на время работы адаптера (см. ClickHouse)."""
+
+    def __init__(self, dsn: str, table: str, reuse: bool = False) -> None:
         self._dsn = dsn
         self._table = table
+        self._reuse = reuse
+        self._cached = None
+
+    def close(self) -> None:
+        if self._cached is not None:
+            try:
+                self._cached.close()
+            finally:
+                self._cached = None
+
+    def _release(self, conn) -> None:
+        if not self._reuse:
+            conn.close()
 
     def _connect(self):
+        if self._cached is not None:
+            return self._cached
         if not self._dsn:
             raise DatasetError('DSN не задан')
         if not self._table:
@@ -56,27 +73,35 @@ class PostgresAdapter(DatasetAdapter):
         except ImportError as exc:
             raise DatasetError('драйвер psycopg не установлен в venv бэкенда') from exc
         try:
-            return psycopg.connect(_dsn_postgres(self._dsn), connect_timeout=10)
+            conn = psycopg.connect(_dsn_postgres(self._dsn), connect_timeout=10)
         except Exception as exc:
             raise DatasetError(f'PostgreSQL недоступен: {sanitize_error(str(exc))}') from exc
+        if self._reuse:
+            self._cached = conn
+        return conn
 
     def test_connection(self) -> None:
         conn = self._connect()
-        conn.close()
+        self._release(conn)
 
     def fetch_schema(self) -> list[DatasetField]:
         conn = self._connect()
         try:
             schema, name = _split_table(self._table)
+            # col_description — комментарий колонки; его пишут владельцы данных,
+            # и это единственное машиночитаемое описание смысла поля
+            # без format('%I…') — psycopg разбирает % как плейсхолдер
+            comment = ("col_description((quote_ident(table_schema) || '.' || "
+                       "quote_ident(table_name))::regclass, ordinal_position)")
             if schema:
                 sql = (
-                    "SELECT column_name, data_type FROM information_schema.columns "
+                    f"SELECT column_name, data_type, {comment} FROM information_schema.columns "
                     "WHERE table_schema = %s AND table_name = %s ORDER BY ordinal_position"
                 )
                 params: tuple = (schema, name)
             else:
                 sql = (
-                    "SELECT column_name, data_type FROM information_schema.columns "
+                    f"SELECT column_name, data_type, {comment} FROM information_schema.columns "
                     "WHERE table_name = %s ORDER BY ordinal_position"
                 )
                 params = (name,)
@@ -86,10 +111,10 @@ class PostgresAdapter(DatasetAdapter):
         except Exception as exc:
             raise DatasetError(f'не удалось прочитать схему: {sanitize_error(str(exc))}') from exc
         finally:
-            conn.close()
+            self._release(conn)
         if not rows:
             raise DatasetError(f'таблица {self._table!r} не найдена')
-        return [DatasetField(name=r[0], type=r[1]) for r in rows]
+        return [DatasetField(name=r[0], type=r[1], comment=r[2] or '') for r in rows]
 
     def sample_rows(self, limit: int = 50) -> tuple[list[str], list[list]]:
         conn = self._connect()
@@ -101,8 +126,25 @@ class PostgresAdapter(DatasetAdapter):
         except Exception as exc:
             raise DatasetError(f'не удалось прочитать данные: {sanitize_error(str(exc))}') from exc
         finally:
-            conn.close()
+            self._release(conn)
         return cols, rows
+
+
+    def run_query(self, sql: str, params: dict | None = None) -> tuple[list[str], list[list]]:
+        conn = self._connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(sql, params or {})
+                cols = [d[0] for d in cur.description or []]
+                rows = [list(r) for r in cur.fetchall()]
+        except Exception as exc:
+            raise DatasetError(f'запрос не выполнен: {sanitize_error(str(exc))}') from exc
+        finally:
+            self._release(conn)
+        return cols, rows
+
+    def quoted_table(self, table: str) -> str:
+        return _quote_table(table or self._table)
 
 
 def _fmt(value) -> str:

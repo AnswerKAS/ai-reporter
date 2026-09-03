@@ -4,7 +4,9 @@
 - при заданном DATABASE_URL подключается к ClickHouse и агрегирует реальные данные;
 - применяет фильтры из переменных FILTER_<KEY> (значения сохраняет бэкенд);
 - объявляет в спеке metadata фильтров (key/label/options из DISTINCT-запросов);
-- если DSN нет или подключение не удалось — использует синтетический fallback.
+- при недоступном источнике использует синтетику ТОЛЬКО с ALLOW_SYNTHETIC=1,
+  иначе завершается с кодом 2 (честная ошибка вместо выдуманных чисел);
+- проставляет происхождение данных (dataOrigin) в спеке и секциях.
 Скилл передаётся переменной окружения SKILL (sales | manager | drilldown
 или иерархическое имя 'домен/файл'); для неизвестных доменов скрипт строит
 generic-отчёт по реестру датасетов (datasets.json рядом со скриптом).
@@ -177,6 +179,22 @@ except Exception:
 NOW = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 OUTPUT = sys.argv[sys.argv.index("--output") + 1] if "--output" in sys.argv else "report.spec.json"
 SKILL = os.environ.get("SKILL", "sales")
+
+# Синтетика разрешена только явным флагом (демо-режим). В рабочем отчёте
+# правдоподобные выдуманные числа опаснее честной ошибки.
+ALLOW_SYNTHETIC = os.environ.get("ALLOW_SYNTHETIC", "0").strip().lower() in ("1", "true", "yes", "on")
+ORIGIN = {"value": "live"}
+
+
+def use_synthetic(reason):
+    """Переход на синтетику: в рабочем режиме это ошибка, а не запасной план."""
+    if not ALLOW_SYNTHETIC:
+        sys.stderr.write(
+            "источник данных недоступен: %s\n"
+            "синтетические данные запрещены (ALLOW_SYNTHETIC=0) — отчёт не собран\n" % reason
+        )
+        sys.exit(2)
+    ORIGIN["value"] = "synthetic"
 
 META = __META__
 PERIOD = os.environ.get("PERIOD", "")
@@ -561,27 +579,33 @@ def build_generic():
         else:
             cols, rows = ch_rows(os.environ.get(f"DATASET_{slug}_DSN", "") or os.environ.get("DATABASE_URL", ""), d.get("table"), 20)
         if cols is None:
+            use_synthetic("датасет %s недоступен" % (d.get("slug") or "?"))
             cols, rows = synth_rows(d.get("fields") or [])
             note = "синтетические данные (источник недоступен)"
+            origin = "synthetic"
         else:
             note = source
+            origin = "live"
         names.append(f"{d.get('title')} ({d.get('slug')}) — {note}")
-        collected.append((d, cols, rows))
+        collected.append((d, cols, rows, origin))
     if not collected:
-        collected = [({"slug": "demo", "title": "Демо-данные"},) + synth_rows([]) for _ in range(1)]
+        use_synthetic("реестр датасетов пуст")
+        collected = [({"slug": "demo", "title": "Демо-данные"},) + synth_rows([]) + ("synthetic",)]
         names = ["Демо-данные — синтетика (реестр датасетов пуст)"]
     sections.append({"type": "markdown", "content": "## Обзор\n\nДатасеты: " + "; ".join(names) + f". Период до {NOW}."})
     kpi_items = []
-    for d, cols, rows in collected:
+    for d, cols, rows, origin in collected:
         kpi_items.append({"label": f'{d.get("title")}: строк в выборке', "value": len(rows), "format": "number"})
         kpi_items.append({"label": f'{d.get("title")}: полей', "value": len(cols), "format": "number"})
-    sections.append({"type": "kpi", "items": kpi_items})
-    for d, cols, rows in collected:
+    worst = "synthetic" if any(o == "synthetic" for _, _, _, o in collected) else "live"
+    sections.append({"type": "kpi", "items": kpi_items, "dataOrigin": worst})
+    for d, cols, rows, origin in collected:
         show = cols[:10]
         sections.append({
             "type": "table", "title": f'Превью: {d.get("title")}',
             "columns": [{"key": c, "header": c} for c in show],
             "rows": [{c: r[i] for i, c in enumerate(show) if i < len(r)} for r in rows],
+            "dataOrigin": origin,
         })
     return sections
 
@@ -611,6 +635,11 @@ if client is not None:
 else:
     root = {}
     description = "Синтетический fallback: DATABASE_URL не задан."
+
+_DEMO_SKILLS = ("manager", "managers/manager", "drilldown", "sales/drilldown", "sales", "sales/sales")
+
+if not root and SKILL in _DEMO_SKILLS:
+    use_synthetic(description or "источник данных не задан")
 
 if not root:
     if SKILL in ("manager", "managers/manager"):
@@ -681,11 +710,16 @@ elif SKILL in ("sales", "sales/sales", "manager", "managers/manager"):
 else:
     sections = build_generic()
 
+for _section in sections:
+    if _section.get("type") != "markdown":
+        _section.setdefault("dataOrigin", ORIGIN["value"])
+
 report = {
     "id": META["id"], "slug": META["slug"], "title": META["title"],
     "description": META["description"], "skill": META["skill"],
     "createdAt": NOW, "updatedAt": NOW, "params": META["params"],
     "filters": root.get("filters", []),
+    "dataOrigin": ORIGIN["value"],
     "sections": sections,
 }
 

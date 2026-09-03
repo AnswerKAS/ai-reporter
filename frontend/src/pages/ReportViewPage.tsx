@@ -38,6 +38,16 @@ function ReportEdit({ report, onSaved }: { report: Report; onSaved: () => void }
     }
   }
 
+  // отчёт-конструктор правится там же, где собирался: состав секций,
+  // поля и формулы живут в конструкторе, а не в этой форме
+  if (report.kind === 'builder') {
+    return (
+      <Link to={`/builder/${report.slug}`} className="btn btn-ghost">
+        Редактировать
+      </Link>
+    )
+  }
+
   if (!open) {
     return (
       <button type="button" className="btn btn-ghost" onClick={() => setOpen(true)}>

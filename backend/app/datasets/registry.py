@@ -163,13 +163,14 @@ def save_csv(slug: str, content: bytes) -> int:
 
 # --- адаптеры --------------------------------------------------------------
 
-def adapter_for(dataset: dict) -> DatasetAdapter:
+def adapter_for(dataset: dict, reuse: bool = False) -> DatasetAdapter:
+    """reuse=True — адаптер держит соединение до close() (сборка отчёта)."""
     source = dataset.get('source')
     dsn = resolve_dataset_dsn(dataset)
     if source == 'clickhouse':
-        return ClickHouseAdapter(dsn=dsn, table=dataset.get('table_name') or '')
+        return ClickHouseAdapter(dsn=dsn, table=dataset.get('table_name') or '', reuse=reuse)
     if source == 'postgres':
-        return PostgresAdapter(dsn=dsn, table=dataset.get('table_name') or '')
+        return PostgresAdapter(dsn=dsn, table=dataset.get('table_name') or '', reuse=reuse)
     if source == 'csv':
         return CsvAdapter(file=csv_path(dataset['slug']))
     raise DatasetError(f'неизвестный тип источника: {source}')

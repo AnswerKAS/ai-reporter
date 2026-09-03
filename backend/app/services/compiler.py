@@ -295,7 +295,7 @@ async def _run_opencode(workdir: Path, skill_name: str, params: dict[str, str], 
         raise CompileError(f'opencode завершился с кодом {code}:\n{tail}')
 
 
-async def _run_report_script(workdir: Path, report: dict) -> Path:
+async def _run_report_script(workdir: Path, report: dict, *, allow_synthetic: bool = False) -> Path:
     """Запускает report.py и возвращает путь к записанной спеке.
 
     Имя файла уникально для каждого запуска: параллельные пересчёты одного
@@ -317,6 +317,9 @@ async def _run_report_script(workdir: Path, report: dict) -> Path:
         'SALES_TABLE': 'sales_orders',
         'MANAGER_TABLE': 'manager_stats',
         'DATABASE_URL': os.environ.get('DATABASE_URL', DB.raw),
+        # Синтетика — только в явном демо-режиме. В рабочем отчёте недоступный
+        # источник обязан стать честной ошибкой, а не правдоподобными числами.
+        'ALLOW_SYNTHETIC': '1' if allow_synthetic else '0',
     }
     # DSN каждого датасета → DATASET_<SLUG>_DSN (для скриптов с произвольными источниками)
     for d in datasets:
@@ -399,7 +402,7 @@ async def _compile_report(report: dict, mode: str) -> dict:
             params=params,
         )
 
-    return _read_spec(await _run_report_script(workdir, report))
+    return _read_spec(await _run_report_script(workdir, report, allow_synthetic=mode == 'demo'))
 
 
 async def refresh_report(report: dict) -> dict:
@@ -407,4 +410,6 @@ async def refresh_report(report: dict) -> dict:
         workdir = report_workdir(report['id'])
         if not (workdir / 'report.py').exists():
             raise CompileError('report.py отсутствует — сначала соберите отчёт')
-        return _read_spec(await _run_report_script(workdir, report))
+        return _read_spec(await _run_report_script(
+            workdir, report, allow_synthetic=report.get('mode') == 'demo',
+        ))
