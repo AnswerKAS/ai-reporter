@@ -1,94 +1,108 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import type { ReportMeta } from '../types/report'
-import { fetchReports } from '../lib/api'
 import { useAuth } from '../lib/auth'
-import { ApiError } from '../lib/api'
-import { domainLabel, domainOf } from '../lib/domains'
+import { useReports } from '../lib/reports'
+import { BUILDER_GROUP, domainLabel, reportGroup } from '../lib/domains'
+import { Alert, Badge, Card, EmptyState, Page, PageHeader, SkeletonCards } from '../components/ui'
+
+export function ReportCard({ report }: { report: ReportMeta }) {
+  return (
+    <Card interactive className="p-0">
+      <Link to={`/reports/${report.slug}`} className="block p-5">
+        <h3 className="mb-1.5 text-[17px] font-semibold text-fg">{report.title}</h3>
+        {report.description && <p className="mb-3.5 text-sm text-fg-muted">{report.description}</p>}
+        {report.status === 'ready' ? (
+          <span className="text-sm text-fg-muted">Обновлён: {report.updatedAt}</span>
+        ) : report.status === 'error' ? (
+          <Badge tone="bad">Ошибка: {report.error}</Badge>
+        ) : (
+          <Badge tone="warn">Сборка… ({report.status})</Badge>
+        )}
+      </Link>
+    </Card>
+  )
+}
+
+export function ReportGrid({ reports }: { reports: ReportMeta[] }) {
+  return (
+    <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-4">
+      {reports.map((r) => (
+        <ReportCard key={r.slug} report={r} />
+      ))}
+    </div>
+  )
+}
 
 export function ReportListPage() {
-  const { user } = useAuth()
-  const [reports, setReports] = useState<ReportMeta[] | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    let alive = true
-    fetchReports()
-      .then((data) => {
-        if (alive) setReports(data)
-      })
-      .catch((err) => {
-        if (alive) setError(err instanceof ApiError ? err.message : 'API недоступен')
-      })
-    return () => {
-      alive = false
-    }
-  }, [])
+  const { user, isAdmin } = useAuth()
+  // список живёт в контексте — тот же, что и в меню слева
+  const { reports, loading, error } = useReports()
 
   const groups = useMemo(() => {
     const map = new Map<string, ReportMeta[]>()
-    for (const r of reports ?? []) {
-      const key = r.skill ? domainOf(r.skill) : '—'
+    for (const r of reports) {
+      const key = reportGroup(r)
       if (!map.has(key)) map.set(key, [])
       map.get(key)!.push(r)
     }
     return [...map.entries()].sort(([a], [b]) => domainLabel(a).localeCompare(domainLabel(b)))
   }, [reports])
 
+  const newReport = isAdmin ? (
+    <Link
+      to="/builder"
+      className="inline-flex items-center rounded-control border border-accent bg-accent px-3.5 py-1.5 text-sm font-semibold text-accent-fg transition-colors hover:bg-accent-hover"
+    >
+      Новый отчёт
+    </Link>
+  ) : undefined
+
   if (error) {
     return (
-      <main className="page">
-        <header className="page-header">
-          <h1>Отчёты</h1>
-          <p className="muted">{error}</p>
-        </header>
-      </main>
+      <Page>
+        <PageHeader title="Отчёты" actions={newReport} />
+        <Alert>{error}</Alert>
+      </Page>
     )
   }
 
-  if (reports === null) {
+  if (loading && reports.length === 0) {
     return (
-      <main className="page">
-        <p className="muted">Загрузка…</p>
-      </main>
+      <Page>
+        <PageHeader title="Отчёты" subtitle="Сгруппированы по скиллам" actions={newReport} />
+        <SkeletonCards />
+      </Page>
     )
   }
 
   return (
-    <main className="page">
-      <header className="page-header">
-        <h1>Отчёты</h1>
-        <p className="muted">
-          {user ? `${user.username}: сгруппированы по скиллам` : 'Сгруппированы по скиллам'}
-        </p>
-      </header>
+    <Page>
+      <PageHeader
+        title="Отчёты"
+        subtitle={user ? `${user.username}: сгруппированы по скиллам` : 'Сгруппированы по скиллам'}
+        actions={newReport}
+      />
 
-      {reports.length === 0 && (
-        <p className="muted">Нет доступных отчётов — обратитесь к администратору.</p>
+      {reports.length === 0 ? (
+        <EmptyState
+          title="Пока нет доступных отчётов"
+          description="Отчёты назначает администратор — обратитесь к нему или соберите свой в конструкторе."
+          action={newReport}
+        />
+      ) : (
+        groups.map(([group, items]) => (
+          <section key={group} className="mb-8">
+            <h2 className="mb-3 flex items-baseline gap-2 text-lg font-semibold tracking-tight">
+              {domainLabel(group)}
+              {group !== BUILDER_GROUP && (
+                <span className="font-mono text-xs font-normal text-fg-muted">{group}</span>
+              )}
+            </h2>
+            <ReportGrid reports={items} />
+          </section>
+        ))
       )}
-
-      {groups.map(([domain, items]) => (
-        <section key={domain} className="skill-group">
-          <h2 className="skill-title">
-            {domainLabel(domain)} <span className="skill-name">{domain}</span>
-          </h2>
-          <div className="report-grid">
-            {items.map((r) => (
-              <Link key={r.slug} to={`/reports/${r.slug}`} className="report-card">
-                <h3>{r.title}</h3>
-                <p className="muted">{r.description}</p>
-                <span className="report-date">
-                  {r.status === 'ready'
-                    ? `Обновлён: ${r.updatedAt}`
-                    : r.status === 'error'
-                      ? `Ошибка: ${r.error}`
-                      : `Сборка… (${r.status})`}
-                </span>
-              </Link>
-            ))}
-          </div>
-        </section>
-      ))}
-    </main>
+    </Page>
   )
 }

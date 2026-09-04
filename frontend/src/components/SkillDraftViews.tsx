@@ -12,6 +12,8 @@ import {
   regenerateSkillDraft,
   submitSkillDraft,
 } from '../lib/api'
+import { Alert, Badge, Button, Field, Textarea } from './ui'
+import type { BadgeTone } from './ui/Badge'
 
 export const DRAFT_STATUS_LABELS: Record<SkillDraftStatus, string> = {
   generating: 'генерация…',
@@ -26,17 +28,17 @@ export const DRAFT_STATUS_LABELS: Record<SkillDraftStatus, string> = {
   published: 'опубликован',
 }
 
-export const DRAFT_STATUS_BADGES: Record<SkillDraftStatus, string> = {
-  generating: 'badge',
-  draft: 'badge',
-  review: 'badge',
-  checked: 'badge badge-good',
-  rejected: 'badge badge-bad',
-  failed: 'badge badge-bad',
-  unavailable: 'badge badge-warn',
-  improving: 'badge',
-  checking: 'badge',
-  published: 'badge badge-good',
+export const DRAFT_STATUS_TONES: Record<SkillDraftStatus, BadgeTone> = {
+  generating: 'neutral',
+  draft: 'neutral',
+  review: 'neutral',
+  checked: 'good',
+  rejected: 'bad',
+  failed: 'bad',
+  unavailable: 'warn',
+  improving: 'neutral',
+  checking: 'neutral',
+  published: 'good',
 }
 
 const REGENERABLE_STATUSES: SkillDraftStatus[] = ['draft', 'rejected', 'failed', 'unavailable', 'published']
@@ -90,105 +92,112 @@ export function DraftCard({
     })
 
   return (
-    <article className="draft-card">
-      <div className="draft-head">
+    <article className="mb-3 flex flex-col gap-2.5 rounded-card border border-line bg-surface p-4">
+      <div className="flex items-start justify-between gap-3">
         <div>
-          <h3>
-            {draft.title} <span className="skill-name">{draft.domain}/{draft.name}</span>
+          <h3 className="text-[15px] font-semibold">
+            {draft.title}{' '}
+            <span className="font-mono text-xs font-normal text-fg-muted">
+              {draft.domain}/{draft.name}
+            </span>
           </h3>
-          <p className="muted">{draft.description}</p>
+          <p className="text-sm text-fg-muted">{draft.description}</p>
           {draft.datasets.length > 0 && (
-            <p className="muted draft-datasets">Датасеты: {draft.datasets.join(', ')}</p>
+            <p className="text-sm text-fg-muted">Датасеты: {draft.datasets.join(', ')}</p>
           )}
         </div>
-        <span className={DRAFT_STATUS_BADGES[draft.status] ?? 'badge'}>
+        <Badge tone={DRAFT_STATUS_TONES[draft.status] ?? 'neutral'}>
           {DRAFT_STATUS_LABELS[draft.status] ?? draft.status}
-        </span>
+        </Badge>
       </div>
 
       {draft.issues.length > 0 && (
-        <ul className="draft-issues">
-          {draft.issues.map((issue, i) => (
-            <li key={i}>{issue}</li>
-          ))}
-        </ul>
+        <Alert tone="warn">
+          <ul className="list-disc pl-4">
+            {draft.issues.map((issue, i) => (
+              <li key={i}>{issue}</li>
+            ))}
+          </ul>
+        </Alert>
       )}
 
       {draft.content && (
         <>
-          <button type="button" className="btn btn-ghost draft-toggle" onClick={() => setExpanded(!expanded)}>
+          <Button variant="ghost" size="sm" className="self-start" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
             {expanded ? 'Скрыть текст скилла' : 'Показать текст скилла'}
-          </button>
-          {expanded && <pre className="skill-source">{draft.content}</pre>}
+          </Button>
+          {expanded && (
+            <pre className="overflow-x-auto rounded-control border border-line bg-bg p-4 text-sm leading-relaxed break-words whitespace-pre-wrap">
+              {draft.content}
+            </pre>
+          )}
         </>
       )}
 
-      <div className="dataset-actions">
+      <div className="flex flex-wrap items-center gap-2">
         {['draft', 'rejected'].includes(draft.status) && (
-          <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => run(() => submitSkillDraft(draft.id))}>
+          <Button variant="ghost" disabled={busy} onClick={() => run(() => submitSkillDraft(draft.id))}>
             Отправить на публикацию
-          </button>
+          </Button>
         )}
         {REGENERABLE_STATUSES.includes(draft.status) && !editing && (
-          <button type="button" className="btn btn-ghost" disabled={busy} onClick={startEditing}>
+          <Button variant="ghost" disabled={busy} onClick={startEditing}>
             Перегенерировать
-          </button>
+          </Button>
         )}
         {['generating', 'improving', 'checking'].includes(draft.status) && (
-          <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => run(() => cancelSkillDraft(draft.id))}>
+          <Button variant="ghost" disabled={busy} onClick={() => run(() => cancelSkillDraft(draft.id))}>
             Отменить
-          </button>
+          </Button>
         )}
         {draft.status === 'published' && (
-          <p className="muted draft-datasets">
+          <p className="text-sm text-fg-muted">
             Перегенерация запустит цикл повторной модерации: существующие скилл и отчёт остаются рабочими до новой публикации.
           </p>
         )}
         {!['published', 'generating', 'improving'].includes(draft.status) && (
-          <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => run(() => deleteSkillDraft(draft.id))}>
+          <Button variant="ghost" disabled={busy} onClick={() => run(() => deleteSkillDraft(draft.id))}>
             Удалить
-          </button>
+          </Button>
         )}
         {isAdmin && ['review', 'rejected', 'checked'].includes(draft.status) && (
-          <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => run(() => checkSkillDraft(draft.id))}>
+          <Button variant="ghost" disabled={busy} onClick={() => run(() => checkSkillDraft(draft.id))}>
             Проверить по правилам
-          </button>
+          </Button>
         )}
         {isAdmin && ['review', 'rejected', 'checked'].includes(draft.status) && (
-          <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => run(() => improveSkillDraft(draft.id))}>
+          <Button variant="ghost" disabled={busy} onClick={() => run(() => improveSkillDraft(draft.id))}>
             Улучшить скилл
-          </button>
+          </Button>
         )}
         {isAdmin && ['draft', 'review', 'checked', 'rejected'].includes(draft.status) && (
-          <button type="button" className="btn btn-primary" disabled={busy} onClick={() => run(() => publishSkillDraft(draft.id))}>
+          <Button variant="primary" disabled={busy} onClick={() => run(() => publishSkillDraft(draft.id))}>
             Опубликовать скилл и создать отчёт
-          </button>
+          </Button>
         )}
       </div>
 
       {editing && (
-        <div className="draft-edit">
-          <label>
-            Текст запроса (опишите желаемый отчёт заново или уточните формулировку)
-            <textarea
+        <div className="flex flex-col gap-2.5 rounded-control border border-line bg-bg p-3">
+          <Field label="Текст запроса (опишите желаемый отчёт заново или уточните формулировку)">
+            <Textarea
               value={text}
               onChange={(e) => setText(e.target.value)}
               rows={4}
               placeholder="Например: выручка по городам с детализацией по категориям…"
             />
-          </label>
-          <div className="dataset-actions">
-            <button
-              type="button"
-              className="btn btn-primary"
+          </Field>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="primary"
               disabled={busy || !text.trim()}
               onClick={regenerateWithText}
             >
               {busy ? 'Запускаем генерацию…' : 'Перегенерировать с новым запросом'}
-            </button>
-            <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => setEditing(false)}>
+            </Button>
+            <Button variant="ghost" disabled={busy} onClick={() => setEditing(false)}>
               Отмена
-            </button>
+            </Button>
           </div>
         </div>
       )}

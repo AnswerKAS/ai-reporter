@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { ReportFilter } from '../types/report'
+import { Input, Select } from './ui'
 
 interface Props {
   filters: ReportFilter[]
@@ -10,7 +11,7 @@ interface Props {
 
 export function ReportFilters({ filters, values, disabled, onChange }: Props) {
   return (
-    <div className="filter-bar">
+    <div className="mb-6 flex flex-wrap items-center gap-4 rounded-card border border-line bg-surface px-5 py-3.5">
       {filters.map((f) => (
         <FilterField
           key={f.key}
@@ -20,7 +21,11 @@ export function ReportFilters({ filters, values, disabled, onChange }: Props) {
           onChange={onChange}
         />
       ))}
-      {disabled && <span className="filter-refreshing">Обновление…</span>}
+      {disabled && (
+        <span role="status" className="text-sm text-accent">
+          Обновление…
+        </span>
+      )}
     </div>
   )
 }
@@ -48,9 +53,10 @@ function FilterField({
 
   if (filter.kind === 'select') {
     return (
-      <label className="filter-item">
-        <span className="filter-label">{filter.label}</span>
-        <select
+      <label className="flex items-center gap-2">
+        <span className="text-sm text-fg-muted">{filter.label}</span>
+        <Select
+          className="w-auto py-1.5"
           value={value}
           disabled={disabled}
           onChange={(e) => onChange(filter.key, e.target.value)}
@@ -61,17 +67,17 @@ function FilterField({
               {opt}
             </option>
           ))}
-        </select>
+        </Select>
       </label>
     )
   }
 
   return (
-    <label className="filter-item">
-      <span className="filter-label">{filter.label}</span>
-      <input
+    <label className="flex items-center gap-2">
+      <span className="text-sm text-fg-muted">{filter.label}</span>
+      <Input
+        className="w-40 py-1.5"
         type={filter.kind === 'number' ? 'number' : 'text'}
-        className="filter-input"
         value={draft}
         placeholder={filter.kind === 'number' ? '0' : filter.label}
         disabled={disabled}

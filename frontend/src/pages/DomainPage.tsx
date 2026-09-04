@@ -4,6 +4,8 @@ import type { ReportMeta } from '../types/report'
 import type { SkillInfo } from '../types/dataset'
 import { ApiError, fetchReports, fetchSkills } from '../lib/api'
 import { domainLabel } from '../lib/domains'
+import { Alert, EmptyState, Page, PageHeader } from '../components/ui'
+import { ReportGrid } from './ReportListPage'
 
 export function DomainPage({ domain }: { domain: string }) {
   const [reports, setReports] = useState<ReportMeta[] | null>(null)
@@ -39,55 +41,49 @@ export function DomainPage({ domain }: { domain: string }) {
   }, [domainReports])
 
   return (
-    <main className="page">
-      <header className="page-header">
-        <h1>{domainLabel(domain)}</h1>
-        <p className="muted">Все отчёты по домену <span className="skill-name">{domain}</span></p>
-      </header>
-      {error && <p className="form-error">{error}</p>}
+    <Page>
+      <PageHeader
+        title={domainLabel(domain)}
+        subtitle={
+          <>
+            Все отчёты по домену <span className="font-mono text-xs">{domain}</span>
+          </>
+        }
+      />
+      {error && <Alert className="mb-4">{error}</Alert>}
 
-      {reports !== null && domainReports.length === 0 && (
-        <p className="muted">Отчётов по домену пока нет.</p>
+      {reports !== null && domainReports.length === 0 && skills.length === 0 && (
+        <EmptyState title="Отчётов по домену пока нет" description="Соберите отчёт в конструкторе или выберите другой домен." />
       )}
 
       {groups.map(([skill, items]) => (
-        <section key={skill} className="skill-group">
-          <h2 className="skill-title">
-            <Link to={`/skills/${skill}`} className="skill-group-link">
-              {skill.split('/')[1] ?? skill} <span className="skill-name">{skill}</span>
+        <section key={skill} className="mb-8">
+          <h2 className="mb-3 flex items-baseline gap-2 text-lg font-semibold tracking-tight">
+            <Link to={`/skills/${skill}`} className="hover:text-accent">
+              {skill.split('/')[1] ?? skill} <span className="font-mono text-xs font-normal text-fg-muted">{skill}</span>
             </Link>
-            <span className="muted">({items.length})</span>
+            <span className="text-sm font-normal text-fg-muted">({items.length})</span>
           </h2>
-          <div className="report-grid">
-            {items.map((r) => (
-              <Link key={r.slug} to={`/reports/${r.slug}`} className="report-card">
-                <h3>{r.title}</h3>
-                <p className="muted">{r.description}</p>
-                <span className="report-date">
-                  {r.status === 'ready'
-                    ? `Обновлён: ${r.updatedAt}`
-                    : r.status === 'error'
-                      ? `Ошибка: ${r.error}`
-                      : `Сборка… (${r.status})`}
-                </span>
-              </Link>
-            ))}
-          </div>
+          <ReportGrid reports={items} />
         </section>
       ))}
 
       {domainReports.length === 0 && skills.length > 0 && (
-        <section className="skill-group">
-          <h2 className="skill-title">Скиллы домена</h2>
-          <div className="draft-pick">
+        <section className="mb-8">
+          <h2 className="mb-3 text-lg font-semibold tracking-tight">Скиллы домена</h2>
+          <div className="flex flex-wrap gap-2">
             {skills.map((s) => (
-              <Link key={s.name} to={`/skills/${s.name}`} className="sidebar-skill">
+              <Link
+                key={s.name}
+                to={`/skills/${s.name}`}
+                className="rounded-control border border-line px-3 py-1.5 text-sm transition-colors hover:border-accent hover:text-accent"
+              >
                 {s.name}
               </Link>
             ))}
           </div>
         </section>
       )}
-    </main>
+    </Page>
   )
 }

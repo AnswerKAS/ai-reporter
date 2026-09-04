@@ -1,9 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useState } from 'react'
 import { BrowserRouter, Navigate, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import type { ReactNode } from 'react'
-import type { SkillInfo } from './types/dataset'
-import { fetchSkills } from './lib/api'
-import { domainLabel } from './lib/domains'
+import { cn } from './lib/cn'
 import { ReportListPage } from './pages/ReportListPage'
 import { ReportViewPage } from './pages/ReportViewPage'
 import { SkillPage } from './pages/SkillPage'
@@ -15,152 +13,107 @@ import { DatasetsPage } from './pages/DatasetsPage'
 import { BuilderPage } from './pages/BuilderPage'
 import { ModelPage } from './pages/ModelPage'
 import { AuthProvider, useAuth } from './lib/auth'
+import { ReportsProvider } from './lib/reports'
+import { Sidebar, SidebarPanel } from './components/Sidebar'
+import { ThemeToggle } from './components/ThemeToggle'
+import { Button, Page, SkeletonCards } from './components/ui'
 
-function SkillTree() {
-  const [skills, setSkills] = useState<SkillInfo[]>([])
-  const location = useLocation()
-  const navigate = useNavigate()
-  const activePath = decodeURIComponent(location.pathname).replace(/^\/skills\/?/, '')
-  const activeDomain = activePath.split('/')[0] || null
-  const [openDomains, setOpenDomains] = useState<Set<string>>(new Set())
+const NAV_LINK = 'rounded-control px-2.5 py-1.5 text-[15px] transition-colors'
 
-  useEffect(() => {
-    let alive = true
-    fetchSkills()
-      .then((data) => {
-        if (alive) setSkills(data)
-      })
-      .catch(() => undefined)
-    return () => {
-      alive = false
-    }
-  }, [])
+function navLinkClass({ isActive }: { isActive: boolean }) {
+  return cn(NAV_LINK, isActive ? 'bg-accent-soft font-semibold text-accent' : 'text-fg-muted hover:text-fg')
+}
 
-  // активный домен раскрывается автоматически
-  useEffect(() => {
-    if (activeDomain) {
-      setOpenDomains((prev) => {
-        if (prev.has(activeDomain)) return prev
-        const next = new Set(prev)
-        next.add(activeDomain)
-        return next
-      })
-    }
-  }, [activeDomain])
-
-  const groups = useMemo(() => {
-    const map = new Map<string, SkillInfo[]>()
-    for (const s of skills) {
-      const key = s.domain || '—'
-      if (!map.has(key)) map.set(key, [])
-      map.get(key)!.push(s)
-    }
-    return [...map.entries()].sort(([a], [b]) => a.localeCompare(b))
-  }, [skills])
-
-  const openDomain = (domain: string) => {
-    setOpenDomains((prev) => {
-      if (prev.has(domain)) return prev
-      const next = new Set(prev)
-      next.add(domain)
-      return next
-    })
-    navigate(`/skills/${domain}`)
-  }
-
-  if (skills.length === 0) return null
-
+function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
+  const { user, isAdmin } = useAuth()
   return (
-    <aside className="sidebar">
-      <div className="sidebar-heading">Скиллы</div>
-      {groups.map(([domain, items]) => {
-        const open = openDomains.has(domain)
-        const isActiveDomain = activeDomain === domain
-        return (
-          <div key={domain} className="sidebar-group">
-            <button
-              type="button"
-              className={isActiveDomain ? 'sidebar-domain open active' : open ? 'sidebar-domain open' : 'sidebar-domain'}
-              onClick={() => openDomain(domain)}
-            >
-              <span className="sidebar-chevron">{open ? '▾' : '▸'}</span>
-              {domainLabel(domain)}
-            </button>
-            {open && (
-              <div className="sidebar-skills">
-                {items.map((s) => (
-                  <NavLink
-                    key={s.name}
-                    to={`/skills/${s.name}`}
-                    className={({ isActive }) => (isActive || activePath === s.name ? 'sidebar-skill active' : 'sidebar-skill')}
-                  >
-                    {s.name.split('/')[1] ?? s.name}
-                  </NavLink>
-                ))}
-              </div>
-            )}
-          </div>
-        )
-      })}
-    </aside>
+    <>
+      <NavLink to="/reports" className={navLinkClass} onClick={onNavigate}>
+        Отчёты
+      </NavLink>
+      <NavLink to="/builder" className={navLinkClass} onClick={onNavigate}>
+        Конструктор
+      </NavLink>
+      <NavLink to="/datasets" className={navLinkClass} onClick={onNavigate}>
+        Датасеты
+      </NavLink>
+      {isAdmin && (
+        <NavLink to="/model" className={navLinkClass} onClick={onNavigate}>
+          Модель данных
+        </NavLink>
+      )}
+      {user && (
+        <NavLink to="/account" className={navLinkClass} onClick={onNavigate}>
+          Кабинет
+        </NavLink>
+      )}
+      {isAdmin && (
+        <NavLink to="/admin" className={navLinkClass} onClick={onNavigate}>
+          Админ
+        </NavLink>
+      )}
+    </>
   )
 }
 
-function Navbar() {
-  const { user, isAdmin, logout } = useAuth()
+function Navbar({ menuOpen, onToggleMenu }: { menuOpen: boolean; onToggleMenu: () => void }) {
+  const { user, logout } = useAuth()
   const navigate = useNavigate()
 
   return (
-    <nav className="topnav">
-      <div className="topnav-inner">
-        <NavLink to="/reports" className="brand">
+    <header className="sticky top-0 z-30 border-b border-line bg-surface">
+      <div className="flex h-14 items-center gap-3 px-4 sm:px-6">
+        <button
+          type="button"
+          className="cursor-pointer rounded-control px-2 py-1 text-lg text-fg-muted hover:bg-surface-sunken hover:text-fg md:hidden"
+          aria-expanded={menuOpen}
+          aria-label={menuOpen ? 'Закрыть меню' : 'Открыть меню'}
+          onClick={onToggleMenu}
+        >
+          <span aria-hidden="true">{menuOpen ? '✕' : '☰'}</span>
+        </button>
+
+        <NavLink to="/reports" className="mr-2 text-[17px] font-bold tracking-tight text-fg">
           AI Reporter
         </NavLink>
-        <NavLink to="/reports" className={({ isActive }) => (isActive ? 'nav-link active' : 'nav-link')}>
-          Отчёты
-        </NavLink>
-        <NavLink to="/builder" className={({ isActive }) => (isActive ? 'nav-link active' : 'nav-link')}>
-          Конструктор
-        </NavLink>
-        <NavLink to="/datasets" className={({ isActive }) => (isActive ? 'nav-link active' : 'nav-link')}>
-          Датасеты
-        </NavLink>
-        {isAdmin && (
-          <NavLink to="/model" className={({ isActive }) => (isActive ? 'nav-link active' : 'nav-link')}>
-            Модель данных
-          </NavLink>
-        )}
-        {user && (
-          <NavLink to="/account" className={({ isActive }) => (isActive ? 'nav-link active' : 'nav-link')}>
-            Кабинет
-          </NavLink>
-        )}
-        {isAdmin && (
-          <NavLink to="/admin" className={({ isActive }) => (isActive ? 'nav-link active' : 'nav-link')}>
-            Админ
-          </NavLink>
-        )}
-        <span className="nav-spacer" />
+
+        <nav aria-label="Основная навигация" className="hidden items-center gap-1 md:flex">
+          <NavLinks />
+        </nav>
+
+        <span className="flex-1" />
+
+        <ThemeToggle />
+
         {user ? (
-          <span className="nav-user">
-            <span className="nav-username">{user.username}</span>
-            <button
-              className="btn btn-ghost"
+          <span className="flex items-center gap-2.5">
+            <span className="hidden text-sm font-semibold text-fg-muted sm:inline">{user.username}</span>
+            <Button
+              variant="ghost"
               onClick={async () => {
                 await logout()
                 navigate('/login')
               }}
             >
               Выйти
-            </button>
+            </Button>
           </span>
         ) : (
-          <NavLink to="/login" className="nav-link">
+          <NavLink to="/login" className={navLinkClass}>
             Войти
           </NavLink>
         )}
       </div>
-    </nav>
+
+      {menuOpen && (
+        <div className="border-t border-line px-4 py-3 md:hidden">
+          <nav aria-label="Основная навигация" className="flex flex-col gap-1">
+            <NavLinks onNavigate={onToggleMenu} />
+          </nav>
+          {user && <Sidebar className="mt-4 border-t border-line pt-3" onNavigate={onToggleMenu} />}
+        </div>
+      )}
+    </header>
   )
 }
 
@@ -173,21 +126,27 @@ function SkillRoute() {
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { user, loading } = useAuth()
-  if (loading) return <main className="page"><p className="muted">Загрузка…</p></main>
+  if (loading)
+    return (
+      <Page>
+        <SkeletonCards count={3} />
+      </Page>
+    )
   if (!user) return <Navigate to="/login" replace />
   return <>{children}</>
 }
 
 function Layout() {
   const { user } = useAuth()
+  const [menuOpen, setMenuOpen] = useState(false)
   const showSidebar = Boolean(user)
 
   return (
-    <div className="shell">
-      <Navbar />
-      <div className="shell-body">
-        {showSidebar && <SkillTree />}
-        <div className="shell-main">
+    <div className="flex min-h-screen flex-col bg-bg text-fg">
+      <Navbar menuOpen={menuOpen} onToggleMenu={() => setMenuOpen((v) => !v)} />
+      <div className="flex flex-1 items-stretch">
+        {showSidebar && <SidebarPanel />}
+        <div className="min-w-0 flex-1">
           <Routes>
             <Route path="/login" element={<LoginPage />} />
             <Route
@@ -282,7 +241,9 @@ function App() {
   return (
     <AuthProvider>
       <BrowserRouter>
-        <Layout />
+        <ReportsProvider>
+          <Layout />
+        </ReportsProvider>
       </BrowserRouter>
     </AuthProvider>
   )

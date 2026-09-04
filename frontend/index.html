@@ -5,6 +5,22 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AI Reporter</title>
+    <script>
+      // Тема ставится до первой отрисовки — иначе тёмный интерфейс мигает светлым.
+      // Дальше классом управляет ThemeProvider (src/lib/theme.tsx).
+      ;(function () {
+        try {
+          var choice = localStorage.getItem('ai-reporter-theme') || 'system'
+          var dark =
+            choice === 'dark' ||
+            (choice === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+          document.documentElement.classList.toggle('dark', dark)
+          document.documentElement.style.colorScheme = dark ? 'dark' : 'light'
+        } catch (e) {
+          /* приватный режим без localStorage — остаёмся на светлой */
+        }
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>

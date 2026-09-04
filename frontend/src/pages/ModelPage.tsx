@@ -22,6 +22,21 @@ import {
   testMetric,
 } from '../lib/api'
 import { useAuth } from '../lib/auth'
+import { cn } from '../lib/cn'
+import {
+  Alert,
+  Badge,
+  Button,
+  EmptyState,
+  Field,
+  Input,
+  Page,
+  PageHeader,
+  Select,
+  SkeletonRows,
+  Textarea,
+  useConfirm,
+} from '../components/ui'
 
 const FORMATS: { value: MetricFormat; label: string }[] = [
   { value: 'number', label: 'число' },
@@ -98,33 +113,37 @@ export function ModelPage() {
 
   // страница целиком закрыта: выражение метрики — это SQL, то есть граница
   // доверия системы. Читать словарь без прав можно в конструкторе.
+  const { confirm, dialog } = useConfirm()
+
   if (!isAdmin) {
     return (
-      <main className="page">
-        <p className="muted">Раздел доступен только администраторам.</p>
-      </main>
+      <Page>
+        <EmptyState title="Раздел доступен только администраторам" />
+      </Page>
     )
   }
 
-  if (loading) return <main className="page">Загрузка модели данных…</main>
+  if (loading)
+    return (
+      <Page>
+        <PageHeader title="Модель данных" />
+        <SkeletonRows count={4} />
+      </Page>
+    )
 
   return (
-    <main className="page model">
-      <header className="page-header">
-        <h1>Модель данных</h1>
-        <p className="muted">
-          Показатели и разрезы живут внутри датасета — в конструкторе датасет не выбирают,
-          он приезжает вместе с показателем. Чтобы соединить показатели из разных датасетов
-          в одной секции, между этими датасетами нужна связь.
-        </p>
-      </header>
+    <Page>
+      <PageHeader
+        title="Модель данных"
+        subtitle="Показатели и разрезы живут внутри датасета — в конструкторе датасет не выбирают, он приезжает вместе с показателем. Чтобы соединить показатели из разных датасетов в одной секции, между этими датасетами нужна связь."
+      />
 
-      {error && <p className="form-error">{error}</p>}
+      {error && <Alert className="mb-4">{error}</Alert>}
 
-      <section className="model-block">
-        <h2>Датасеты и их словарь</h2>
+      <section className="mb-7 flex flex-col gap-3">
+        <h2 className="text-base font-semibold">Датасеты и их словарь</h2>
         {datasets.length === 0 && (
-          <p className="muted">Датасетов пока нет — заведите их на странице «Датасеты».</p>
+          <p className="text-fg-muted">Датасетов пока нет — заведите их на странице «Датасеты».</p>
         )}
         {datasets.map((dataset) => (
           <DatasetCard
@@ -138,51 +157,57 @@ export function ModelPage() {
         ))}
       </section>
 
-      <section className="model-block">
-        <h2>Связи между датасетами</h2>
-        <p className="muted">
+      <section className="mb-7 flex flex-col gap-3">
+        <h2 className="text-base font-semibold">Связи между датасетами</h2>
+        <p className="text-fg-muted">
           Связь — это правило соединения: по какому полю слева и справа строки считаются
           одной и той же сущностью. Конструктор применяет её сам, когда в секцию попадают
           показатели из разных датасетов.
         </p>
         {links.length === 0 ? (
-          <p className="muted">
+          <p className="text-fg-muted">
             Связей нет: показатели из разных датасетов пока нельзя показать в одной секции.
           </p>
         ) : (
-          <ul className="model-links">
+          <ul className="flex flex-col gap-2">
             {links.map((link) => (
-              <li key={link.id}>
-                <span className="model-link-body">
+              <li key={link.id} className="flex items-center gap-2.5 rounded-control border border-line px-3 py-2">
+                <span className="flex flex-wrap items-center gap-2 text-sm">
                   <strong>{titleOf(link.leftSlug)}</strong>
                   <code>{link.leftField}</code>
-                  <span className="model-join" title={link.kind === 'left' ? 'LEFT JOIN' : 'INNER JOIN'}>⋈</span>
+                  <span className="text-base text-accent" title={link.kind === 'left' ? 'LEFT JOIN' : 'INNER JOIN'}>⋈</span>
                   <code>{link.rightField}</code>
                   <strong>{titleOf(link.rightSlug)}</strong>
-                  {link.title && <span className="muted">· {link.title}</span>}
+                  {link.title && <span className="text-fg-muted">· {link.title}</span>}
                 </span>
-                <button
-                  className="btn btn-ghost"
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="ml-auto"
                   disabled={busy}
-                  onClick={() => {
-                    if (window.confirm('Удалить связь? Отчёты, соединяющие эти датасеты, перестанут собираться.'))
-                      run(() => deleteLink(link.id))
-                  }}
+                  onClick={() =>
+                    confirm({
+                      title: 'Удалить связь?',
+                      description: `Связь ${titleOf(link.leftSlug)} ⋈ ${titleOf(link.rightSlug)} будет удалена. Отчёты, соединяющие эти датасеты, перестанут собираться.`,
+                      onConfirm: () => run(() => deleteLink(link.id)),
+                    })
+                  }
                 >
                   удалить
-                </button>
+                </Button>
               </li>
             ))}
           </ul>
         )}
         {datasets.length > 1 && (
-          <details className="model-create">
-            <summary className="btn btn-ghost">Добавить связь</summary>
+          <details className="mt-1.5">
+            <summary className="inline-flex w-fit cursor-pointer list-none items-center rounded-control border border-transparent px-3 py-1 text-sm text-fg-muted hover:bg-surface-sunken hover:text-fg [&::-webkit-details-marker]:hidden">Добавить связь</summary>
             <LinkForm datasets={datasets} busy={busy} onSubmit={(input) => run(() => createLink(input))} />
           </details>
         )}
       </section>
-    </main>
+      {dialog}
+    </Page>
   )
 }
 
@@ -200,53 +225,64 @@ function DatasetCard({
   run: (action: () => Promise<unknown>) => Promise<void>
 }) {
   const described = dataset.fields.filter((f) => f.comment).length
+  const { confirm, dialog } = useConfirm()
 
   return (
-    <article className="model-dataset">
-      <header className="model-dataset-head">
-        <h3>{dataset.title}</h3>
-        <code className="muted">{dataset.slug}</code>
-        <span className={dataset.status === 'ok' ? 'badge badge-good' : 'badge'}>{dataset.status}</span>
+    <article className="flex flex-col gap-2.5 rounded-card border border-line bg-surface p-3.5">
+      <header className="flex items-center gap-2.5">
+        <h3 className="text-[15px] font-semibold">{dataset.title}</h3>
+        <code className="text-fg-muted">{dataset.slug}</code>
+        <Badge tone={dataset.status === 'ok' ? 'good' : 'neutral'}>{dataset.status}</Badge>
       </header>
 
-      <details className="model-source">
-        <summary>
+      <details className="my-1">
+        <summary className="cursor-pointer py-0.5 text-xs text-fg-muted [&::-webkit-details-marker]:hidden">
           Колонки источника ({dataset.fields.length})
-          {described > 0 && <span className="muted"> · с описанием: {described}</span>}
+          {described > 0 && <span className="text-fg-muted"> · с описанием: {described}</span>}
         </summary>
         <ColumnsTable fields={dataset.fields} />
       </details>
 
-      <div className="model-columns">
+      <div className="grid gap-4 md:grid-cols-2">
         <div>
-          <span className="builder-label">Показатели</span>
-          {metrics.length === 0 && <p className="muted">пока нет</p>}
-          <ul className="model-items">
+          <span className="text-xs font-medium tracking-wide text-fg-muted uppercase">Показатели</span>
+          {metrics.length === 0 && <p className="text-fg-muted">пока нет</p>}
+          <ul className="my-1.5 flex flex-col gap-1.5">
             {metrics.map((m) => (
-              <li key={m.slug} className={m.status === 'error' ? 'model-item-bad' : undefined}>
-                <span className="model-item-name">{m.title}</span>
+              <li
+                key={m.slug}
+                className={cn(
+                  'flex flex-wrap items-baseline gap-2 border-b border-line pb-1.5 text-sm',
+                  m.status === 'error' && '[&_.font-semibold]:text-bad',
+                )}
+              >
+                <span className="font-semibold">{m.title}</span>
                 <code>{m.expression}</code>
-                {m.status === 'error' && <span className="model-item-error">{m.error}</span>}
-                <span className="model-item-actions">
-                  <button className="btn btn-ghost" disabled={busy} onClick={() => run(() => testMetric(m.slug))}>
+                {m.status === 'error' && <span className="basis-full text-xs text-bad">{m.error}</span>}
+                <span className="ml-auto flex gap-1">
+                  <Button variant="ghost" size="sm" disabled={busy} onClick={() => run(() => testMetric(m.slug))}>
                     проверить
-                  </button>
-                  <button
-                    className="btn btn-ghost"
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     disabled={busy}
-                    onClick={() => {
-                      if (window.confirm(`Удалить показатель «${m.title}»? Отчёты с ним перестанут собираться.`))
-                        run(() => deleteMetric(m.slug))
-                    }}
+                    onClick={() =>
+                      confirm({
+                        title: 'Удалить показатель?',
+                        description: `Показатель «${m.title}» будет удалён. Отчёты с ним перестанут собираться.`,
+                        onConfirm: () => run(() => deleteMetric(m.slug)),
+                      })
+                    }
                   >
                     удалить
-                  </button>
+                  </Button>
                 </span>
               </li>
             ))}
           </ul>
-          <details className="model-create">
-              <summary className="btn btn-ghost">Добавить показатель</summary>
+          <details className="mt-1.5">
+              <summary className="inline-flex w-fit cursor-pointer list-none items-center rounded-control border border-transparent px-3 py-1 text-sm text-fg-muted hover:bg-surface-sunken hover:text-fg [&::-webkit-details-marker]:hidden">Добавить показатель</summary>
               <MetricForm
                 datasetSlug={dataset.slug}
                 columns={dataset.fields}
@@ -257,30 +293,35 @@ function DatasetCard({
         </div>
 
         <div>
-          <span className="builder-label">Разрезы</span>
-          {dimensions.length === 0 && <p className="muted">пока нет</p>}
-          <ul className="model-items">
+          <span className="text-xs font-medium tracking-wide text-fg-muted uppercase">Разрезы</span>
+          {dimensions.length === 0 && <p className="text-fg-muted">пока нет</p>}
+          <ul className="my-1.5 flex flex-col gap-1.5">
             {dimensions.map((d) => (
-              <li key={d.slug}>
-                <span className="model-item-name">{d.title}</span>
+              <li key={d.slug} className="flex flex-wrap items-baseline gap-2 border-b border-line pb-1.5 text-sm">
+                <span className="font-semibold">{d.title}</span>
                 <code>{d.field}</code>
-                <span className="muted">{DIM_TYPES.find((t) => t.value === d.type)?.label}</span>
-                <span className="model-item-actions">
-                  <button
-                    className="btn btn-ghost"
+                <span className="text-fg-muted">{DIM_TYPES.find((t) => t.value === d.type)?.label}</span>
+                <span className="ml-auto flex gap-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     disabled={busy}
-                    onClick={() => {
-                      if (window.confirm(`Удалить разрез «${d.title}»?`)) run(() => deleteDimension(d.slug))
-                    }}
+                    onClick={() =>
+                      confirm({
+                        title: 'Удалить разрез?',
+                        description: `Разрез «${d.title}» будет удалён из словаря датасета.`,
+                        onConfirm: () => run(() => deleteDimension(d.slug)),
+                      })
+                    }
                   >
                     удалить
-                  </button>
+                  </Button>
                 </span>
               </li>
             ))}
           </ul>
-          <details className="model-create">
-              <summary className="btn btn-ghost">Добавить разрез</summary>
+          <details className="mt-1.5">
+              <summary className="inline-flex w-fit cursor-pointer list-none items-center rounded-control border border-transparent px-3 py-1 text-sm text-fg-muted hover:bg-surface-sunken hover:text-fg [&::-webkit-details-marker]:hidden">Добавить разрез</summary>
               <DimensionForm
                 datasetSlug={dataset.slug}
                 columns={dataset.fields}
@@ -290,6 +331,7 @@ function DatasetCard({
           </details>
         </div>
       </div>
+      {dialog}
     </article>
   )
 }
@@ -302,7 +344,7 @@ function DatasetCard({
 function ColumnsTable({ fields }: { fields: DatasetField[] }) {
   const anyComment = fields.some((f) => f.comment)
   return (
-    <div className="model-source-table">
+    <div className="mt-2 overflow-x-auto">
       <table>
         <thead>
           <tr>
@@ -315,14 +357,14 @@ function ColumnsTable({ fields }: { fields: DatasetField[] }) {
           {fields.map((f) => (
             <tr key={f.name}>
               <td><code>{f.name}</code></td>
-              <td className="muted">{f.type}</td>
-              <td>{f.comment || <span className="muted">—</span>}</td>
+              <td className="text-fg-muted">{f.type}</td>
+              <td>{f.comment || <span className="text-fg-muted">—</span>}</td>
             </tr>
           ))}
         </tbody>
       </table>
       {!anyComment && (
-        <p className="builder-hint">
+        <p className="text-xs text-fg-muted">
           У колонок нет комментариев в источнике. Описание берётся оттуда, так что
           добавить его можно только в самой базе — например
           <code> COMMENT ON COLUMN схема.таблица.колонка IS '…'</code> в PostgreSQL
@@ -359,7 +401,7 @@ function MetricForm({
 
   return (
     <form
-      className="model-form"
+      className="mt-2 flex flex-col gap-2.5 rounded-control border border-line p-3"
       onSubmit={(e) => {
         e.preventDefault()
         onSubmit({
@@ -374,51 +416,39 @@ function MetricForm({
         setExpression('')
       }}
     >
-      <label>
-        Название
-        <input
+      <Field label="Название">        <Input
           required
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           placeholder="Выручка без возвратов"
-        />
-      </label>
-      <label>
-        Код
-        <input
+        /></Field>
+      <Field label="Код">        <Input
           value={slug}
           onChange={(e) => setSlug(e.target.value)}
           placeholder={suggestSlug(title) || 'revenue_net'}
-        />
-      </label>
-      <label>
-        Расчёт (SQL-агрегат)
-        <textarea
+        /></Field>
+      <Field label="Расчёт (SQL-агрегат)">        <Textarea
           required
           rows={2}
-          className="model-sql"
+          className="font-mono text-sm"
           value={expression}
           onChange={(e) => setExpression(e.target.value)}
           placeholder="sum(revenue * (1 - is_return))"
-        />
-      </label>
-      <label>
-        Формат
-        <select value={format} onChange={(e) => setFormat(e.target.value as MetricFormat)}>
+        /></Field>
+      <Field label="Формат">        <Select value={format} onChange={(e) => setFormat(e.target.value as MetricFormat)}>
           {FORMATS.map((f) => (
             <option key={f.value} value={f.value}>{f.label}</option>
           ))}
-        </select>
-      </label>
-      <p className="builder-hint">
+        </Select></Field>
+      <p className="text-xs text-fg-muted">
         Расчёт — агрегат по колонкам датасета. Выражение сразу прогоняется по источнику:
         если оно не считается, показатель получит статус «error» и в отчёт не попадёт.
       </p>
-      <details className="model-source">
-        <summary>Какие колонки есть ({columns.length})</summary>
+      <details className="my-1">
+        <summary className="cursor-pointer py-0.5 text-xs text-fg-muted [&::-webkit-details-marker]:hidden">Какие колонки есть ({columns.length})</summary>
         <ColumnsTable fields={columns} />
       </details>
-      <button className="btn btn-primary" disabled={busy}>Создать и проверить</button>
+      <Button type="submit" variant="primary" disabled={busy}>Создать и проверить</Button>
     </form>
   )
 }
@@ -448,7 +478,7 @@ function DimensionForm({
 
   return (
     <form
-      className="model-form"
+      className="mt-2 flex flex-col gap-2.5 rounded-control border border-line p-3"
       onSubmit={(e) => {
         e.preventDefault()
         onSubmit({
@@ -462,40 +492,28 @@ function DimensionForm({
         setSlug('')
       }}
     >
-      <label>
-        Название
-        <input required value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Город" />
-      </label>
-      <label>
-        Код
-        <input value={slug} onChange={(e) => setSlug(e.target.value)} placeholder={suggestSlug(title) || 'region'} />
-      </label>
-      <label>
-        Поле
-        <select required value={field} onChange={(e) => setField(e.target.value)}>
+      <Field label="Название">        <Input required value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Город" /></Field>
+      <Field label="Код">        <Input value={slug} onChange={(e) => setSlug(e.target.value)} placeholder={suggestSlug(title) || 'region'} /></Field>
+      <Field label="Поле">        <Select required value={field} onChange={(e) => setField(e.target.value)}>
           {columns.length === 0 && <option value="">схема не прочитана</option>}
           {columns.map((f) => (
             <option key={f.name} value={f.name}>{f.name} · {f.type}</option>
           ))}
-        </select>
-      </label>
+        </Select></Field>
       {picked && (
-        <p className="builder-hint">
+        <p className="text-xs text-fg-muted">
           {picked.comment || 'у колонки нет описания в источнике'}
         </p>
       )}
-      <label>
-        Тип
-        <select value={type} onChange={(e) => setType(e.target.value as DimensionType)}>
+      <Field label="Тип">        <Select value={type} onChange={(e) => setType(e.target.value as DimensionType)}>
           {DIM_TYPES.map((t) => (
             <option key={t.value} value={t.value}>{t.label}</option>
           ))}
-        </select>
-      </label>
-      <p className="builder-hint">
+        </Select></Field>
+      <p className="text-xs text-fg-muted">
         Тип «дата» открывает в конструкторе шаг: день, неделя, месяц, квартал, год.
       </p>
-      <button className="btn btn-primary" disabled={busy || !field}>Добавить</button>
+      <Button type="submit" variant="primary" disabled={busy || !field}>Добавить</Button>
     </form>
   )
 }
@@ -528,7 +546,7 @@ function LinkForm({
 
   return (
     <form
-      className="model-form"
+      className="mt-2 flex flex-col gap-2.5 rounded-control border border-line p-3"
       onSubmit={(e) => {
         e.preventDefault()
         onSubmit({
@@ -540,53 +558,38 @@ function LinkForm({
         })
       }}
     >
-      <label>
-        Слева
-        <select value={leftSlug} onChange={(e) => { setLeftSlug(e.target.value); setLeftField('') }}>
+      <Field label="Слева">        <Select value={leftSlug} onChange={(e) => { setLeftSlug(e.target.value); setLeftField('') }}>
           {datasets.map((d) => (
             <option key={d.slug} value={d.slug}>{d.title}</option>
           ))}
-        </select>
-      </label>
-      <label>
-        Поле слева
-        <select value={leftField || leftFields[0] || ''} onChange={(e) => setLeftField(e.target.value)}>
+        </Select></Field>
+      <Field label="Поле слева">        <Select value={leftField || leftFields[0] || ''} onChange={(e) => setLeftField(e.target.value)}>
           {leftFields.map((f) => (
             <option key={f} value={f}>{f}</option>
           ))}
-        </select>
-      </label>
-      <label>
-        Справа
-        <select value={rightSlug} onChange={(e) => { setRightSlug(e.target.value); setRightField('') }}>
+        </Select></Field>
+      <Field label="Справа">        <Select value={rightSlug} onChange={(e) => { setRightSlug(e.target.value); setRightField('') }}>
           {datasets.map((d) => (
             <option key={d.slug} value={d.slug}>{d.title}</option>
           ))}
-        </select>
-      </label>
-      <label>
-        Поле справа
-        <select value={rightField || rightFields[0] || ''} onChange={(e) => setRightField(e.target.value)}>
+        </Select></Field>
+      <Field label="Поле справа">        <Select value={rightField || rightFields[0] || ''} onChange={(e) => setRightField(e.target.value)}>
           {rightFields.map((f) => (
             <option key={f} value={f}>{f}</option>
           ))}
-        </select>
-      </label>
-      <label>
-        Вид
-        <select value={kind} onChange={(e) => setKind(e.target.value as 'inner' | 'left')}>
+        </Select></Field>
+      <Field label="Вид">        <Select value={kind} onChange={(e) => setKind(e.target.value as 'inner' | 'left')}>
           <option value="inner">только совпавшие строки</option>
           <option value="left">все строки слева</option>
-        </select>
-      </label>
-      <p className="builder-hint">
+        </Select></Field>
+      <p className="text-xs text-fg-muted">
         Связь принимается, только если оба датасета живут на одном источнике: джойн
         выполняет сам источник. И если по ключу справа окажется несколько строк на одну
         строку слева, конструктор откажется строить такую секцию — суммы бы раздулись.
       </p>
-      <button className="btn btn-primary" disabled={busy || leftSlug === rightSlug}>
+      <Button type="submit" variant="primary" disabled={busy || leftSlug === rightSlug}>
         Создать связь
-      </button>
+      </Button>
     </form>
   )
 }

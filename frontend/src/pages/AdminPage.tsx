@@ -17,6 +17,20 @@ import {
 } from '../lib/api'
 import { useAuth } from '../lib/auth'
 import { DraftCard, useDraftReload } from '../components/SkillDraftViews'
+import {
+  Alert,
+  Button,
+  EmptyState,
+  Input,
+  Page,
+  PageHeader,
+  Select,
+  SkeletonRows,
+} from '../components/ui'
+
+const PANEL = 'rounded-card border border-line bg-surface p-5'
+const PANEL_TITLE = 'mb-3.5 text-base font-semibold'
+const ROW = 'flex items-center justify-between gap-3 text-sm'
 
 function SkillDraftsAdmin() {
   const { drafts, reload } = useDraftReload()
@@ -25,19 +39,19 @@ function SkillDraftsAdmin() {
   if (drafts !== null && drafts.length === 0) return null
 
   return (
-    <section className="admin-drafts">
-      <h2 className="skill-title">
-        Черновики скиллов{' '}
-        <button type="button" className="btn btn-ghost" onClick={reload}>
+    <section className="mb-7">
+      <h2 className="mb-2 flex items-center gap-3 text-lg font-semibold tracking-tight">
+        Черновики скиллов
+        <Button variant="ghost" size="sm" onClick={reload}>
           Обновить
-        </button>
+        </Button>
       </h2>
-      <p className="muted">
+      <p className="mb-3 text-sm text-fg-muted">
         Проверьте скилл по правилам (агент-ревьюер) и опубликуйте: появится файл скилла и отчёт с доступом для автора.
       </p>
-      {error && <p className="form-error">{error}</p>}
+      {error && <Alert className="mb-3">{error}</Alert>}
       {drafts === null ? (
-        <p className="muted">Загрузка…</p>
+        <SkeletonRows count={2} />
       ) : (
         drafts.map((d) => <DraftCard key={d.id} draft={d} isAdmin onChanged={reload} onFail={setError} />)
       )}
@@ -54,6 +68,7 @@ export function AdminPage() {
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null)
   const [access, setAccess] = useState<AccessEntry[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
 
   const reload = useCallback(async () => {
     try {
@@ -82,36 +97,29 @@ export function AdminPage() {
 
   if (!isAdmin) {
     return (
-      <main className="page">
-        <p className="muted">Раздел доступен только администраторам.</p>
-      </main>
+      <Page>
+        <EmptyState title="Раздел доступен только администраторам" />
+      </Page>
     )
   }
 
   const fail = (err: unknown) => setError(err instanceof Error ? err.message : 'ошибка')
 
   return (
-    <main className="page">
-      <header className="page-header">
-        <h1>Администрирование</h1>
-        <p className="muted">Пользователи, группы и назначение отчётов.</p>
-      </header>
-      {error && <div className="auth-error admin-error">{error}</div>}
+    <Page>
+      <PageHeader title="Администрирование" subtitle="Пользователи, группы и назначение отчётов." />
+      {error && <Alert className="mb-4">{error}</Alert>}
+      {notice && (
+        <Alert tone="success" className="mb-4">
+          {notice}
+        </Alert>
+      )}
 
       <SkillDraftsAdmin />
 
-      <div className="admin-grid">
-        <UsersPanel
-          users={users}
-          onChanged={reload}
-          onFail={fail}
-        />
-        <GroupsPanel
-          groups={groups}
-          users={users}
-          onChanged={reload}
-          onFail={fail}
-        />
+      <div className="mb-6 grid grid-cols-[repeat(auto-fit,minmax(340px,1fr))] gap-4">
+        <UsersPanel users={users} onChanged={reload} onFail={fail} onNotice={setNotice} />
+        <GroupsPanel groups={groups} users={users} onChanged={reload} onFail={fail} />
       </div>
 
       <AccessPanel
@@ -126,7 +134,7 @@ export function AdminPage() {
         }}
         onFail={fail}
       />
-    </main>
+    </Page>
   )
 }
 
@@ -134,10 +142,12 @@ function UsersPanel({
   users,
   onChanged,
   onFail,
+  onNotice,
 }: {
   users: User[]
   onChanged: () => Promise<void>
   onFail: (err: unknown) => void
+  onNotice: (msg: string) => void
 }) {
   const { user: me } = useAuth()
   const [username, setUsername] = useState('')
@@ -157,64 +167,72 @@ function UsersPanel({
   }
 
   return (
-    <section className="report-section">
-      <h3 className="section-title">Пользователи</h3>
-      <form className="inline-form" onSubmit={create}>
-        <input placeholder="логин" value={username} onChange={(e) => setUsername(e.target.value)} required />
-        <input
+    <section className={PANEL}>
+      <h2 className={PANEL_TITLE}>Пользователи</h2>
+      <form className="flex flex-wrap items-center gap-2" onSubmit={create}>
+        <Input
+          className="w-auto min-w-32 flex-1"
+          placeholder="логин"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          required
+        />
+        <Input
+          className="w-auto min-w-32 flex-1"
           placeholder="пароль"
           type="password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           required
+          autoComplete="new-password"
         />
-        <select value={role} onChange={(e) => setRole(e.target.value as 'admin' | 'user')}>
+        <Select className="w-auto" value={role} onChange={(e) => setRole(e.target.value as 'admin' | 'user')}>
           <option value="user">пользователь</option>
           <option value="admin">админ</option>
-        </select>
-        <button className="btn btn-primary" disabled={!username || !password}>
+        </Select>
+        <Button type="submit" variant="primary" disabled={!username || !password}>
           Добавить
-        </button>
+        </Button>
       </form>
-      <ul className="admin-list">
+      <ul className="mt-3 flex flex-col gap-2.5">
         {users.map((u) => (
-          <li key={u.id}>
-            <div className="admin-row">
-              <div>
-                <strong>{u.username}</strong>
-                <span className="muted"> · {u.role === 'admin' ? 'админ' : 'пользователь'}</span>
-              </div>
-              <div className="admin-actions">
-                <button
-                  className="btn btn-ghost"
-                  title="Сбросить пароль на user123"
+          <li key={u.id} className={ROW}>
+            <div>
+              <strong>{u.username}</strong>
+              <span className="text-fg-muted"> · {u.role === 'admin' ? 'админ' : 'пользователь'}</span>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                title="Сбросить пароль на user123"
+                onClick={async () => {
+                  try {
+                    await adminResetPassword(u.id, 'user123')
+                    onNotice(`Пароль ${u.username} сброшен на user123`)
+                  } catch (err) {
+                    onFail(err)
+                  }
+                }}
+              >
+                Сброс пароля
+              </Button>
+              {u.id !== me?.id && (
+                <Button
+                  variant="danger"
+                  size="sm"
                   onClick={async () => {
                     try {
-                      await adminResetPassword(u.id, 'user123')
-                      onFail(new Error(`Пароль ${u.username} сброшен на user123`))
+                      await adminDeleteUser(u.id)
+                      await onChanged()
                     } catch (err) {
                       onFail(err)
                     }
                   }}
                 >
-                  Сброс пароля
-                </button>
-                {u.id !== me?.id && (
-                  <button
-                    className="btn btn-danger"
-                    onClick={async () => {
-                      try {
-                        await adminDeleteUser(u.id)
-                        await onChanged()
-                      } catch (err) {
-                        onFail(err)
-                      }
-                    }}
-                  >
-                    Удалить
-                  </button>
-                )}
-              </div>
+                  Удалить
+                </Button>
+              )}
             </div>
           </li>
         ))}
@@ -248,42 +266,44 @@ function GroupsPanel({
   }
 
   return (
-    <section className="report-section">
-      <h3 className="section-title">Группы</h3>
-      <form className="inline-form" onSubmit={create}>
-        <input placeholder="название группы" value={name} onChange={(e) => setName(e.target.value)} required />
-        <button className="btn btn-primary" disabled={!name}>
+    <section className={PANEL}>
+      <h2 className={PANEL_TITLE}>Группы</h2>
+      <form className="flex flex-wrap items-center gap-2" onSubmit={create}>
+        <Input
+          className="w-auto min-w-40 flex-1"
+          placeholder="название группы"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          required
+        />
+        <Button type="submit" variant="primary" disabled={!name}>
           Создать
-        </button>
+        </Button>
       </form>
-      {groups.length === 0 && <p className="muted">Групп пока нет.</p>}
-      <ul className="admin-list">
+      {groups.length === 0 && <p className="mt-3 text-sm text-fg-muted">Групп пока нет.</p>}
+      <ul className="mt-3 flex flex-col gap-2.5">
         {groups.map((g) => (
-          <li key={g.id}>
-            <div className="admin-row">
-              <div>
-                <strong>{g.name}</strong>
-                <span className="muted">
-                  {' '}
-                  · участники: {g.members.map((m) => m.username).join(', ') || '—'}
-                </span>
-              </div>
-              <div className="admin-actions">
-                <GroupMemberSelect group={g} users={users} onChanged={onChanged} onFail={onFail} />
-                <button
-                  className="btn btn-danger"
-                  onClick={async () => {
-                    try {
-                      await adminDeleteGroup(g.id)
-                      await onChanged()
-                    } catch (err) {
-                      onFail(err)
-                    }
-                  }}
-                >
-                  Удалить
-                </button>
-              </div>
+          <li key={g.id} className={ROW}>
+            <div>
+              <strong>{g.name}</strong>
+              <span className="text-fg-muted"> · участники: {g.members.map((m) => m.username).join(', ') || '—'}</span>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <GroupMemberSelect group={g} users={users} onChanged={onChanged} onFail={onFail} />
+              <Button
+                variant="danger"
+                size="sm"
+                onClick={async () => {
+                  try {
+                    await adminDeleteGroup(g.id)
+                    await onChanged()
+                  } catch (err) {
+                    onFail(err)
+                  }
+                }}
+              >
+                Удалить
+              </Button>
             </div>
           </li>
         ))}
@@ -307,7 +327,9 @@ function GroupMemberSelect({
   const candidates = users.filter((u) => !memberIds.has(u.id))
   const [selected, setSelected] = useState('')
   return (
-    <select
+    <Select
+      className="w-auto py-1 text-xs"
+      aria-label={`Добавить участника в группу ${group.name}`}
       value={selected}
       disabled={candidates.length === 0}
       onChange={async (e) => {
@@ -328,7 +350,7 @@ function GroupMemberSelect({
           {u.username}
         </option>
       ))}
-    </select>
+    </Select>
   )
 }
 
@@ -354,10 +376,12 @@ function AccessPanel({
   const [target, setTarget] = useState('')
 
   return (
-    <section className="report-section access-panel">
-      <h3 className="section-title">Назначение отчётов</h3>
-      <div className="inline-form">
-        <select
+    <section className={PANEL}>
+      <h2 className={PANEL_TITLE}>Назначение отчётов</h2>
+      <div className="flex flex-wrap items-center gap-2">
+        <Select
+          className="w-auto max-w-80"
+          aria-label="Отчёт"
           value={selectedSlug ?? ''}
           onChange={(e) => onSelect(e.target.value || null)}
         >
@@ -367,9 +391,14 @@ function AccessPanel({
               {r.title}
             </option>
           ))}
-        </select>
+        </Select>
         {selectedSlug && (
-          <select value={target} onChange={(e) => setTarget(e.target.value)}>
+          <Select
+            className="w-auto max-w-80"
+            aria-label="Кому дать доступ"
+            value={target}
+            onChange={(e) => setTarget(e.target.value)}
+          >
             <option value="">— кому дать доступ —</option>
             <optgroup label="Пользователи">
               {users.map((u) => (
@@ -385,10 +414,10 @@ function AccessPanel({
                 </option>
               ))}
             </optgroup>
-          </select>
+          </Select>
         )}
-        <button
-          className="btn btn-primary"
+        <Button
+          variant="primary"
           disabled={!selectedSlug || !target}
           onClick={async () => {
             const [kind, id] = target.split(':')
@@ -402,30 +431,23 @@ function AccessPanel({
           }}
         >
           Назначить
-        </button>
+        </Button>
       </div>
 
-      {selectedSlug && (
-        <ul className="admin-list">
-          {access.length === 0 && <p className="muted">Доступ пока никому не назначен.</p>}
-          {access.map((a, i) => (
-            <li key={i}>
-              <div className="admin-row">
+      {selectedSlug &&
+        (access.length === 0 ? (
+          <p className="mt-3 text-sm text-fg-muted">Доступ пока никому не назначен.</p>
+        ) : (
+          <ul className="mt-3 flex flex-col gap-2.5">
+            {access.map((a, i) => (
+              <li key={i} className={ROW}>
                 <div>
-                  {a.username ? (
-                    <>
-                      <strong>{a.username}</strong>
-                      <span className="muted"> · пользователь</span>
-                    </>
-                  ) : (
-                    <>
-                      <strong>{a.groupName}</strong>
-                      <span className="muted"> · группа</span>
-                    </>
-                  )}
+                  <strong>{a.username ?? a.groupName}</strong>
+                  <span className="text-fg-muted"> · {a.username ? 'пользователь' : 'группа'}</span>
                 </div>
-                <button
-                  className="btn btn-danger"
+                <Button
+                  variant="danger"
+                  size="sm"
                   onClick={async () => {
                     try {
                       await adminRevokeAccess(selectedSlug, a.userId, a.groupId)
@@ -436,12 +458,11 @@ function AccessPanel({
                   }}
                 >
                   Отозвать
-                </button>
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
+                </Button>
+              </li>
+            ))}
+          </ul>
+        ))}
     </section>
   )
 }

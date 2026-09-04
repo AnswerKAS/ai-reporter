@@ -63,6 +63,8 @@ export interface TableSection {
   columns: TableColumn[]
   rows: Record<string, unknown>[]
   filterNote?: string
+  /** Выдача обрезана потолком строк — читатель должен знать, что видит часть. */
+  rowsNote?: string
 }
 
 export type ReportSection =

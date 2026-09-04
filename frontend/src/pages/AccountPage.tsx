@@ -3,6 +3,9 @@ import { Link } from 'react-router-dom'
 import type { ReportMeta } from '../types/report'
 import { changePassword, fetchReports } from '../lib/api'
 import { useAuth } from '../lib/auth'
+import { Alert, Button, Input, Page, PageHeader } from '../components/ui'
+
+const PANEL = 'rounded-card border border-line bg-surface p-5'
 
 export function AccountPage() {
   const { user, isAdmin } = useAuth()
@@ -31,55 +34,67 @@ export function AccountPage() {
   }
 
   return (
-    <main className="page">
-      <header className="page-header">
-        <h1>Личный кабинет</h1>
-        <p className="muted">
-          {user?.username} · {user?.role === 'admin' ? 'администратор' : 'пользователь'}
-        </p>
-      </header>
+    <Page>
+      <PageHeader
+        title="Личный кабинет"
+        subtitle={`${user?.username} · ${user?.role === 'admin' ? 'администратор' : 'пользователь'}`}
+      />
 
-      <div className="account-grid">
-        <section className="report-section">
-          <h3 className="section-title">Мои отчёты ({reports.length})</h3>
-          {reports.length === 0 && <p className="muted">Отчёты не назначены.</p>}
-          <ul className="account-list">
-            {reports.map((r) => (
-              <li key={r.slug}>
-                <Link to={`/reports/${r.slug}`}>{r.title}</Link>
-                <span className="muted">
-                  {r.skill} · {r.status === 'ready' ? r.updatedAt : r.status}
-                </span>
-              </li>
-            ))}
-          </ul>
+      <div className="mb-6 grid grid-cols-[repeat(auto-fit,minmax(340px,1fr))] gap-4">
+        <section className={PANEL}>
+          <h2 className="mb-3.5 text-base font-semibold">Мои отчёты ({reports.length})</h2>
+          {reports.length === 0 ? (
+            <p className="text-sm text-fg-muted">Отчёты не назначены.</p>
+          ) : (
+            <ul className="flex flex-col gap-2.5">
+              {reports.map((r) => (
+                <li key={r.slug} className="flex flex-col gap-0.5 text-sm">
+                  <Link to={`/reports/${r.slug}`} className="font-semibold text-accent hover:underline">
+                    {r.title}
+                  </Link>
+                  <span className="text-xs text-fg-muted">
+                    {r.skill} · {r.status === 'ready' ? r.updatedAt : r.status}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
         </section>
 
-        <section className="report-section">
-          <h3 className="section-title">Смена пароля</h3>
-          <form className="inline-form" onSubmit={onSubmit}>
-            <input
+        <section className={PANEL}>
+          <h2 className="mb-3.5 text-base font-semibold">Смена пароля</h2>
+          <form className="flex flex-wrap items-center gap-2" onSubmit={onSubmit}>
+            <Input
+              className="w-auto min-w-40 flex-1"
               type="password"
               placeholder="Новый пароль"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               minLength={4}
               required
+              autoComplete="new-password"
             />
-            <button className="btn btn-primary" disabled={password.length < 4}>
+            <Button type="submit" variant="primary" disabled={password.length < 4}>
               Сменить
-            </button>
+            </Button>
           </form>
-          {msg && <div className="form-ok">{msg}</div>}
-          {err && <div className="auth-error">{err}</div>}
+          {msg && (
+            <Alert tone="success" className="mt-2">
+              {msg}
+            </Alert>
+          )}
+          {err && <Alert className="mt-2">{err}</Alert>}
           {isAdmin && (
-            <p className="muted account-hint">
+            <p className="mt-3.5 text-sm text-fg-muted">
               Управление пользователями и назначение отчётов — в разделе{' '}
-              <Link to="/admin">«Администрирование»</Link>.
+              <Link to="/admin" className="text-accent hover:underline">
+                «Администрирование»
+              </Link>
+              .
             </p>
           )}
         </section>
       </div>
-    </main>
+    </Page>
   )
 }

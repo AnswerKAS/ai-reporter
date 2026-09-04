@@ -1,0 +1,7 @@
+/* Точка входа стилей приложения.
+
+   Порядок слоёв: theme (токены Tailwind) → base (preflight и наши базовые
+   правила) → components → utilities. Утилиты идут последними, поэтому
+   перебивают базовый слой, а не наоборот. */
+@import 'tailwindcss';
+@import './theme.css';

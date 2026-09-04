@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
+import { Alert, Button, Field, Input } from '../components/ui'
 
 export function LoginPage() {
   const { login } = useAuth()
@@ -25,32 +26,28 @@ export function LoginPage() {
   }
 
   return (
-    <main className="auth-page">
-      <form className="auth-card" onSubmit={onSubmit}>
-        <h1>AI Reporter</h1>
-        <p className="muted">Войдите, чтобы видеть отчёты</p>
-        <label className="field">
-          <span>Логин</span>
-          <input
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            autoFocus
-            autoComplete="username"
-          />
-        </label>
-        <label className="field">
-          <span>Пароль</span>
-          <input
+    <main className="flex min-h-[calc(100svh-3.5rem)] items-center justify-center p-6">
+      <form
+        className="flex w-90 max-w-full flex-col gap-3.5 rounded-card border border-line bg-surface p-8 shadow-pop"
+        onSubmit={onSubmit}
+      >
+        <h1 className="text-2xl font-bold tracking-tight">AI Reporter</h1>
+        <p className="text-sm text-fg-muted">Войдите, чтобы видеть отчёты</p>
+        <Field label="Логин">
+          <Input value={username} onChange={(e) => setUsername(e.target.value)} autoFocus autoComplete="username" />
+        </Field>
+        <Field label="Пароль">
+          <Input
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             autoComplete="current-password"
           />
-        </label>
-        {error && <div className="auth-error">{error}</div>}
-        <button className="btn btn-primary" disabled={busy || !username || !password}>
+        </Field>
+        {error && <Alert>{error}</Alert>}
+        <Button type="submit" variant="primary" disabled={busy || !username || !password}>
           {busy ? 'Вход…' : 'Войти'}
-        </button>
+        </Button>
       </form>
     </main>
   )

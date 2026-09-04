@@ -13,6 +13,12 @@ from ..datasets.base import DatasetError
 from ..query import builder
 from ..schemas.definition import ReportDefinition, SectionDefinition
 
+# Потолок строк одной секции. Разрез с высокой кардинальностью (SKU, клиент,
+# номер заказа) даёт сотни тысяч групп: источник считает их за секунду, а
+# дальше отчёт весит десятки мегабайт и рисуется в браузере минутами. Автор
+# отчёта задаёт свой предел через `limit`; этот — на случай, когда не задал.
+MAX_SECTION_ROWS = 50_000
+
 
 def _cell(value):
     """Значение из источника → JSON-совместимое."""
@@ -43,7 +49,8 @@ def _section_query(section: SectionDefinition, filter_values: dict,
         grain=section.grain,
         order_by=section.order_by,
         order_dir=section.order_dir,
-        limit=section.limit,
+        # на одну строку больше потолка: по ней и видно, что выдача обрезана
+        limit=section.limit or (MAX_SECTION_ROWS + 1 if section.by else None),
         filters=filter_values,
         catalog=catalog,
         computed=computed,
@@ -109,6 +116,9 @@ def build_section(section: SectionDefinition, filter_values: dict,
     data = _rows_as_dicts(query, cols, rows)
     metrics = query_obj.metric_defs
     dimensions = query_obj.dimension_defs
+    truncated = section.limit is None and len(data) > MAX_SECTION_ROWS
+    if truncated:
+        data = data[:MAX_SECTION_ROWS]
     if section.type == 'kpi':
         built = _kpi_section(section, metrics, data)
     elif section.type == 'chart':
@@ -120,6 +130,12 @@ def build_section(section: SectionDefinition, filter_values: dict,
     skipped = getattr(query_obj, 'unapplied_filters', None)
     if skipped:
         built['filterNote'] = 'Фильтры не применены: ' + '; '.join(skipped)
+    # обрезанная выдача без пометки — это молча неполные итоги под таблицей
+    if truncated:
+        built['rowsNote'] = (
+            f'Показаны первые {MAX_SECTION_ROWS:,} строк — в этом разрезе их больше. '
+            'Возьмите разрез покрупнее или задайте своё ограничение.'
+        ).replace(',', ' ')
     return built
 
 

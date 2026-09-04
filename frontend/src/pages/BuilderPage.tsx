@@ -30,7 +30,10 @@ import {
 } from '../lib/api'
 import { SectionRenderer } from '../components/SectionRenderer'
 import { ReportFilters } from '../components/ReportFilters'
+import { Alert, Button, Field, Input, Modal, Page, PageHeader, Select, SkeletonRows, Textarea } from '../components/ui'
+import { cn } from '../lib/cn'
 import { useAuth } from '../lib/auth'
+import { useReports } from '../lib/reports'
 
 const GRAINS: { value: Grain; label: string }[] = [
   { value: 'day', label: 'по дням' },
@@ -101,10 +104,79 @@ function emptySection(type: SectionDefinition['type'] = 'kpi'): SectionDefinitio
 }
 
 /** Конструктор отчёта: сначала данные, потом раскладка. Кода нет ни там, ни там. */
+/** Чип поля: одинаково выглядит в словаре, в палитре и среди своих полей. */
+const CHIP =
+  'inline-flex cursor-pointer items-center rounded-full border border-line px-3 py-1 text-sm transition-colors hover:border-accent disabled:cursor-not-allowed disabled:opacity-40'
+const CHIP_ON = 'border-accent bg-accent text-accent-fg'
+
+/** Своё поле или формула: всегда включено (иначе его бы не было), поэтому
+    залито акцентом; крестик убирает его — в отличие от словарного чипа,
+    который просто снимается повторным кликом. */
+function OwnChip({
+  title,
+  hint,
+  dashed,
+  onRemove,
+}: {
+  title: string
+  hint: string
+  dashed?: boolean
+  onRemove: () => void
+}) {
+  return (
+    <span className={cn(CHIP, CHIP_ON, 'cursor-default gap-1 pr-1.5', dashed && 'border-dashed')} title={hint}>
+      {title}
+      <button
+        type="button"
+        aria-label={`Убрать своё поле «${title}»`}
+        title="убрать"
+        className="cursor-pointer rounded-full px-1 text-sm leading-none opacity-70 transition-opacity hover:opacity-100"
+        onClick={onRemove}
+      >
+        <span aria-hidden="true">×</span>
+      </button>
+    </span>
+  )
+}
+
+/** Шаг конструктора: состояние читается и глазами, и скринридером. */
+function StepLink({
+  n,
+  label,
+  current,
+  done,
+  disabled,
+  onClick,
+}: {
+  n: number
+  label: string
+  current: boolean
+  done?: boolean
+  disabled?: boolean
+  onClick: () => void
+}) {
+  return (
+    <li aria-current={current ? 'step' : undefined}>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={onClick}
+        className={cn(
+          'cursor-pointer rounded-control px-1.5 py-0.5 text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+          current ? 'font-semibold text-fg' : done ? 'text-accent hover:underline' : 'text-fg-muted hover:text-fg',
+        )}
+      >
+        {n}. {label}
+      </button>
+    </li>
+  )
+}
+
 export function BuilderPage() {
   const { slug } = useParams<{ slug: string }>()
   const navigate = useNavigate()
   const { isAdmin } = useAuth()
+  const { reload: reloadReports } = useReports()
   const editing = Boolean(slug)
 
   // --- словарь ---
@@ -543,6 +615,7 @@ export function BuilderPage() {
           description: description.trim() || undefined,
         })
         await saveDefinition(slug, definition)
+        await reloadReports()
         navigate(`/reports/${slug}`)
       } else {
         const report = await createBuilderReport({
@@ -551,6 +624,7 @@ export function BuilderPage() {
           description: description.trim() || undefined,
           definition,
         })
+        await reloadReports()
         navigate(`/reports/${report.slug}`)
       }
     } catch (err) {
@@ -560,35 +634,40 @@ export function BuilderPage() {
     }
   }
 
-  if (loading) return <main className="page">Загрузка словаря…</main>
+  if (loading)
+    return (
+      <Page>
+        <PageHeader title="Конструктор отчёта" />
+        <SkeletonRows count={5} />
+      </Page>
+    )
 
   return (
-    <main className="page builder">
-      <div className="builder-head">
+    <Page>
+      <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1>{editing ? 'Правка отчёта' : 'Конструктор отчёта'}</h1>
-          <ol className="builder-steps">
-            <li className={step === 1 ? 'is-current' : 'is-done'}>
-              <button type="button" onClick={() => setStep(1)}>1. Данные</button>
+          <h1 className="text-3xl font-bold tracking-tight">{editing ? 'Правка отчёта' : 'Конструктор отчёта'}</h1>
+          <ol className="mt-2 flex list-none items-center gap-1.5 p-0">
+            <StepLink n={1} label="Данные" current={step === 1} done={step > 1} onClick={() => setStep(1)} />
+            <li aria-hidden="true" className="text-fg-muted">
+              →
             </li>
-            <li className={step === 2 ? 'is-current' : undefined}>
-              <button
-                type="button"
-                disabled={pickedMetrics.length === 0 && ownMetrics.length === 0}
-                onClick={() => setStep(2)}
-              >
-                2. Раскладка
-              </button>
-            </li>
+            <StepLink
+              n={2}
+              label="Раскладка"
+              current={step === 2}
+              disabled={pickedMetrics.length === 0 && ownMetrics.length === 0}
+              onClick={() => setStep(2)}
+            />
           </ol>
         </div>
         {step === 2 && (
-          <button className="btn btn-primary" onClick={onSave} disabled={busy}>
+          <Button variant="primary" onClick={onSave} disabled={busy}>
             {busy ? 'Сохранение…' : editing ? 'Сохранить изменения' : 'Сохранить отчёт'}
-          </button>
+          </Button>
         )}
       </div>
-      {saveError && <div className="builder-error">{saveError}</div>}
+      {saveError && <Alert className="my-3">{saveError}</Alert>}
 
       {step === 1 ? (
         <StepData
@@ -610,19 +689,19 @@ export function BuilderPage() {
         />
       ) : (
         <>
-          <section className="builder-phrase">
-            <span className="builder-label">Или опишите отчёт словами</span>
-            <textarea
+          <section className="mt-3 flex flex-col gap-2 rounded-card border border-line bg-surface p-3.5">
+            <span className="text-xs font-medium tracking-wide text-fg-muted uppercase">Или опишите отчёт словами</span>
+            <Textarea
               value={phrase}
               onChange={(e) => setPhrase(e.target.value)}
               rows={3}
               placeholder={'итого выручка и заказы, отдельно выручка по городам столбцами'}
             />
-            <div className="builder-phrase-foot">
-              <button className="btn btn-ghost" onClick={onPhrase} disabled={parsing || !phrase.trim()}>
+            <div className="flex flex-wrap items-center gap-3">
+              <Button variant="ghost" onClick={onPhrase} disabled={parsing || !phrase.trim()}>
                 {parsing ? 'Разбираю, это занимает секунд двадцать…' : 'Собрать по описанию'}
-              </button>
-              <span className="builder-hint">
+              </Button>
+              <span className="text-xs text-fg-muted">
                 {phraseSource === 'parser'
                   ? 'разобрано по словарю — модель была недоступна'
                   : phraseSource === 'llm'
@@ -630,11 +709,11 @@ export function BuilderPage() {
                     : 'описание разбирает модель, но выбирает она только из вашего словаря — результат виден и правится руками'}
               </span>
             </div>
-            {phraseError && <div className="builder-error">{phraseError}</div>}
+            {phraseError && <Alert>{phraseError}</Alert>}
             {phraseNotes.length > 0 && (
-              <ul className="builder-notes">
+              <ul className="list-disc pl-4 text-xs text-fg-muted">
                 {phraseNotes.map((note, i) => (
-                  <li key={i} className={note.problem ? 'builder-note-bad' : undefined}>
+                  <li key={i} className={note.problem ? 'text-bad' : undefined}>
                     «{note.text}» —{' '}
                     {note.problem
                       ? note.problem
@@ -649,43 +728,35 @@ export function BuilderPage() {
             )}
           </section>
 
-          <div className="builder-meta">
-            <label>
-              Название
-              <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Продажи по городам" />
-            </label>
-            <label>
-              Описание
-              <input
+          <div className="my-4 flex flex-wrap gap-4">
+            <Field label="Название">              <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Продажи по городам" /></Field>
+            <Field label="Описание">              <Input
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder="для кого и о чём отчёт"
-              />
-            </label>
+              /></Field>
             {!editing && (
-              <label>
-                Адрес (необязательно)
-                <input value={reportSlug} onChange={(e) => setReportSlug(e.target.value)} placeholder="sales-by-city" />
-              </label>
+              <Field label="Адрес (необязательно)">                <Input value={reportSlug} onChange={(e) => setReportSlug(e.target.value)} placeholder="sales-by-city" /></Field>
             )}
           </div>
 
-          <div className="builder-grid">
-            <aside className="builder-palette">
+          <div className="mt-4 grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(190px,230px)_minmax(0,1fr)] xl:grid-cols-[minmax(190px,230px)_minmax(300px,380px)_minmax(0,1fr)]">
+            <aside className="sticky top-4 flex flex-col gap-2.5 rounded-card border border-line bg-surface p-3.5">
               {palette.map((group) => (
-                <div key={group.slug} className="builder-palette-group">
-                  <span className="builder-palette-dataset">{group.title}</span>
+                <div key={group.slug} className="mb-3 flex flex-col gap-1.5">
+                  <span className="mb-0.5 border-b border-line pb-1 text-xs font-semibold text-fg-muted">{group.title}</span>
 
                   {group.metrics.length > 0 && (
-                    <div className="builder-chips">
+                    <div className="flex flex-wrap gap-1.5">
                       {group.metrics.map((m) => (
                         <button
                           key={m.key}
-                          className={
-                            'builder-chip builder-chip-drag' +
-                            (m.own ? ' builder-chip-own' : '') +
-                            (m.broken ? ' builder-chip-off' : '')
-                          }
+                          className={cn(
+                            CHIP,
+                            'cursor-grab select-none active:cursor-grabbing',
+                            m.own && 'border-double',
+                            m.broken && 'cursor-not-allowed opacity-40',
+                          )}
                           draggable={!m.broken}
                           disabled={m.broken}
                           onDragStart={(e) => {
@@ -703,14 +774,15 @@ export function BuilderPage() {
                   )}
 
                   {group.dimensions.length > 0 && (
-                    <div className="builder-chips">
+                    <div className="flex flex-wrap gap-1.5">
                       {group.dimensions.map((d) => (
                         <button
                           key={d.key}
-                          className={
-                            'builder-chip builder-chip-drag builder-chip-dim' +
-                            (d.own ? ' builder-chip-own' : '')
-                          }
+                          className={cn(
+                            CHIP,
+                            'cursor-grab border-dashed select-none active:cursor-grabbing',
+                            d.own && 'border-double',
+                          )}
                           draggable
                           onDragStart={(e) => {
                             startDrag(e, { kind: 'dimension', slug: d.key })
@@ -729,14 +801,14 @@ export function BuilderPage() {
               ))}
 
               {computed.length > 0 && (
-                <div className="builder-palette-group">
+                <div className="mb-3 flex flex-col gap-1.5">
                   {/* формулы не принадлежат одному датасету — их источник виден по операндам */}
-                  <span className="builder-palette-dataset">формулы отчёта</span>
-                  <div className="builder-chips">
+                  <span className="mb-0.5 border-b border-line pb-1 text-xs font-semibold text-fg-muted">формулы отчёта</span>
+                  <div className="flex flex-wrap gap-1.5">
                     {computed.map((c) => (
                       <button
                         key={c.key}
-                        className="builder-chip builder-chip-drag builder-chip-own"
+                        className={cn(CHIP, 'cursor-grab border-double select-none active:cursor-grabbing')}
                         draggable
                         onDragStart={(e) => {
                           startDrag(e, { kind: 'metric', slug: c.key })
@@ -753,15 +825,15 @@ export function BuilderPage() {
                 </div>
               )}
 
-              <span className="builder-label">Фильтры отчёта</span>
-              <div className="builder-chips">
+              <span className="text-xs font-medium tracking-wide text-fg-muted uppercase">Фильтры отчёта</span>
+              <div className="flex flex-wrap gap-1.5">
                 {palette.flatMap((group) =>
                   group.dimensions.map((d) => {
                     const on = filters.some((f) => f.dimension === d.key)
                     return (
                       <button
                         key={d.key}
-                        className={`builder-chip${on ? ' builder-chip-on' : ''}`}
+                        className={cn(CHIP, on && CHIP_ON)}
                         title={`${group.title} · ${d.hint}`}
                         onClick={() => {
                           if (on) setPreviewFilters(({ [d.key]: _drop, ...rest }) => rest)
@@ -779,12 +851,12 @@ export function BuilderPage() {
                 )}
               </div>
 
-              <button className="btn btn-ghost builder-back" onClick={() => setStep(1)}>
+              <Button variant="ghost" size="sm" className="mt-2.5" onClick={() => setStep(1)}>
                 ← изменить набор данных
-              </button>
+              </Button>
             </aside>
 
-            <div className="builder-config">
+            <div className="flex flex-col gap-3">
               {sections.map((section, index) => {
                 const dimension = section.by[0] ? dimensionInfo(section.by[0]) : null
                 const active = dropTarget === index
@@ -795,11 +867,11 @@ export function BuilderPage() {
                 return (
                   <section
                     key={index}
-                    className={
-                      'builder-section' +
-                      (index === activeSection ? ' builder-section-active' : '') +
-                      (active ? (rejects ? ' builder-section-deny' : ' builder-section-over') : '')
-                    }
+                    className={cn(
+                      'flex flex-col gap-3 rounded-card border border-line bg-surface p-3.5',
+                      index === activeSection && 'border-accent',
+                      active && (rejects ? 'border-bad ring-2 ring-bad-soft' : 'border-accent ring-2 ring-accent-soft'),
+                    )}
                     onClick={() => setActiveSection(index)}
                     onDragOver={(e) => {
                       e.preventDefault()
@@ -808,10 +880,11 @@ export function BuilderPage() {
                     onDragLeave={() => setDropTarget((prev) => (prev === index ? null : prev))}
                     onDrop={(e) => onDropToSection(e, index)}
                   >
-                    <div className="builder-section-head">
+                    <div className="flex items-center gap-2">
                       <span
-                        className="builder-handle"
+                        className="cursor-grab px-0.5 text-base tracking-tighter text-fg-muted select-none active:cursor-grabbing"
                         draggable
+                        aria-hidden="true"
                         onDragStart={(e) => {
                           startDrag(e, { kind: 'section', index })
                           setDragging({ kind: 'section', index })
@@ -820,6 +893,33 @@ export function BuilderPage() {
                         title="перетащите, чтобы изменить порядок секций"
                       >
                         ⠿
+                      </span>
+                      {/* порядок секций меняется мышью через ⠿, а с клавиатуры — этими кнопками */}
+                      <span className="flex flex-col leading-none">
+                        <button
+                          type="button"
+                          className="cursor-pointer px-1 text-[10px] text-fg-muted hover:text-fg disabled:opacity-30"
+                          disabled={index === 0}
+                          aria-label={`Переместить секцию ${index + 1} выше`}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            moveSection(index, index - 1)
+                          }}
+                        >
+                          <span aria-hidden="true">▲</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="cursor-pointer px-1 text-[10px] text-fg-muted hover:text-fg disabled:opacity-30"
+                          disabled={index === sections.length - 1}
+                          aria-label={`Переместить секцию ${index + 1} ниже`}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            moveSection(index, index + 1)
+                          }}
+                        >
+                          <span aria-hidden="true">▼</span>
+                        </button>
                       </span>
                       <select
                         value={section.type}
@@ -847,29 +947,31 @@ export function BuilderPage() {
                         </select>
                       )}
                       {sections.length > 1 && (
-                        <button
-                          className="btn btn-ghost builder-remove"
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="ml-auto"
                           onClick={() => setSections((prev) => prev.filter((_, i) => i !== index))}
                         >
                           удалить
-                        </button>
+                        </Button>
                       )}
                     </div>
 
-                    <div className="builder-dropzone">
-                      <span className="builder-label">Показатели</span>
+                    <div className="flex flex-col gap-1.5 rounded-control border border-dashed border-line px-2.5 py-2">
+                      <span className="text-xs font-medium tracking-wide text-fg-muted uppercase">Показатели</span>
                       {section.metrics.length === 0 ? (
-                        <p className="builder-hint">перетащите поле сюда или нажмите на него слева</p>
+                        <p className="text-xs text-fg-muted">перетащите поле сюда или нажмите на него слева</p>
                       ) : (
-                        <div className="builder-chips">
+                        <div className="flex flex-wrap gap-1.5">
                           {section.metrics.map((m) => (
                             <span
                               key={m}
-                              className="builder-chip builder-chip-on"
+                              className={cn(CHIP, CHIP_ON)}
                               title={`${datasetTitle(datasetOfField(m) ?? '')} · ${fieldTitle(m)}`}
                             >
                               {fieldTitle(m)}
-                              <button className="builder-chip-x" onClick={() => removeMetric(index, m)} title="убрать">
+                              <button className="ml-1.5 cursor-pointer text-sm leading-none" onClick={() => removeMetric(index, m)} title="убрать">
                                 ×
                               </button>
                             </span>
@@ -881,23 +983,23 @@ export function BuilderPage() {
                     <SectionSources used={sectionDatasets(section)} datasets={datasets} links={links} />
 
                     {dropNote?.index === index && (
-                      <p className="builder-drop-note">{dropNote.text}</p>
+                      <p className="text-xs text-warn">{dropNote.text}</p>
                     )}
 
                     {section.type !== 'kpi' && (
-                      <div className="builder-dropzone">
-                        <span className="builder-label">Разрез</span>
+                      <div className="flex flex-col gap-1.5 rounded-control border border-dashed border-line px-2.5 py-2">
+                        <span className="text-xs font-medium tracking-wide text-fg-muted uppercase">Разрез</span>
                         {!dimension ? (
-                          <p className="builder-hint">перетащите разрез сюда</p>
+                          <p className="text-xs text-fg-muted">перетащите разрез сюда</p>
                         ) : (
-                          <div className="builder-chips">
+                          <div className="flex flex-wrap gap-1.5">
                             <span
-                              className="builder-chip builder-chip-on builder-chip-dim"
+                              className={cn(CHIP, CHIP_ON, 'border-dashed')}
                               title={`${datasetTitle(dimension.datasetSlug)} · ${dimension.field}`}
                             >
                               {dimension.title}
                               <button
-                                className="builder-chip-x"
+                                className="ml-1.5 cursor-pointer text-sm leading-none"
                                 onClick={() => patchSection(index, { by: [], grain: null })}
                                 title="убрать"
                               >
@@ -910,23 +1012,18 @@ export function BuilderPage() {
                     )}
 
                     {section.type !== 'kpi' && dimension && (
-                      <div className="builder-row">
+                      <div className="flex flex-wrap gap-3">
                         {dimension.type === 'date' && (
-                          <label>
-                            Шаг
-                            <select
+                          <Field label="Шаг">                            <Select
                               value={section.grain ?? 'day'}
                               onChange={(e) => patchSection(index, { grain: e.target.value as Grain })}
                             >
                               {GRAINS.map((g) => (
                                 <option key={g.value} value={g.value}>{g.label}</option>
                               ))}
-                            </select>
-                          </label>
+                            </Select></Field>
                         )}
-                        <label>
-                          Сортировка
-                          <select
+                        <Field label="Сортировка">                          <Select
                             value={section.orderBy ?? ''}
                             onChange={(e) => patchSection(index, { orderBy: e.target.value || null })}
                           >
@@ -937,21 +1034,15 @@ export function BuilderPage() {
                             {section.metrics.map((m) => (
                               <option key={m} value={m}>{fieldTitle(m)}</option>
                             ))}
-                          </select>
-                        </label>
-                        <label>
-                          Порядок
-                          <select
+                          </Select></Field>
+                        <Field label="Порядок">                          <Select
                             value={section.orderDir}
                             onChange={(e) => patchSection(index, { orderDir: e.target.value as 'asc' | 'desc' })}
                           >
                             <option value="desc">по убыванию</option>
                             <option value="asc">по возрастанию</option>
-                          </select>
-                        </label>
-                        <label>
-                          Строк
-                          <input
+                          </Select></Field>
+                        <Field label="Строк">                          <Input
                             type="number"
                             min={1}
                             value={section.limit ?? ''}
@@ -959,29 +1050,28 @@ export function BuilderPage() {
                             onChange={(e) =>
                               patchSection(index, { limit: e.target.value ? Number(e.target.value) : null })
                             }
-                          />
-                        </label>
+                          /></Field>
                       </div>
                     )}
                   </section>
                 )
               })}
 
-              <button
-                className="btn btn-ghost"
+              <Button
+                variant="ghost"
                 onClick={() => {
                   setSections((prev) => [...prev, emptySection()])
                   setActiveSection(sections.length)
                 }}
               >
                 + добавить секцию
-              </button>
+              </Button>
             </div>
 
-            <div className="builder-preview">
-              <div className="builder-preview-head">
-                <span className="builder-label">Предпросмотр</span>
-                {preview && <span className="badge badge-good">живые данные</span>}
+            <div className="min-h-50 rounded-card border border-line bg-surface p-4">
+              <div className="mb-3 flex items-center gap-2.5">
+                <span className="text-xs font-medium tracking-wide text-fg-muted uppercase">Предпросмотр</span>
+                {preview && <span className="inline-flex items-center rounded-full border border-good/30 bg-good-soft px-2.5 py-0.5 text-xs font-semibold text-good">живые данные</span>}
               </div>
               {preview && (preview.filters?.length ?? 0) > 0 && (
                 <ReportFilters
@@ -996,9 +1086,9 @@ export function BuilderPage() {
                   }
                 />
               )}
-              {previewError && <div className="builder-error">{previewError}</div>}
+              {previewError && <Alert className="my-3">{previewError}</Alert>}
               {!preview && !previewError && (
-                <p className="builder-empty">Положите поля в секцию — отчёт появится здесь.</p>
+                <p className="max-w-[60ch] text-sm text-fg-muted">Положите поля в секцию — отчёт появится здесь.</p>
               )}
               {preview?.sections.map((section, i) => (
                 <SectionRenderer key={i} section={section} />
@@ -1007,13 +1097,13 @@ export function BuilderPage() {
           </div>
 
           {!isAdmin && (
-            <p className="builder-empty">
+            <p className="max-w-[60ch] text-sm text-fg-muted">
               Сохранять отчёты может администратор — предпросмотр доступен всем.
             </p>
           )}
         </>
       )}
-    </main>
+    </Page>
   )
 }
 
@@ -1097,14 +1187,14 @@ function StepData({
     metrics.find((m) => m.slug === key)?.title ?? ownFields.find((f) => f.key === key)?.title ?? key
 
   return (
-    <div className="builder-step">
-      <section className="builder-block">
+    <div className="flex flex-col gap-4">
+      <section className="flex flex-col gap-2.5 rounded-card border border-line bg-surface p-4">
         <h2>Шаг 1. Данные</h2>
-        <p className="builder-hint">
+        <p className="max-w-prose text-xs text-fg-muted">
           Выберите датасет и поля, которые понадобятся в отчёте. Дальше, на раскладке, датасет
           уже не спрашивают — он приезжает вместе с полем.
         </p>
-        <div className="builder-datasets">
+        <div className="flex flex-wrap gap-2.5">
           {datasets.map((d) => {
             const on = pickedDatasets.includes(d.slug)
             const linked = pickedDatasets.length > 0 && !on && joinable.has(d.slug)
@@ -1112,17 +1202,20 @@ function StepData({
               <button
                 key={d.slug}
                 type="button"
-                className={`builder-dataset${on ? ' is-on' : ''}`}
+                className={cn(
+                  'flex min-w-48 cursor-pointer flex-col items-start gap-0.5 rounded-control border border-line px-3.5 py-2.5 text-left transition-colors',
+                  on && 'border-accent ring-2 ring-accent-soft',
+                )}
                 onClick={() => toggleDataset(d.slug)}
               >
                 <strong>{d.title}</strong>
                 <code>{d.slug}</code>
-                {linked && <span className="builder-badge">есть связь</span>}
+                {linked && <span className="mt-1 text-xs text-accent">есть связь</span>}
                 {pickedDatasets.length > 0 && !on && !linked && (
-                  <span className="builder-badge builder-badge-warn">связи нет</span>
+                  <span className="mt-1 text-xs text-warn">связи нет</span>
                 )}
                 {!hasVocabulary.has(d.slug) && (
-                  <span className="builder-badge">поля заводятся вручную</span>
+                  <span className="mt-1 text-xs text-accent">поля заводятся вручную</span>
                 )}
               </button>
             )
@@ -1135,24 +1228,34 @@ function StepData({
         const ms = metrics.filter((m) => m.datasetSlug === slug)
         const dims = dimensions.filter((d) => d.datasetSlug === slug)
         const mine = ownFields.filter((f) => f.datasetSlug === slug)
+        // свои поля встают в тот же ряд, что и словарные: датасет без словаря
+        // не должен выглядеть пустым, если поля в нём уже заведены руками
+        const myMetrics = mine.filter((f) => f.role === 'metric')
+        const myDimensions = mine.filter((f) => f.role === 'dimension')
         return (
-          <section key={slug} className="builder-block">
-            <div className="builder-block-head">
-              <h3>{ds?.title ?? slug}</h3>
-              <button type="button" className="btn btn-ghost" onClick={() => setModalFor(slug)}>
+          <section key={slug} className="flex flex-col gap-2.5 rounded-card border border-line bg-surface p-4">
+            <div className="flex items-center gap-3">
+              <h3 className="text-[15px] font-semibold">{ds?.title ?? slug}</h3>
+              <Button variant="ghost" size="sm" className="ml-auto" onClick={() => setModalFor(slug)}>
                 + своё поле
-              </button>
+              </Button>
             </div>
-            <div className="builder-pick">
-              <span className="builder-label">Показатели</span>
-              <div className="builder-chips">
-                {ms.length === 0 && <span className="builder-hint">в этом датасете нет показателей</span>}
+            <div className="flex flex-col gap-2">
+              <span className="text-xs font-medium tracking-wide text-fg-muted uppercase">Показатели</span>
+              <div className="flex flex-wrap gap-1.5">
+                {ms.length === 0 && myMetrics.length === 0 && (
+                  <span className="text-xs text-fg-muted">
+                    в этом датасете нет показателей — заведите своё поле кнопкой справа
+                  </span>
+                )}
                 {ms.map((m) => (
                   <button
                     key={m.slug}
-                    className={`builder-chip${pickedMetrics.includes(m.slug) ? ' builder-chip-on' : ''}${
-                      m.status === 'error' ? ' builder-chip-off' : ''
-                    }`}
+                    className={cn(
+                      CHIP,
+                      pickedMetrics.includes(m.slug) && CHIP_ON,
+                      m.status === 'error' && 'cursor-not-allowed opacity-40',
+                    )}
                     disabled={m.status === 'error'}
                     onClick={() => toggle(setPickedMetrics, m.slug)}
                     title={m.description || m.expression}
@@ -1160,70 +1263,64 @@ function StepData({
                     {m.title}
                   </button>
                 ))}
+                {myMetrics.map((f) => (
+                  <OwnChip
+                    key={f.key}
+                    title={f.title}
+                    hint={`своё поле · ${AGG_LABELS[f.agg ?? 'sum']} по ${f.field}`}
+                    onRemove={() => setOwnFields((prev) => prev.filter((x) => x.key !== f.key))}
+                  />
+                ))}
               </div>
-              <span className="builder-label">Разрезы</span>
-              <div className="builder-chips">
-                {dims.length === 0 && <span className="builder-hint">в этом датасете нет разрезов</span>}
+              <span className="text-xs font-medium tracking-wide text-fg-muted uppercase">Разрезы</span>
+              <div className="flex flex-wrap gap-1.5">
+                {dims.length === 0 && myDimensions.length === 0 && (
+                  <span className="text-xs text-fg-muted">
+                    в этом датасете нет разрезов — заведите своё поле кнопкой справа
+                  </span>
+                )}
                 {dims.map((d) => (
                   <button
                     key={d.slug}
-                    className={`builder-chip builder-chip-dim${
-                      pickedDimensions.includes(d.slug) ? ' builder-chip-on' : ''
-                    }`}
+                    className={cn(
+                      CHIP,
+                      'border-dashed',
+                      pickedDimensions.includes(d.slug) && CHIP_ON,
+                    )}
                     onClick={() => toggle(setPickedDimensions, d.slug)}
                     title={`${d.datasetSlug}.${d.field}`}
                   >
                     {d.title}
                   </button>
                 ))}
+                {myDimensions.map((f) => (
+                  <OwnChip
+                    key={f.key}
+                    dashed
+                    title={f.title}
+                    hint={`своё поле · разрез по ${f.field}`}
+                    onRemove={() => setOwnFields((prev) => prev.filter((x) => x.key !== f.key))}
+                  />
+                ))}
               </div>
-              {mine.length > 0 && (
-                <>
-                  <span className="builder-label">Свои поля этого датасета</span>
-                  <ul className="builder-own">
-                    {mine.map((f) => (
-                      <li key={f.key}>
-                        <strong>{f.title}</strong>
-                        <span className="builder-formula">
-                          {f.role === 'dimension'
-                            ? `разрез по ${f.field}`
-                            : `${AGG_LABELS[f.agg ?? 'sum']} по ${f.field}`}
-                        </span>
-                        <button
-                          className="btn btn-ghost"
-                          onClick={() => setOwnFields((prev) => prev.filter((x) => x.key !== f.key))}
-                        >
-                          удалить
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                </>
-              )}
             </div>
           </section>
         )
       })}
 
       {computed.length > 0 && (
-        <section className="builder-block">
-          <h3>Формулы</h3>
-          <ul className="builder-own">
+        <section className="flex flex-col gap-2.5 rounded-card border border-line bg-surface p-4">
+          <h3 className="text-[15px] font-semibold">Формулы</h3>
+          <div className="flex flex-wrap gap-1.5">
             {computed.map((c) => (
-              <li key={c.key}>
-                <strong>{c.title}</strong>
-                <span className="builder-formula">
-                  {nameOf(c.left)} {c.op} {nameOf(c.right)}
-                </span>
-                <button
-                  className="btn btn-ghost"
-                  onClick={() => setComputed((prev) => prev.filter((x) => x.key !== c.key))}
-                >
-                  удалить
-                </button>
-              </li>
+              <OwnChip
+                key={c.key}
+                title={c.title}
+                hint={`формула · ${nameOf(c.left)} ${c.op} ${nameOf(c.right)}`}
+                onRemove={() => setComputed((prev) => prev.filter((x) => x.key !== c.key))}
+              />
             ))}
-          </ul>
+          </div>
         </section>
       )}
 
@@ -1246,12 +1343,12 @@ function StepData({
         />
       )}
 
-      <div className="builder-step-foot">
-        <button className="btn btn-primary" disabled={!hasAnyMetric} onClick={onNext}>
+      <div className="flex items-center gap-3">
+        <Button variant="primary" disabled={!hasAnyMetric} onClick={onNext}>
           Дальше: раскладка →
-        </button>
+        </Button>
         {!hasAnyMetric && (
-          <span className="builder-hint">
+          <span className="text-xs text-fg-muted">
             выберите показатель или заведите своё поле кнопкой «+ своё поле»
           </span>
         )}
@@ -1296,65 +1393,56 @@ function FieldModal({
 }) {
   const [tab, setTab] = useState<'column' | 'formula'>('column')
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
-
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div
-        className="modal"
-        role="dialog"
-        aria-modal="true"
-        aria-label="Своё поле отчёта"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="modal-head">
-          <h3>Своё поле · {dataset.title}</h3>
-          <button className="modal-close" onClick={onClose} title="Закрыть">×</button>
-        </div>
-
-        <div className="modal-tabs">
-          <button
-            className={tab === 'column' ? 'is-on' : undefined}
-            onClick={() => setTab('column')}
-          >
-            Поле из датасета
-          </button>
-          <button
-            className={tab === 'formula' ? 'is-on' : undefined}
-            onClick={() => setTab('formula')}
-            disabled={formulaSource.length === 0}
-          >
-            Формула расчёта
-          </button>
-        </div>
-
-        {tab === 'column' ? (
-          <ColumnForm
-            dataset={dataset}
-            taken={taken}
-            onAdd={(field) => {
-              onAddField(field)
-              onClose()
-            }}
-          />
-        ) : (
-          <ComputedForm
-            available={formulaSource}
-            taken={taken}
-            onAdd={(field) => {
-              onAddFormula(field)
-              onClose()
-            }}
-          />
-        )}
+    <Modal title={`Своё поле · ${dataset.title}`} align="top" onClose={onClose}>
+      <div role="tablist" aria-label="Способ задать поле" className="mb-3 flex gap-1 border-b border-line">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === 'column'}
+          className={cn(
+            '-mb-px cursor-pointer border-b-2 px-2.5 py-1.5 text-sm transition-colors',
+            tab === 'column' ? 'border-accent font-semibold text-fg' : 'border-transparent text-fg-muted hover:text-fg',
+          )}
+          onClick={() => setTab('column')}
+        >
+          Поле из датасета
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === 'formula'}
+          disabled={formulaSource.length === 0}
+          className={cn(
+            '-mb-px cursor-pointer border-b-2 px-2.5 py-1.5 text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-40',
+            tab === 'formula' ? 'border-accent font-semibold text-fg' : 'border-transparent text-fg-muted hover:text-fg',
+          )}
+          onClick={() => setTab('formula')}
+        >
+          Формула расчёта
+        </button>
       </div>
-    </div>
+
+      {tab === 'column' ? (
+        <ColumnForm
+          dataset={dataset}
+          taken={taken}
+          onAdd={(field) => {
+            onAddField(field)
+            onClose()
+          }}
+        />
+      ) : (
+        <ComputedForm
+          available={formulaSource}
+          taken={taken}
+          onAdd={(field) => {
+            onAddFormula(field)
+            onClose()
+          }}
+        />
+      )}
+    </Modal>
   )
 }
 
@@ -1379,7 +1467,7 @@ function ColumnForm({
 
   return (
     <form
-      className="modal-form"
+      className="flex flex-col gap-3"
       onSubmit={(e) => {
         e.preventDefault()
         if (!column) return
@@ -1395,20 +1483,17 @@ function ColumnForm({
         })
       }}
     >
-      <label>
-        Колонка
-        <select value={column} onChange={(e) => setColumn(e.target.value)}>
+      <Field label="Колонка">        <Select value={column} onChange={(e) => setColumn(e.target.value)}>
           {dataset.fields.map((f) => (
             <option key={f.name} value={f.name}>{f.name} · {f.type}</option>
           ))}
-        </select>
-      </label>
+        </Select></Field>
       {/* описание из комментария колонки в источнике: гадать по имени не нужно */}
-      <p className="builder-hint modal-comment">
+      <p className="-mt-1.5 text-xs text-fg-muted">
         {picked?.comment || 'у колонки нет описания в источнике'}
       </p>
 
-      <fieldset className="modal-roles">
+      <fieldset className="flex flex-col gap-1.5 rounded-control border border-line px-3 pt-2 pb-2.5">
         <legend>Использовать как</legend>
         <label>
           <input
@@ -1429,43 +1514,36 @@ function ColumnForm({
       </fieldset>
 
       {role === 'metric' ? (
-        <div className="modal-row">
-          <label>
-            Действие
-            <select value={agg ?? 'sum'} onChange={(e) => setAgg(e.target.value as ReportField['agg'])}>
+        <div className="flex gap-3 [&>*]:flex-1">
+          <Field label="Действие">            <Select value={agg ?? 'sum'} onChange={(e) => setAgg(e.target.value as ReportField['agg'])}>
               {AGGS.map((a) => (
                 <option key={a.value} value={a.value}>{a.label}</option>
               ))}
-            </select>
-          </label>
-          <label>
-            Формат
-            <select value={format} onChange={(e) => setFormat(e.target.value as ReportField['format'])}>
+            </Select></Field>
+          <Field label="Формат">            <Select value={format} onChange={(e) => setFormat(e.target.value as ReportField['format'])}>
               <option value="number">число</option>
               <option value="money">деньги</option>
               <option value="percent">процент</option>
-            </select>
-          </label>
+            </Select></Field>
         </div>
       ) : (
-        <p className="builder-hint">
+        <p className="text-xs text-fg-muted">
           Тип определён по схеме: {type === 'date' ? 'дата' : type === 'number' ? 'число' : 'текст'}.
           {type === 'date' && ' В графике появится выбор шага: день, неделя, месяц.'}
         </p>
       )}
 
-      <label>
-        Название
-        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder={suggested} />
-      </label>
+      <Field label="Название">        <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder={suggested} /></Field>
 
-      <p className="builder-hint">
+      <p className="text-xs text-fg-muted">
         Поле живёт внутри этого отчёта: общий словарь оно не меняет, поэтому смысл
         показателей у остальных остаётся прежним. Чтобы поле стало общим, попросите
         администратора завести его в «Модели данных».
       </p>
 
-      <button className="btn btn-primary" disabled={!column}>Добавить поле</button>
+      <Button type="submit" variant="primary" disabled={!column}>
+        Добавить поле
+      </Button>
     </form>
   )
 }
@@ -1491,7 +1569,7 @@ function ComputedForm({
 
   return (
     <form
-      className="modal-form"
+      className="flex flex-col gap-3"
       onSubmit={(e) => {
         e.preventDefault()
         if (!ready) return
@@ -1501,43 +1579,28 @@ function ComputedForm({
         setTitle('')
       }}
     >
-      <label>
-        Название
-        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Средний чек" required />
-      </label>
-      <label>
-        Взять
-        <select value={l} onChange={(e) => setLeft(e.target.value)}>
+      <Field label="Название">        <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Средний чек" required /></Field>
+      <Field label="Взять">        <Select value={l} onChange={(e) => setLeft(e.target.value)}>
           {available.map((m) => (
             <option key={m.key} value={m.key}>{m.title}</option>
           ))}
-        </select>
-      </label>
-      <label>
-        Действие
-        <select value={op} onChange={(e) => setOp(e.target.value as ComputedField['op'])}>
+        </Select></Field>
+      <Field label="Действие">        <Select value={op} onChange={(e) => setOp(e.target.value as ComputedField['op'])}>
           {OPS.map((o) => (
             <option key={o.value} value={o.value}>{o.label}</option>
           ))}
-        </select>
-      </label>
-      <label>
-        Второе поле
-        <select value={r} onChange={(e) => setRight(e.target.value)}>
+        </Select></Field>
+      <Field label="Второе поле">        <Select value={r} onChange={(e) => setRight(e.target.value)}>
           {available.map((m) => (
             <option key={m.key} value={m.key}>{m.title}</option>
           ))}
-        </select>
-      </label>
-      <label>
-        Формат
-        <select value={format} onChange={(e) => setFormat(e.target.value as ComputedField['format'])}>
+        </Select></Field>
+      <Field label="Формат">        <Select value={format} onChange={(e) => setFormat(e.target.value as ComputedField['format'])}>
           <option value="number">число</option>
           <option value="money">деньги</option>
           <option value="percent">процент</option>
-        </select>
-      </label>
-      <button className="btn btn-ghost" disabled={!ready}>Добавить поле</button>
+        </Select></Field>
+      <Button type="submit" variant="ghost" disabled={!ready}>Добавить поле</Button>
     </form>
   )
 }
@@ -1559,7 +1622,7 @@ function SectionSources({
 
   if (used.length === 1) {
     return (
-      <p className="builder-sources">
+      <p className="text-xs text-fg-muted">
         Датасет: <strong>{titleOf(used[0])}</strong>
       </p>
     )
@@ -1589,12 +1652,12 @@ function SectionSources({
   const broken = rest.length > 0
 
   return (
-    <p className={broken ? 'builder-sources builder-sources-bad' : 'builder-sources'}>
+    <p className={cn('text-xs', broken ? 'text-bad' : 'text-fg-muted')}>
       Соединяются:{' '}
       {chain.map((item, i) => (
         <span key={item.slug}>
           {i > 0 && (
-            <span className="builder-join">
+            <span className="font-mono">
               {item.link ? ` ⋈ по ${item.link.leftField} = ${item.link.rightField} ` : ' ✕ '}
             </span>
           )}
@@ -1602,7 +1665,7 @@ function SectionSources({
         </span>
       ))}
       {broken && (
-        <span className="builder-hint">
+        <span className="text-xs text-fg-muted">
           {' '}— связи между датасетами нет, секция не соберётся. Заведите её в «Модели данных».
         </span>
       )}

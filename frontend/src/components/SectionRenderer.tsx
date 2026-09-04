@@ -6,7 +6,7 @@ import { MarkdownSectionView } from './MarkdownSectionView'
 
 function SectionTitle({ title }: { title?: string }) {
   if (!title) return null
-  return <h3 className="section-title">{title}</h3>
+  return <h2 className="mb-3.5 text-base font-semibold text-fg">{title}</h2>
 }
 
 /** Фильтр, который к этой секции не применился.
@@ -15,8 +15,19 @@ function SectionTitle({ title }: { title?: string }) {
     а показатель, у которого такого разреза нет, остался прежним. */
 function FilterNote({ note }: { note?: string }) {
   if (!note) return null
-  return <p className="section-filter-note">{note}</p>
+  return <p className="mb-2 text-xs text-warn">{note}</p>
 }
+
+/** Секция показала не все строки: потолок выдачи сработал.
+
+    Пометка идёт под таблицей, а не над ней: читатель дошёл до конца страниц
+    и должен понимать, что дальше данные есть, просто их не отдали. */
+function RowsNote({ note }: { note?: string }) {
+  if (!note) return null
+  return <p className="mt-3 text-xs text-fg-muted">{note}</p>
+}
+
+const SECTION = 'rounded-card border border-line bg-surface p-5'
 
 export function SectionRenderer({ section }: { section: ReportSection }) {
   switch (section.type) {
@@ -31,7 +42,7 @@ export function SectionRenderer({ section }: { section: ReportSection }) {
       )
     case 'chart':
       return (
-        <section className="report-section">
+        <section className={SECTION}>
           <SectionTitle title={section.title} />
           <FilterNote note={section.filterNote} />
           <ChartSectionView section={section} />
@@ -39,10 +50,11 @@ export function SectionRenderer({ section }: { section: ReportSection }) {
       )
     case 'table':
       return (
-        <section className="report-section">
+        <section className={SECTION}>
           <SectionTitle title={section.title} />
           <FilterNote note={section.filterNote} />
           <TableSectionView section={section} />
+          <RowsNote note={section.rowsNote} />
         </section>
       )
     default:

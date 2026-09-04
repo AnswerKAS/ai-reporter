@@ -38,3 +38,15 @@ export function formatDelta(delta: number): string {
   const sign = delta > 0 ? '+' : ''
   return `${sign}${new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 1 }).format(delta)}%`
 }
+/** Подписи осей графика: полное число не влезает в узкую ось на телефоне
+    («18 000 000 ₽» обрезалось), поэтому здесь компактная запись. */
+export function formatAxisValue(value: string | number | unknown, format?: NumberFormat): string {
+  const num = typeof value === 'number' ? value : Number(value)
+  if (format === 'string' || format === 'date' || Number.isNaN(num)) return formatValue(value, format)
+  if (Math.abs(num) < 10000) return formatValue(value, format)
+  return new Intl.NumberFormat('ru-RU', {
+    notation: 'compact',
+    maximumFractionDigits: 1,
+    ...(format === 'money' ? { style: 'currency', currency: 'RUB' } : {}),
+  }).format(num)
+}

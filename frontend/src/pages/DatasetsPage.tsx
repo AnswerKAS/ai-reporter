@@ -12,6 +12,27 @@ import {
 } from '../lib/api'
 import { useAuth } from '../lib/auth'
 import { DraftCard, useDraftReload } from '../components/SkillDraftViews'
+import {
+  Alert,
+  Badge,
+  Button,
+  ConfirmDialog,
+  EmptyState,
+  Field,
+  Input,
+  Page,
+  PageHeader,
+  Select,
+  SkeletonCards,
+  SkeletonRows,
+  Table,
+  Td,
+  Textarea,
+  Th,
+  Tr,
+} from '../components/ui'
+import type { BadgeTone } from '../components/ui/Badge'
+import { cn } from '../lib/cn'
 
 const SOURCE_LABELS: Record<DatasetSource, string> = {
   clickhouse: 'ClickHouse',
@@ -19,11 +40,13 @@ const SOURCE_LABELS: Record<DatasetSource, string> = {
   csv: 'CSV-файл',
 }
 
-const STATUS_BADGES: Record<string, string> = {
-  ok: 'badge badge-good',
-  error: 'badge badge-bad',
-  new: 'badge',
+const STATUS_TONES: Record<string, BadgeTone> = {
+  ok: 'good',
+  error: 'bad',
+  new: 'neutral',
 }
+
+const FORM = 'mt-3.5 grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] items-end gap-3 rounded-card border border-line bg-surface p-4'
 
 export function DatasetsPage() {
   const { isAdmin } = useAuth()
@@ -33,6 +56,7 @@ export function DatasetsPage() {
   const [detail, setDetail] = useState<DatasetDetail | null>(null)
   const [detailError, setDetailError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [pendingDelete, setPendingDelete] = useState<Dataset | null>(null)
 
   const loadList = useCallback(() => {
     fetchDatasets()
@@ -72,25 +96,24 @@ export function DatasetsPage() {
 
   if (error && datasets === null) {
     return (
-      <main className="page">
-        <header className="page-header"><h1>Датасеты</h1></header>
-        <p className="muted">{error}</p>
-      </main>
+      <Page>
+        <PageHeader title="Датасеты" />
+        <Alert>{error}</Alert>
+      </Page>
     )
   }
 
   return (
-    <main className="page">
-      <header className="page-header">
-        <h1>Датасеты</h1>
-        <p className="muted">Источники данных, доступные скиллам отчётов</p>
-      </header>
+    <Page>
+      <PageHeader title="Датасеты" subtitle="Источники данных, доступные скиллам отчётов" />
 
-      {error && <p className="form-error">{error}</p>}
+      {error && <Alert className="mb-4">{error}</Alert>}
 
       {isAdmin && (
-        <details className="dataset-create">
-          <summary className="btn btn-ghost">Добавить датасет</summary>
+        <details className="mb-5">
+          <summary className="inline-flex w-fit cursor-pointer list-none items-center rounded-control border border-transparent px-3.5 py-1.5 text-sm text-fg-muted hover:bg-surface-sunken hover:text-fg [&::-webkit-details-marker]:hidden">
+            Добавить датасет
+          </summary>
           <DatasetCreateForm
             busy={busy}
             onCreated={(slug) => {
@@ -103,56 +126,57 @@ export function DatasetsPage() {
 
       <MyDrafts />
 
-      <div className="dataset-grid">
-        {(datasets ?? []).map((d) => (
-          <button
-            key={d.slug}
-            type="button"
-            className={`dataset-card${selected === d.slug ? ' dataset-card-active' : ''}`}
-            onClick={() => setSelected(d.slug === selected ? null : d.slug)}
-          >
-            <div className="dataset-card-head">
-              <h3>{d.title}</h3>
-              <span className="dataset-card-head-side">
-                <span className={STATUS_BADGES[d.status] ?? 'badge'}>{d.status}</span>
-                {isAdmin && (
-                  <span
-                    role="button"
-                    tabIndex={0}
-                    className="dataset-card-delete"
-                    title={`Удалить датасет ${d.slug}`}
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      if (window.confirm(`Удалить датасет «${d.title}» (${d.slug})? Отчёты, использующие его, сломаются.`)) {
-                        runAdminAction(async () => {
-                          await deleteDataset(d.slug)
-                          if (selected === d.slug) setSelected(null)
-                        })
-                      }
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault()
-                        e.stopPropagation()
-                      }
-                    }}
-                  >
-                    ×
-                  </span>
-                )}
-              </span>
+      {datasets === null ? (
+        <SkeletonCards count={4} />
+      ) : datasets.length === 0 ? (
+        <EmptyState
+          title="Датасетов пока нет"
+          description={isAdmin ? 'Добавьте первый источник данных — кнопка выше.' : 'Источники данных заводит администратор.'}
+        />
+      ) : (
+        <div className="mb-7 grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-3.5">
+          {datasets.map((d) => (
+            <div
+              key={d.slug}
+              className={cn(
+                'relative rounded-card border bg-surface transition-colors',
+                selected === d.slug ? 'border-accent ring-2 ring-accent-soft' : 'border-line hover:border-accent',
+              )}
+            >
+              {isAdmin && (
+                <button
+                  type="button"
+                  title={`Удалить датасет ${d.slug}`}
+                  aria-label={`Удалить датасет ${d.title}`}
+                  onClick={() => setPendingDelete(d)}
+                  className="absolute top-3 right-3 z-10 flex h-6 w-6 cursor-pointer items-center justify-center rounded-control text-base leading-none text-fg-muted hover:bg-bad-soft hover:text-bad"
+                >
+                  <span aria-hidden="true">×</span>
+                </button>
+              )}
+              <button
+                type="button"
+                aria-pressed={selected === d.slug}
+                className="flex w-full cursor-pointer flex-col gap-2 p-4 text-left"
+                onClick={() => setSelected(d.slug === selected ? null : d.slug)}
+              >
+                <span className="flex items-center justify-between gap-2.5 pr-7">
+                  <span className="text-[15px] font-semibold">{d.title}</span>
+                  <Badge tone={STATUS_TONES[d.status] ?? 'neutral'}>{d.status}</Badge>
+                </span>
+                <span className="text-sm text-fg-muted">{d.description ?? '—'}</span>
+                <span className="text-xs text-fg-muted">
+                  {SOURCE_LABELS[d.source]}
+                  {d.tableName ? ` · ${d.tableName}` : ''}
+                  {` · полей: ${d.fields.length}`}
+                </span>
+              </button>
             </div>
-            <p className="muted">{d.description ?? '—'}</p>
-            <span className="dataset-card-meta">
-              {SOURCE_LABELS[d.source]}
-              {d.tableName ? ` · ${d.tableName}` : ''}
-              {` · полей: ${d.fields.length}`}
-            </span>
-          </button>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
 
-      {detailError && <p className="form-error">{detailError}</p>}
+      {detailError && <Alert className="mb-4">{detailError}</Alert>}
 
       {detail && (
         <DatasetDetailPanel
@@ -161,16 +185,25 @@ export function DatasetsPage() {
           isAdmin={isAdmin}
           busy={busy}
           onRefresh={() => runAdminAction(() => refreshDataset(detail.dataset.slug))}
-          onDelete={() =>
-            runAdminAction(async () => {
-              await deleteDataset(detail.dataset.slug)
-              setSelected(null)
-            })
-          }
+          onDelete={() => setPendingDelete(detail.dataset)}
           onUpload={(file) => runAdminAction(() => uploadDatasetCsv(detail.dataset.slug, file))}
         />
       )}
-    </main>
+
+      {pendingDelete && (
+        <ConfirmDialog
+          title="Удалить датасет?"
+          description={`Датасет «${pendingDelete.title}» (${pendingDelete.slug}) будет удалён. Отчёты, которые его используют, перестанут собираться.`}
+          onClose={() => setPendingDelete(null)}
+          onConfirm={async () => {
+            const slug = pendingDelete.slug
+            await deleteDataset(slug)
+            if (selected === slug) setSelected(null)
+            loadList()
+          }}
+        />
+      )}
+    </Page>
   )
 }
 
@@ -195,48 +228,50 @@ function DatasetCreateForm({ busy, onCreated }: { busy: boolean; onCreated: (slu
   }
 
   return (
-    <div className="dataset-form">
-      <label>
-        Источник
-        <select value={source} onChange={(e) => setSource(e.target.value as DatasetSource)}>
+    <div className={FORM}>
+      <Field label="Источник">
+        <Select value={source} onChange={(e) => setSource(e.target.value as DatasetSource)}>
           <option value="clickhouse">ClickHouse</option>
           <option value="postgres">PostgreSQL</option>
           <option value="csv">CSV-файл</option>
-        </select>
-      </label>
-      <label>
-        Slug
-        <input value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="my-data" />
-      </label>
-      <label>
-        Название
-        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Мои данные" />
-      </label>
-      <label>
-        Описание
-        <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="необязательно" />
-      </label>
+        </Select>
+      </Field>
+      <Field label="Slug">
+        <Input value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="my-data" />
+      </Field>
+      <Field label="Название">
+        <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Мои данные" />
+      </Field>
+      <Field label="Описание">
+        <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="необязательно" />
+      </Field>
       {source !== 'csv' && (
         <>
-          <label>
-            DSN, env:VAR или app:postgres
-            <input
+          <Field label="DSN, env:VAR или app:postgres" className="col-span-full">
+            <Input
               value={dsn}
               onChange={(e) => setDsn(e.target.value)}
               placeholder={source === 'postgres' ? 'app:postgres (сервер приложения) или postgresql://user:pass@host:5432/db' : 'clickhouse://user:pass@host:8123/db или env:VAR'}
             />
-          </label>
-          <label>
-            Таблица
-            <input value={tableName} onChange={(e) => setTableName(e.target.value)} placeholder="my_table" />
-          </label>
+          </Field>
+          <Field label="Таблица">
+            <Input value={tableName} onChange={(e) => setTableName(e.target.value)} placeholder="my_table" />
+          </Field>
         </>
       )}
-      {source === 'csv' && <p className="muted">Файл .csv загружается после создания на карточке датасета.</p>}
-      {error && <p className="form-error">{error}</p>}
-      <button type="button" className="btn btn-primary" disabled={busy || !slug || !title} onClick={submit}>
-        Создать и проверить
-      </button>
+      {source === 'csv' && (
+        <p className="col-span-full text-sm text-fg-muted">Файл .csv загружается после создания на карточке датасета.</p>
+      )}
+      {error && (
+        <div className="col-span-full">
+          <Alert>{error}</Alert>
+        </div>
+      )}
+      <div className="col-span-full">
+        <Button variant="primary" disabled={busy || !slug || !title} onClick={submit}>
+          Создать и проверить
+        </Button>
+      </div>
     </div>
   )
 }
@@ -260,12 +295,14 @@ function DatasetDetailPanel({
 }) {
   const { dataset, preview } = detail
   return (
-    <section className="dataset-detail">
-      <div className="dataset-detail-head">
-        <h2>{dataset.title} <span className="skill-name">{dataset.slug}</span></h2>
+    <section className="rounded-card border border-line bg-surface p-5">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-lg font-semibold">
+          {dataset.title} <span className="font-mono text-xs font-normal text-fg-muted">{dataset.slug}</span>
+        </h2>
         {isAdmin && (
-          <div className="dataset-actions">
-            <label className="btn btn-ghost dataset-upload">
+          <div className="flex flex-wrap gap-2">
+            <label className="inline-flex cursor-pointer items-center rounded-control border border-transparent px-3.5 py-1.5 text-sm text-fg-muted hover:bg-surface-sunken hover:text-fg">
               Загрузить CSV
               <input
                 type="file"
@@ -278,53 +315,63 @@ function DatasetDetailPanel({
                 }}
               />
             </label>
-            <button type="button" className="btn btn-ghost" disabled={busy} onClick={onRefresh}>
+            <Button variant="ghost" disabled={busy} onClick={onRefresh}>
               Проверить и вычитать схему
-            </button>
-            <button type="button" className="btn btn-danger" disabled={busy} onClick={onDelete}>
+            </Button>
+            <Button variant="danger" disabled={busy} onClick={onDelete}>
               Удалить
-            </button>
+            </Button>
           </div>
         )}
       </div>
-      {dataset.error && <p className="form-error">{dataset.error}</p>}
+      {dataset.error && <Alert className="mb-3">{dataset.error}</Alert>}
 
       <SkillGenerator datasets={datasets} currentSlug={dataset.slug} />
 
-      <h3 className="dataset-subtitle">Поля</h3>
+      <h3 className="mt-5 mb-2 text-sm font-semibold">Поля</h3>
       {dataset.fields.length > 0 ? (
-        <div className="table-scroll">
-          <table className="report-table">
-            <thead>
-              <tr><th>Поле</th><th>Тип</th></tr>
-            </thead>
-            <tbody>
-              {dataset.fields.map((f) => (
-                <tr key={f.name}><td>{f.name}</td><td>{f.type}</td></tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <Table>
+          <thead>
+            <tr>
+              <Th>Поле</Th>
+              <Th>Тип</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {dataset.fields.map((f) => (
+              <Tr key={f.name}>
+                <Td>{f.name}</Td>
+                <Td>{f.type}</Td>
+              </Tr>
+            ))}
+          </tbody>
+        </Table>
       ) : (
-        <p className="muted">Схема не вычитана — выполните «Проверить и вычитать схему».</p>
+        <p className="text-sm text-fg-muted">Схема не вычитана — выполните «Проверить и вычитать схему».</p>
       )}
 
-      <h3 className="dataset-subtitle">Превью (первые 50 строк)</h3>
+      <h3 className="mt-5 mb-2 text-sm font-semibold">Превью (первые 50 строк)</h3>
       {preview && preview.columns.length > 0 ? (
-        <div className="table-scroll">
-          <table className="report-table">
-            <thead>
-              <tr>{preview.columns.map((c) => <th key={c}>{c}</th>)}</tr>
-            </thead>
-            <tbody>
-              {preview.rows.map((row, i) => (
-                <tr key={i}>{row.map((cell, j) => <td key={j}>{cell}</td>)}</tr>
+        <Table>
+          <thead>
+            <tr>
+              {preview.columns.map((c) => (
+                <Th key={c}>{c}</Th>
               ))}
-            </tbody>
-          </table>
-        </div>
+            </tr>
+          </thead>
+          <tbody>
+            {preview.rows.map((row, i) => (
+              <Tr key={i}>
+                {row.map((cell, j) => (
+                  <Td key={j}>{cell}</Td>
+                ))}
+              </Tr>
+            ))}
+          </tbody>
+        </Table>
       ) : (
-        <p className="muted">Превью недоступно.</p>
+        <p className="text-sm text-fg-muted">Превью недоступно.</p>
       )}
     </section>
   )
@@ -365,56 +412,60 @@ function SkillGenerator({ datasets, currentSlug }: { datasets: Dataset[]; curren
   }
 
   return (
-    <details className="dataset-create" open={open} onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}>
-      <summary className="btn btn-primary">Сгенерировать скилл по этому датасету</summary>
-      <div className="dataset-form">
-        <label>
-          Домен
-          <input value={domain} onChange={(e) => setDomain(e.target.value)} placeholder="sales" />
-        </label>
-        <label>
-          Имя скилла (slug)
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="region-report" />
-        </label>
-        <label>
-          Название
-          <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Отчёт по регионам" />
-        </label>
-        <label className="dataset-form-wide">
-          Какие данные нужны в отчёте (словами)
-          <textarea
+    <details open={open} onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}>
+      <summary className="inline-flex w-fit cursor-pointer list-none items-center rounded-control border border-accent bg-accent px-3.5 py-1.5 text-sm font-semibold text-accent-fg hover:bg-accent-hover [&::-webkit-details-marker]:hidden">
+        Сгенерировать скилл по этому датасету
+      </summary>
+      <div className={FORM}>
+        <Field label="Домен">
+          <Input value={domain} onChange={(e) => setDomain(e.target.value)} placeholder="sales" />
+        </Field>
+        <Field label="Имя скилла (slug)">
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="region-report" />
+        </Field>
+        <Field label="Название">
+          <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Отчёт по регионам" />
+        </Field>
+        <Field label="Какие данные нужны в отчёте (словами)" className="col-span-full">
+          <Textarea
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             placeholder="Например: выручка по городам с детализацией по категориям, топ-5 менеджеров и динамика по неделям…"
             rows={4}
           />
-        </label>
-        <div className="dataset-form-wide">
-          <div className="muted" style={{ fontSize: 13, marginBottom: 6 }}>Датасеты для скилла:</div>
-          <div className="draft-pick">
+        </Field>
+        <div className="col-span-full">
+          <p className="mb-1.5 text-sm text-fg-muted">Датасеты для скилла:</p>
+          <div className="flex flex-wrap gap-x-4 gap-y-2">
             {datasets.map((d) => {
               const isCurrent = d.slug === currentSlug
               const checked = isCurrent || extra.includes(d.slug)
               return (
-                <label key={d.slug} className="draft-pick-item">
+                <label key={d.slug} className="inline-flex items-center gap-1.5 text-sm">
                   <input
                     type="checkbox"
                     checked={checked}
                     disabled={isCurrent}
                     onChange={() => toggleExtra(d.slug)}
                   />
-                  {d.title} <span className="skill-name">{d.slug}</span>
-                  {isCurrent && <span className="muted">(текущий)</span>}
+                  {d.title} <span className="font-mono text-xs text-fg-muted">{d.slug}</span>
+                  {isCurrent && <span className="text-xs text-fg-muted">(текущий)</span>}
                 </label>
               )
             })}
           </div>
         </div>
-        {error && <p className="form-error">{error}</p>}
-        <button type="button" className="btn btn-primary" disabled={busy || !name || !title || !description} onClick={submit}>
-          {busy ? 'Создаём…' : 'Сгенерировать скилл'}
-        </button>
-        {created && <p className="form-ok">Черновик создан — генерация идёт в фоне, следите в списке «Мои черновики».</p>}
+        {error && (
+          <div className="col-span-full">
+            <Alert>{error}</Alert>
+          </div>
+        )}
+        <div className="col-span-full flex flex-wrap items-center gap-3">
+          <Button variant="primary" disabled={busy || !name || !title || !description} onClick={submit}>
+            {busy ? 'Создаём…' : 'Сгенерировать скилл'}
+          </Button>
+          {created && <Alert tone="success">Черновик создан — генерация идёт в фоне, следите в списке «Мои черновики».</Alert>}
+        </div>
       </div>
     </details>
   )
@@ -427,16 +478,16 @@ function MyDrafts() {
   if (drafts !== null && drafts.length === 0) return null
 
   return (
-    <section className="my-drafts">
-      <h2 className="skill-title">
-        Мои черновики скиллов{' '}
-        <button type="button" className="btn btn-ghost" onClick={reload}>
+    <section className="mb-7">
+      <h2 className="mb-3 flex items-center gap-3 text-lg font-semibold tracking-tight">
+        Мои черновики скиллов
+        <Button variant="ghost" size="sm" onClick={reload}>
           Обновить
-        </button>
+        </Button>
       </h2>
-      {error && <p className="form-error">{error}</p>}
+      {error && <Alert className="mb-3">{error}</Alert>}
       {drafts === null ? (
-        <p className="muted">Загрузка…</p>
+        <SkeletonRows count={2} />
       ) : (
         drafts.map((d) => <DraftCard key={d.id} draft={d} isAdmin={false} onChanged={reload} onFail={setError} />)
       )}

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import {
   Area,
   AreaChart,
@@ -18,10 +18,10 @@ import {
   YAxis,
 } from 'recharts'
 import type { ChartPoint, ChartSection, NumberFormat, TableSection } from '../types/report'
-import { formatValue } from '../lib/format'
+import { formatAxisValue, formatValue } from '../lib/format'
+import { useChartTheme, type ChartTheme } from '../lib/chart-theme'
 import { TableSectionView } from './TableSectionView'
-
-const PALETTE = ['#4f46e5', '#0ea5e9', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6']
+import { EmptyState, Modal } from './ui'
 
 const MONEY_KEYS = new Set(['revenue', 'amount', 'sales', 'sum'])
 
@@ -29,20 +29,111 @@ function kFormat(key: string): NumberFormat {
   return MONEY_KEYS.has(key) ? 'money' : 'number'
 }
 
-function XTick({ x, y, payload }: { x?: number; y?: number; payload?: { value: unknown } }) {
+function XTick({ x, y, payload, fill }: { x?: number; y?: number; payload?: { value: unknown }; fill: string }) {
   const text = payload ? String(payload.value) : ''
   return (
-    <text x={x} y={y} textAnchor="middle" dy={12} fontSize={11} fill="#6b7280">
+    <text x={x} y={y} textAnchor="middle" dy={12} fontSize={11} fill={fill}>
       {text}
     </text>
   )
 }
 
-function YTick({ x, y, payload, format }: { x?: number; y?: number; payload?: { value?: string | number }; format: ReturnType<typeof kFormat> }) {
+function YTick({
+  x,
+  y,
+  payload,
+  format,
+  fill,
+}: {
+  x?: number
+  y?: number
+  payload?: { value?: string | number }
+  format: ReturnType<typeof kFormat>
+  fill: string
+}) {
   return (
-    <text x={x} y={y} textAnchor="end" dy={4} fontSize={11} fill="#6b7280">
-      {payload?.value !== undefined ? formatValue(payload.value, format) : ''}
+    <text x={x} y={y} textAnchor="end" dy={4} fontSize={11} fill={fill}>
+      {payload?.value !== undefined ? formatAxisValue(payload.value, format) : ''}
     </text>
+  )
+}
+
+interface TooltipEntry {
+  name?: string | number
+  value?: string | number
+  color?: string
+  dataKey?: string | number
+}
+
+/** Свой тултип: дефолтный recharts — белая коробка, нечитаемая в тёмной теме,
+    и он показывает сырые числа вместо форматированных. */
+function ChartTooltip({
+  active,
+  payload,
+  label,
+  theme,
+}: {
+  active?: boolean
+  payload?: TooltipEntry[]
+  label?: string | number
+  theme: ChartTheme
+}) {
+  if (!active || !payload || payload.length === 0) return null
+  return (
+    <div
+      style={{
+        background: theme.surface,
+        border: `1px solid ${theme.line}`,
+        borderRadius: 10,
+        padding: '8px 10px',
+        boxShadow: '0 10px 30px rgb(0 0 0 / 0.18)',
+        fontSize: 13,
+        color: theme.fg,
+      }}
+    >
+      {label !== undefined && (
+        <div style={{ marginBottom: 6, fontWeight: 600 }}>{String(label)}</div>
+      )}
+      {payload.map((entry, i) => (
+        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, whiteSpace: 'nowrap' }}>
+          <span
+            aria-hidden="true"
+            style={{ width: 8, height: 8, borderRadius: 999, background: entry.color, flexShrink: 0 }}
+          />
+          <span style={{ color: theme.fgMuted }}>{entry.name}</span>
+          <span style={{ marginLeft: 'auto', fontVariantNumeric: 'tabular-nums' }}>
+            {formatValue(entry.value ?? '', kFormat(String(entry.dataKey ?? '')))}
+          </span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function ChartLegend({ payload, theme }: { payload?: Array<{ value?: string; color?: string }>; theme: ChartTheme }) {
+  if (!payload || payload.length === 0) return null
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        justifyContent: 'center',
+        gap: '4px 16px',
+        paddingTop: 8,
+        fontSize: 12,
+        color: theme.fgMuted,
+      }}
+    >
+      {payload.map((entry, i) => (
+        <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <span
+            aria-hidden="true"
+            style={{ width: 8, height: 8, borderRadius: 999, background: entry.color, flexShrink: 0 }}
+          />
+          {entry.value}
+        </span>
+      ))}
+    </div>
   )
 }
 
@@ -57,17 +148,9 @@ function pointValue(arg: unknown, xAxisKey: string): string | null {
 export function ChartSectionView({ section }: { section: ChartSection }) {
   const { kind, data, xKey, series, detail } = section
   const [selected, setSelected] = useState<string | null>(null)
+  const theme = useChartTheme()
   const xAxisKey = xKey ?? 'name'
   const firstKey = series[0]?.key
-
-  useEffect(() => {
-    if (!selected) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setSelected(null)
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [selected])
 
   const onPointClick = (arg: unknown) => {
     if (!detail) return
@@ -75,27 +158,41 @@ export function ChartSectionView({ section }: { section: ChartSection }) {
     if (value) setSelected(value)
   }
 
+  const color = (i: number) => theme.palette[i % theme.palette.length]
+
+  const tooltip = <Tooltip content={<ChartTooltip theme={theme} />} cursor={{ fill: theme.grid, fillOpacity: 0.35 }} />
+  const legend = <Legend content={<ChartLegend theme={theme} />} />
+
   const baseAxes = (
     <>
-      <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-      <XAxis dataKey={xAxisKey} tick={<XTick />} tickLine={false} axisLine={{ stroke: '#e5e7eb' }} />
-      <YAxis tick={<YTick format={kFormat(firstKey ?? '')} />} tickLine={false} axisLine={false} width={70} />
+      <CartesianGrid strokeDasharray="3 3" stroke={theme.grid} />
+      <XAxis dataKey={xAxisKey} tick={<XTick fill={theme.axis} />} tickLine={false} axisLine={{ stroke: theme.grid }} />
+      <YAxis
+        tick={<YTick format={kFormat(firstKey ?? '')} fill={theme.axis} />}
+        tickLine={false}
+        axisLine={false}
+        width={56}
+      />
     </>
   )
+
+  if (data.length === 0) {
+    return <EmptyState title="Нет данных" description="По текущим фильтрам за выбранный период ничего не найдено." />
+  }
 
   let chart: React.ReactNode
   if (kind === 'bar') {
     chart = (
       <BarChart data={data}>
         {baseAxes}
-        <Tooltip />
-        <Legend />
+        {tooltip}
+        {legend}
         {series.map((s, i) => (
           <Bar
             key={s.key}
             dataKey={s.key}
             name={s.name ?? s.key}
-            fill={s.color ?? PALETTE[i % PALETTE.length]}
+            fill={s.color ?? color(i)}
             radius={[4, 4, 0, 0]}
             cursor={detail ? 'pointer' : undefined}
             onClick={onPointClick}
@@ -107,15 +204,15 @@ export function ChartSectionView({ section }: { section: ChartSection }) {
     chart = (
       <LineChart data={data}>
         {baseAxes}
-        <Tooltip />
-        <Legend />
+        {tooltip}
+        {legend}
         {series.map((s, i) => (
           <Line
             key={s.key}
             type="monotone"
             dataKey={s.key}
             name={s.name ?? s.key}
-            stroke={s.color ?? PALETTE[i % PALETTE.length]}
+            stroke={s.color ?? color(i)}
             strokeWidth={2}
             dot={false}
             activeDot={{ r: 5 }}
@@ -129,21 +226,32 @@ export function ChartSectionView({ section }: { section: ChartSection }) {
     const firstLineKey = series.find((s) => s.type === 'line')?.key
     chart = (
       <ComposedChart data={data}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-        <XAxis dataKey={xAxisKey} tick={<XTick />} tickLine={false} axisLine={{ stroke: '#e5e7eb' }} />
-        <YAxis yAxisId="left" tick={<YTick format={kFormat(firstKey ?? '')} />} tickLine={false} axisLine={false} width={70} />
+        <CartesianGrid strokeDasharray="3 3" stroke={theme.grid} />
+        <XAxis
+          dataKey={xAxisKey}
+          tick={<XTick fill={theme.axis} />}
+          tickLine={false}
+          axisLine={{ stroke: theme.grid }}
+        />
+        <YAxis
+          yAxisId="left"
+          tick={<YTick format={kFormat(firstKey ?? '')} fill={theme.axis} />}
+          tickLine={false}
+          axisLine={false}
+          width={56}
+        />
         {hasLine && (
           <YAxis
             yAxisId="right"
             orientation="right"
-            tick={<YTick format={kFormat(firstLineKey ?? '')} />}
+            tick={<YTick format={kFormat(firstLineKey ?? '')} fill={theme.axis} />}
             tickLine={false}
             axisLine={false}
-            width={70}
+            width={56}
           />
         )}
-        <Tooltip />
-        <Legend />
+        {tooltip}
+        {legend}
         {series.map((s, i) =>
           s.type === 'line' ? (
             <Line
@@ -152,7 +260,7 @@ export function ChartSectionView({ section }: { section: ChartSection }) {
               type="monotone"
               dataKey={s.key}
               name={s.name ?? s.key}
-              stroke={s.color ?? PALETTE[i % PALETTE.length]}
+              stroke={s.color ?? color(i)}
               strokeWidth={2}
               dot={false}
               activeDot={{ r: 4 }}
@@ -164,7 +272,7 @@ export function ChartSectionView({ section }: { section: ChartSection }) {
               yAxisId="left"
               dataKey={s.key}
               name={s.name ?? s.key}
-              fill={s.color ?? PALETTE[i % PALETTE.length]}
+              fill={s.color ?? color(i)}
               radius={[4, 4, 0, 0]}
               onClick={onPointClick}
             />
@@ -176,16 +284,16 @@ export function ChartSectionView({ section }: { section: ChartSection }) {
     chart = (
       <AreaChart data={data}>
         {baseAxes}
-        <Tooltip />
-        <Legend />
+        {tooltip}
+        {legend}
         {series.map((s, i) => (
           <Area
             key={s.key}
             type="monotone"
             dataKey={s.key}
             name={s.name ?? s.key}
-            stroke={s.color ?? PALETTE[i % PALETTE.length]}
-            fill={s.color ?? PALETTE[i % PALETTE.length]}
+            stroke={s.color ?? color(i)}
+            fill={s.color ?? color(i)}
             fillOpacity={0.15}
             activeDot={{ r: 5 }}
             onClick={onPointClick}
@@ -196,11 +304,20 @@ export function ChartSectionView({ section }: { section: ChartSection }) {
   } else {
     chart = (
       <PieChart>
-        <Tooltip />
-        <Legend />
-        <Pie data={data} dataKey={firstKey} nameKey={xAxisKey} innerRadius={60} outerRadius={110} paddingAngle={2} cursor={detail ? 'pointer' : undefined} onClick={onPointClick}>
+        {tooltip}
+        {legend}
+        <Pie
+          data={data}
+          dataKey={firstKey}
+          nameKey={xAxisKey}
+          innerRadius={60}
+          outerRadius={110}
+          paddingAngle={2}
+          cursor={detail ? 'pointer' : undefined}
+          onClick={onPointClick}
+        >
           {data.map((_, i) => (
-            <Cell key={i} fill={PALETTE[i % PALETTE.length]} />
+            <Cell key={i} fill={color(i)} stroke={theme.surface} />
           ))}
         </Pie>
       </PieChart>
@@ -211,26 +328,18 @@ export function ChartSectionView({ section }: { section: ChartSection }) {
   const detailTitle = detail?.title ?? 'Детализация: {point}'
 
   return (
-    <div className={detail ? 'chart-block chart-clickable' : 'chart-block'}>
+    <div className={detail ? 'w-full [&_.recharts-wrapper]:cursor-pointer' : 'w-full'}>
       <ResponsiveContainer width="100%" height={300}>
         {chart}
       </ResponsiveContainer>
       {detail && selected && (
-        <div className="chart-detail-overlay" onClick={() => setSelected(null)}>
-          <div className="chart-detail-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="chart-detail-head">
-              <h3>{detailTitle.replace('{point}', selected)}</h3>
-              <button type="button" className="chart-detail-close" onClick={() => setSelected(null)} aria-label="Закрыть">
-                ×
-              </button>
-            </div>
-            {detailRows.length > 0 ? (
-              <TableSectionView section={{ type: 'table', columns: detail.columns, rows: detailRows } satisfies TableSection} />
-            ) : (
-              <p className="chart-detail-empty">Нет данных по точке «{selected}»</p>
-            )}
-          </div>
-        </div>
+        <Modal title={detailTitle.replace('{point}', selected)} size="lg" onClose={() => setSelected(null)}>
+          {detailRows.length > 0 ? (
+            <TableSectionView section={{ type: 'table', columns: detail.columns, rows: detailRows } satisfies TableSection} />
+          ) : (
+            <p className="py-3 text-sm text-fg-muted">Нет данных по точке «{selected}»</p>
+          )}
+        </Modal>
       )}
     </div>
   )
