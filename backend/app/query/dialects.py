@@ -23,6 +23,15 @@ class Dialect:
     def placeholder(self, name: str, type_: str = 'string') -> str:
         raise NotImplementedError
 
+    def date_bound(self, name: str, *, next_day: bool = False) -> str:
+        """Граница периода как дата.
+
+        Верхняя граница берётся следующим днём и сравнивается строго: колонка
+        может быть меткой времени, и `<= '2026-03-31'` отрезало бы весь
+        последний день, кроме полуночи.
+        """
+        raise NotImplementedError
+
     def join_settings(self) -> str:
         """Хвост запроса, нужный источнику для корректного FULL JOIN."""
         return ''
@@ -58,6 +67,10 @@ class ClickHouseDialect(Dialect):
     def placeholder(self, name: str, type_: str = 'string') -> str:
         return '{%s:%s}' % (name, self._PARAM_TYPES.get(type_, 'String'))
 
+    def date_bound(self, name: str, *, next_day: bool = False) -> str:
+        param = self.placeholder(name, 'date')
+        return f'({param} + 1)' if next_day else param
+
 
 class PostgresDialect(Dialect):
     name = 'postgres'
@@ -69,6 +82,10 @@ class PostgresDialect(Dialect):
 
     def placeholder(self, name: str, type_: str = 'string') -> str:
         return f'%({name})s'
+
+    def date_bound(self, name: str, *, next_day: bool = False) -> str:
+        param = f'%({name})s::date'
+        return f'({param} + 1)' if next_day else param
 
 
 _BY_SOURCE = {

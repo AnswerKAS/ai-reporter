@@ -8,7 +8,8 @@
 - datasets/   — реестр датасетов и адаптеры источников;
 - semantic/   — словарь метрик, разрезов и связей;
 - query/      — построитель SQL и разбор словесного ТЗ;
-- reports/    — исполнитель определений, витрина ClickHouse, сиды.
+- reports/    — исполнитель определений, файлы отчёта, витрина, сиды;
+- mail/       — почтовые серверы, расписания и отправка отчётов.
 """
 
 import os
@@ -20,6 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .api import admin as admin_api
 from .api import auth as auth_api
 from .api import datasets as datasets_api
+from .api import mail as mail_api
 from .api import reports as reports_api
 from .api import semantic as semantic_api
 from .core import database as db
@@ -60,6 +62,7 @@ app.include_router(auth_api.router)
 app.include_router(reports_api.router)
 app.include_router(datasets_api.router)
 app.include_router(semantic_api.router)
+app.include_router(mail_api.router)
 app.include_router(admin_api.router)
 
 

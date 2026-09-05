@@ -18,10 +18,10 @@ function FilterNote({ note }: { note?: string }) {
   return <p className="mb-2 text-xs text-warn">{note}</p>
 }
 
-/** Секция показала не все строки: потолок выдачи сработал.
+/** Секция показала не всё: сработал потолок строк или число серий графика.
 
-    Пометка идёт под таблицей, а не над ней: читатель дошёл до конца страниц
-    и должен понимать, что дальше данные есть, просто их не отдали. */
+    Пометка идёт под секцией, а не над ней: читатель дошёл до конца данных
+    и должен понимать, что дальше они есть, просто их не отдали. */
 function RowsNote({ note }: { note?: string }) {
   if (!note) return null
   return <p className="mt-3 text-xs text-fg-muted">{note}</p>
@@ -29,7 +29,10 @@ function RowsNote({ note }: { note?: string }) {
 
 const SECTION = 'rounded-card border border-line bg-surface p-5'
 
-export function SectionRenderer({ section }: { section: ReportSection }) {
+/** Обработчик детализации: точка (значения разрезов) и подпись для окна. */
+export type DrillHandler = (point: Record<string, string | number | null>, label: string) => void
+
+export function SectionRenderer({ section, onDrill }: { section: ReportSection; onDrill?: DrillHandler }) {
   switch (section.type) {
     case 'markdown':
       return <MarkdownSectionView content={section.content} />
@@ -37,7 +40,7 @@ export function SectionRenderer({ section }: { section: ReportSection }) {
       return (
         <>
           <FilterNote note={section.filterNote} />
-          <KpiSectionView items={section.items} />
+          <KpiSectionView items={section.items} onDrill={onDrill} />
         </>
       )
     case 'chart':
@@ -45,7 +48,8 @@ export function SectionRenderer({ section }: { section: ReportSection }) {
         <section className={SECTION}>
           <SectionTitle title={section.title} />
           <FilterNote note={section.filterNote} />
-          <ChartSectionView section={section} />
+          <ChartSectionView section={section} onDrill={onDrill} />
+          <RowsNote note={section.rowsNote} />
         </section>
       )
     case 'table':
@@ -53,7 +57,7 @@ export function SectionRenderer({ section }: { section: ReportSection }) {
         <section className={SECTION}>
           <SectionTitle title={section.title} />
           <FilterNote note={section.filterNote} />
-          <TableSectionView section={section} />
+          <TableSectionView section={section} onDrill={onDrill} />
           <RowsNote note={section.rowsNote} />
         </section>
       )

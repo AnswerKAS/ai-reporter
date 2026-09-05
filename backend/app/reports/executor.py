@@ -19,6 +19,10 @@ from ..schemas.definition import ReportDefinition, SectionDefinition
 # отчёта задаёт свой предел через `limit`; этот — на случай, когда не задал.
 MAX_SECTION_ROWS = 50_000
 
+# Серий на графике: больше десятка линий одного цвета уже не различить,
+# а разбивка по второму разрезу легко даёт сотни значений.
+MAX_CHART_SERIES = 12
+
 
 def _cell(value):
     """Значение из источника → JSON-совместимое."""
@@ -49,6 +53,9 @@ def _section_query(section: SectionDefinition, filter_values: dict,
         grain=section.grain,
         order_by=section.order_by,
         order_dir=section.order_dir,
+        # таблица с вложенными разрезами читается как дерево, поэтому строки
+        # одной группы должны идти подряд — иначе схлопывать нечего
+        group_order=section.type == 'table' and len(section.by) > 1,
         # на одну строку больше потолка: по ней и видно, что выдача обрезана
         limit=section.limit or (MAX_SECTION_ROWS + 1 if section.by else None),
         filters=filter_values,
@@ -72,15 +79,78 @@ def _kpi_section(section, metrics, data) -> dict:
     return {'type': 'kpi', 'items': items, 'dataOrigin': 'live'}
 
 
+def _sort_key(value):
+    """Порядок точек оси X: числа по величине, остальное по строке."""
+    if value is None:
+        return (2, 0.0, '')
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return (0, float(value), '')
+    return (1, 0.0, str(value))
+
+
+def _pivot(section, metrics, data, x_key: str, split_key: str) -> tuple[list[dict], list[dict], str | None]:
+    """Второй разрез графика → отдельные серии.
+
+    «Выручка по месяцам с разбивкой по городам» — это линия на город, а не
+    вторая колонка в строке. Значения второго разреза становятся сериями,
+    строки схлопываются по первому.
+
+    Серий не может быть много: на графике с полусотней линий не видно ни
+    одной, поэтому берём самые крупные, а об отброшенных говорим прямо.
+    """
+    points: dict = {}
+    totals: dict = {}
+    # ключ серии → значение второго разреза: по нему детализация понимает,
+    # какую именно линию открыл читатель
+    labels: dict = {}
+    for row in data:
+        x = row.get(x_key)
+        bucket = points.setdefault(x, {x_key: x})
+        split_value = row.get(split_key)
+        label = '—' if split_value in (None, '') else str(split_value)
+        for slug in section.metrics:
+            key = label if len(section.metrics) == 1 else f'{metrics[slug]["title"]} · {label}'
+            labels[key] = split_value
+            value = row.get(slug)
+            bucket[key] = value
+            if isinstance(value, (int, float)):
+                totals[key] = totals.get(key, 0) + abs(value)
+            else:
+                totals.setdefault(key, 0)
+
+    keys = sorted(totals, key=lambda k: -totals[k])
+    note = None
+    if len(keys) > MAX_CHART_SERIES:
+        note = (f'Показаны {MAX_CHART_SERIES} крупнейших значений разреза из {len(keys)} — '
+                'возьмите разрез покрупнее или посмотрите полную картину таблицей.')
+        keys = keys[:MAX_CHART_SERIES]
+    kept = set(keys)
+    rows = [{k: v for k, v in point.items() if k == x_key or k in kept}
+            for point in points.values()]
+    rows.sort(key=lambda r: _sort_key(r.get(x_key)))
+    return rows, [{'key': k, 'name': k} for k in keys], note, {k: labels[k] for k in keys}
+
+
 def _chart_section(section, metrics, dimensions, data) -> dict:
     x_key = section.by[0] if section.by else None
+    split_key = section.by[1] if len(section.by) > 1 else None
+    note = None
+    split_values: dict = {}
+    if x_key and split_key:
+        data, series, note, split_values = _pivot(section, metrics, data, x_key, split_key)
+    else:
+        series = [{'key': s, 'name': metrics[s]['title']} for s in section.metrics]
     return {
         'type': 'chart',
         'kind': section.kind or 'bar',
         'title': section.title or _auto_title(section, metrics, dimensions),
         'data': data,
         **({'xKey': x_key} if x_key else {}),
-        'series': [{'key': s, 'name': metrics[s]['title']} for s in section.metrics],
+        'series': series,
+        # разрезы секции и карта серий: детализация собирает по ним точку
+        **({'groupKeys': list(section.by)} if section.by else {}),
+        **({'seriesSplit': split_values} if split_values else {}),
+        **({'rowsNote': note} if note else {}),
         'dataOrigin': 'live',
     }
 
@@ -93,6 +163,11 @@ def _table_section(section, metrics, dimensions, data) -> dict:
         'type': 'table',
         'title': section.title or _auto_title(section, metrics, dimensions),
         'columns': columns,
+        # порядок разрезов — это и есть иерархия: первый родитель, следующий
+        # вложен в него. Таблица показывает её отступами и не повторяет
+        # значение родителя в каждой строке, а детализация собирает по этим
+        # ключам точку — поэтому отдаём их и когда разрез единственный
+        **({'groupKeys': list(section.by)} if section.by else {}),
         'rows': data,
         'dataOrigin': 'live',
     }
@@ -100,9 +175,11 @@ def _table_section(section, metrics, dimensions, data) -> dict:
 
 def _auto_title(section, metrics, dimensions) -> str:
     head = ', '.join(metrics[s]['title'] for s in section.metrics)
-    if section.by:
-        return f"{head} по разрезу «{dimensions[section.by[0]]['title']}»"
-    return head
+    if not section.by:
+        return head
+    names = ' и '.join('«' + dimensions[s]['title'] + '»' for s in section.by)
+    word = 'разрезу' if len(section.by) == 1 else 'разрезам'
+    return f'{head} по {word} {names}'
 
 
 def build_section(section: SectionDefinition, filter_values: dict,
@@ -125,6 +202,8 @@ def build_section(section: SectionDefinition, filter_values: dict,
         built = _chart_section(section, metrics, dimensions, data)
     else:
         built = _table_section(section, metrics, dimensions, data)
+    # ширина секции в сетке отчёта: её выбирает автор, а не вид секции
+    built['perRow'] = section.row_width
     # фильтр, который к этой секции не применился, — не мелочь: без пометки
     # читатель решит, что видит отфильтрованные числа
     skipped = getattr(query_obj, 'unapplied_filters', None)
@@ -132,7 +211,7 @@ def build_section(section: SectionDefinition, filter_values: dict,
         built['filterNote'] = 'Фильтры не применены: ' + '; '.join(skipped)
     # обрезанная выдача без пометки — это молча неполные итоги под таблицей
     if truncated:
-        built['rowsNote'] = (
+        built['rowsNote'] = ((built.get('rowsNote', '') + ' ') if built.get('rowsNote') else '') + (
             f'Показаны первые {MAX_SECTION_ROWS:,} строк — в этом разрезе их больше. '
             'Возьмите разрез покрупнее или задайте своё ограничение.'
         ).replace(',', ' ')
@@ -158,6 +237,9 @@ def build_filters(definition: ReportDefinition, filter_values: dict,
             'kind': item.kind,
             'options': [],
         }
+        if item.kind == 'daterange':
+            out.append(entry)
+            continue
         if item.kind == 'select':
             try:
                 entry['options'] = builder.distinct_values(

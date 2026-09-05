@@ -7,6 +7,7 @@
 
 import re
 from dataclasses import dataclass, field
+from datetime import date
 
 from ..datasets import registry as dataset_registry
 from ..datasets.base import DatasetError
@@ -32,6 +33,50 @@ AGGREGATES = {
     'min': 'min({f})',
     'max': 'max({f})',
 }
+
+
+# Границы периода приезжают отдельными ключами значений фильтров:
+# `<разрез>__from` и `<разрез>__to`. Так значение остаётся простой строкой —
+# и в БД отчёта, и в запросе предпросмотра.
+FILTER_OPS = {'__from': 'from', '__to': 'to'}
+
+
+def split_filter_key(key: str) -> tuple[str, str]:
+    """Ключ значения фильтра → (разрез, роль границы)."""
+    for suffix, op in FILTER_OPS.items():
+        if key.endswith(suffix):
+            return key[: -len(suffix)], op
+    return key, 'eq'
+
+
+def _valid_date(value: str) -> str | None:
+    """Дата из фильтра: только ISO-формат, иначе фильтр не применяется.
+
+    Значение приходит от пользователя; в SQL оно уходит параметром, поэтому
+    опасности нет, но кривая строка уронила бы весь отчёт ошибкой источника.
+    """
+    try:
+        return date.fromisoformat(str(value).strip()).isoformat()
+    except ValueError:
+        return None
+
+
+def filter_condition(dialect, column: str, key: str, value, type_: str) -> tuple[str, dict]:
+    """Условие одного значения фильтра: равенство или граница периода.
+
+    Одно место на всё: секцию считает построитель, сырые строки — детализация,
+    и разойтись в трактовке фильтра они не должны.
+    """
+    slug, op = split_filter_key(key)
+    name = f'f_{key}'
+    if op in ('from', 'to'):
+        day = _valid_date(value)
+        if day is None:
+            return '', {}
+        bound = dialect.date_bound(name, next_day=op == 'to')
+        return f'{column} {">=" if op == "from" else "<"} {bound}', {name: day}
+    param = dialect.placeholder(name, type_)
+    return f'{column} = {param}', {name: float(value) if type_ == 'number' else str(value)}
 
 
 def metric_alias(slug: str) -> str:
@@ -355,7 +400,8 @@ class SectionQuery:
                  limit: int | None = None, filters: dict[str, str] | None = None,
                  catalog: Catalog | None = None,
                  computed: list[dict] | None = None,
-                 fields: list[dict] | None = None) -> None:
+                 fields: list[dict] | None = None,
+                 group_order: bool = False) -> None:
         if not metrics:
             raise DatasetError('в секции не выбрано ни одной метрики')
         self.catalog = catalog or Catalog()
@@ -365,6 +411,10 @@ class SectionQuery:
         self.grain = grain
         self.order_by = order_by
         self.order_dir = 'asc' if str(order_dir).lower() == 'asc' else 'desc'
+        # иерархия читается, только когда строки одной группы идут подряд:
+        # при сортировке по метрике «Москва» встречается в выдаче десять раз
+        # вперемешку с другими городами, и схлопывать в таблице нечего
+        self.group_order = group_order
         self.limit = limit
         self.filter_values = filters or {}
 
@@ -405,9 +455,12 @@ class SectionQuery:
         # иначе фильтр молча отбрасывается — карточка KPI осталась бы
         # нефильтрованной рядом с отфильтрованной таблицей
         self.filter_dims = {}
-        for filter_slug, value in (filters or {}).items():
+        for filter_key, value in (filters or {}).items():
             if value in (None, ''):
                 continue
+            # границы периода приходят как <разрез>__from / <разрез>__to,
+            # но датасет им нужен тот же, что и самому разрезу
+            filter_slug, _ = split_filter_key(filter_key)
             found = (self.catalog.dimensions.get(filter_slug)
                      or self.local_dimensions.get(filter_slug))
             if found is not None:
@@ -495,7 +548,9 @@ class SectionQuery:
                 f'«{dim["title"]}» — у показателей {titles} нет такого разреза'
             )
             self.filter_dims.pop(slug)
-            self.filter_values = {k: v for k, v in self.filter_values.items() if k != slug}
+            # у периода два ключа значений — снимаем оба
+            self.filter_values = {k: v for k, v in self.filter_values.items()
+                                  if split_filter_key(k)[0] != slug}
         return bool(self.unapplied_filters)
 
     def _is_unique(self, slug: str, field: str) -> bool:
@@ -688,28 +743,37 @@ class SectionQuery:
     def _where_sql(self, slugs: set[str] | None = None) -> tuple[str, dict]:
         available = set(self.aliases) if slugs is None else slugs
         clauses, params = [], {}
-        for slug, value in self.filter_values.items():
+        for key, value in self.filter_values.items():
             if value in (None, ''):
                 continue
+            slug, _ = split_filter_key(key)
             dim = self.catalog.dimensions.get(slug) or self.local_dimensions.get(slug)
             if dim is None or dim['dataset_slug'] not in available:
                 continue  # фильтр не относится к этой части запроса
             alias = self.aliases[dim['dataset_slug']]
-            name = f'f_{slug}'
-            clauses.append(
-                f"{alias}.{self.dialect.quote(dim['field'])} = "
-                f'{self.dialect.placeholder(name, dim["type"])}'
-            )
-            params[name] = float(value) if dim['type'] == 'number' else str(value)
+            column = f"{alias}.{self.dialect.quote(dim['field'])}"
+            clause, extra = filter_condition(self.dialect, column, key, value, dim['type'])
+            if not clause:
+                continue  # не дата в границе периода — фильтр не применяется
+            clauses.append(clause)
+            params.update(extra)
         return ('WHERE ' + ' AND '.join(clauses) if clauses else ''), params
 
     def _order_limit_sql(self) -> str:
         sql = ''
+        parts: list[str] = []
+        dims = list(self.dimension_defs)
+        if self.group_order and len(dims) > 1:
+            # старшие разрезы задают порядок групп, внутри последнего уровня
+            # работает сортировка, выбранная автором отчёта
+            parts += [f'{self.dialect.quote(dim_alias(d))} ASC' for d in dims[:-1]]
         order = self.order_by or (next(iter(self.metric_defs)) if self.dimension_defs else None)
         if order in self.metric_defs:
-            sql += f'\nORDER BY {self.dialect.quote(metric_alias(order))} {self.order_dir.upper()}'
+            parts.append(f'{self.dialect.quote(metric_alias(order))} {self.order_dir.upper()}')
         elif order in self.dimension_defs:
-            sql += f'\nORDER BY {self.dialect.quote(dim_alias(order))} {self.order_dir.upper()}'
+            parts.append(f'{self.dialect.quote(dim_alias(order))} {self.order_dir.upper()}')
+        if parts:
+            sql += '\nORDER BY ' + ', '.join(parts)
         if self.limit:
             sql += f'\nLIMIT {int(self.limit)}'
         return sql
@@ -851,6 +915,69 @@ class SectionQuery:
         if slug in self.computed_defs:
             return self.base_defs[self.computed_defs[slug]['left']]['dataset_slug']
         return self.base_defs[slug]['dataset_slug']
+
+    # --- сырые строки (детализация) ---
+
+    def raw_datasets(self) -> list[str]:
+        """Датасеты, чьи строки имеет смысл показывать как сырьё секции.
+
+        Это держатели метрик: именно их строки сложились в число, на которое
+        смотрит читатель. Справочники в плане участвуют как путь к разрезу и
+        своих фактов не несут.
+        """
+        return list(self.metric_datasets) or self.dataset_slugs[:1]
+
+    def raw_query(self, dataset: str | None = None, *, point: dict[str, str] | None = None,
+                  limit: int = 500, offset: int = 0) -> tuple[Query, list[str]]:
+        """Строки датасета без агрегата: те же фильтры и путь, что у секции.
+
+        Точка (значения разрезов карточки, столбца или строки) сравнивается
+        тем же выражением, что стоит в GROUP BY, поэтому гранулярность даты
+        учитывается сама собой: «август» остаётся августом, а не датой.
+        """
+        holder = dataset or (self.raw_datasets()[0] if self.raw_datasets() else None)
+        if holder is None or holder not in self.aliases:
+            raise DatasetError('для этой секции нечего показать построчно')
+
+        # в плане оставляем только путь от держателя до разрезов точки:
+        # лишние таблицы строк не добавляют, но могут их размножить
+        alias = self.aliases[holder]
+        fields = _dataset_fields(self.datasets[holder])
+        if not fields:
+            raise DatasetError(
+                f'у датасета {holder} не вычитана схема — обновите её в «Датасетах»'
+            )
+        select = ', '.join(
+            f'{alias}.{self.dialect.quote(name)} AS {self.dialect.quote(name)}' for name in fields
+        )
+
+        where_sql, params = self._where_sql()
+        clauses = [where_sql[len('WHERE '):]] if where_sql else []
+        for slug, value in (point or {}).items():
+            dim = self.dimension_defs.get(slug)
+            if dim is None or value in (None, ''):
+                continue
+            name = f'p_{slug}'
+            clauses.append(f'{self._dimension_sql(slug)} = {self.dialect.placeholder(name, dim["type"])}')
+            params[name] = float(value) if dim['type'] == 'number' else str(value)
+
+        sql = f'SELECT {select}\nFROM {self._from_sql()}'
+        if clauses:
+            sql += '\nWHERE ' + ' AND '.join(clauses)
+        sql += f'\nLIMIT {int(limit)}'
+        if offset:
+            sql += f'\nOFFSET {int(offset)}'
+        return Query(sql=sql, params=params), fields
+
+    def run_raw(self, dataset: str | None = None, *, point: dict[str, str] | None = None,
+                limit: int = 500, offset: int = 0) -> tuple[list[str], list[list]]:
+        query, fields = self.raw_query(dataset, point=point, limit=limit, offset=offset)
+        try:
+            _, rows = self.catalog.adapter(self.dataset_slugs[0]).run_query(query.sql, query.params)
+        except DatasetError as exc:
+            print(f'[query] детализация не выполнена: {exc}\n{query.sql}')
+            raise DatasetError(explain_source_error(str(exc))) from exc
+        return fields, rows
 
     def build(self) -> Query:
         if self.preaggregate:

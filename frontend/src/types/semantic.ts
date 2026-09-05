@@ -43,6 +43,8 @@ export interface SectionDefinition {
   type: 'kpi' | 'chart' | 'table'
   title?: string | null
   kind?: 'bar' | 'line' | 'area' | 'pie' | 'combo' | null
+  /** Сколько секций в ряд: 1 — во всю ширину, 2 — половина. Не задано — по виду секции. */
+  perRow?: 1 | 2 | null
   metrics: string[]
   by: string[]
   grain?: Grain | null
@@ -54,7 +56,7 @@ export interface SectionDefinition {
 export interface FilterDefinition {
   dimension: string
   label?: string | null
-  kind: 'select' | 'text' | 'number'
+  kind: 'select' | 'text' | 'number' | 'daterange'
 }
 
 /** Поле, взятое автором отчёта прямо из колонки датасета. */
@@ -80,6 +82,8 @@ export interface ComputedField {
 }
 
 export interface ReportDefinition {
+  /** Детализация: сырые строки по кнопке и по клику на секцию. */
+  drilldown?: boolean
   sections: SectionDefinition[]
   filters: FilterDefinition[]
   fields?: ReportField[]

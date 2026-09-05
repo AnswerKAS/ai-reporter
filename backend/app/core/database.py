@@ -279,6 +279,52 @@ def init_db() -> None:
             )
             '''
         )
+        # --- рассылка отчётов ---
+        conn.execute(
+            '''
+            CREATE TABLE IF NOT EXISTS mail_servers (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                kind TEXT NOT NULL DEFAULT 'smtp',
+                host TEXT NOT NULL,
+                port INTEGER NOT NULL DEFAULT 587,
+                security TEXT NOT NULL DEFAULT 'starttls',
+                username TEXT,
+                password TEXT,
+                from_email TEXT NOT NULL,
+                from_name TEXT,
+                is_default BOOLEAN NOT NULL DEFAULT FALSE,
+                status TEXT NOT NULL DEFAULT 'new',
+                error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            '''
+        )
+        conn.execute(
+            '''
+            CREATE TABLE IF NOT EXISTS report_schedules (
+                id TEXT PRIMARY KEY,
+                report_slug TEXT NOT NULL,
+                author_id TEXT NOT NULL,
+                server_id TEXT,
+                recipients TEXT NOT NULL DEFAULT '[]',
+                format TEXT NOT NULL DEFAULT 'xlsx',
+                kind TEXT NOT NULL DEFAULT 'daily',
+                at_time TEXT NOT NULL DEFAULT '09:00',
+                weekday INTEGER,
+                day_of_month INTEGER,
+                run_at TEXT,
+                enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                next_run_at TEXT,
+                last_run_at TEXT,
+                last_status TEXT,
+                last_error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            '''
+        )
         conn.execute(
             '''
             CREATE TABLE IF NOT EXISTS app_meta (

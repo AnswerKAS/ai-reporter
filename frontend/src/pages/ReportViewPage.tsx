@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react'
 import { useParams, Navigate, Link, useNavigate } from 'react-router-dom'
 import type { Report } from '../types/report'
+import type { DrillPoint } from '../lib/api'
 import { ApiError, applyFilters, deleteReport, fetchReport } from '../lib/api'
-import { SectionRenderer } from '../components/SectionRenderer'
+import { SectionsGrid } from '../components/SectionsGrid'
+import { DrilldownDialog } from '../components/DrilldownDialog'
+import { ScheduleDialog } from '../components/ScheduleDialog'
 import { ReportFilters } from '../components/ReportFilters'
 import { useAuth } from '../lib/auth'
 import { useReports } from '../lib/reports'
@@ -66,6 +69,9 @@ export function ReportViewPage() {
   const [failure, setFailure] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [confirming, setConfirming] = useState(false)
+  // что открыто в детализации: сырьё датасета или точка конкретной секции
+  const [drill, setDrill] = useState<{ target: DrillPoint; title: string } | null>(null)
+  const [mailOpen, setMailOpen] = useState(false)
 
   useEffect(() => {
     if (!slug) return
@@ -156,6 +162,17 @@ export function ReportViewPage() {
         subtitle={report.description || undefined}
         actions={
           <>
+            {report.drilldown && (
+              <Button
+                variant="ghost"
+                onClick={() => setDrill({ target: {}, title: 'Сырые строки датасета' })}
+              >
+                Сырые данные
+              </Button>
+            )}
+            <Button variant="ghost" onClick={() => setMailOpen(true)}>
+              Отправка по почте
+            </Button>
             <ReportEdit report={report} />
             {isAdmin && (
               <Button variant="danger" onClick={() => setConfirming(true)}>
@@ -185,11 +202,29 @@ export function ReportViewPage() {
       {report.sections.length === 0 ? (
         <EmptyState title="В отчёте нет секций" description="В определении отчёта нет ни одной секции — добавьте их в конструкторе." />
       ) : (
-        <div className="flex flex-col gap-6">
-          {report.sections.map((section, i) => (
-            <SectionRenderer key={i} section={section} />
-          ))}
-        </div>
+        <SectionsGrid
+          sections={report.sections}
+          onDrill={
+            report.drilldown
+              ? (sectionIndex, point, label) =>
+                  setDrill({
+                    target: { sectionIndex, point },
+                    title: label ? `Строки: ${label}` : 'Строки под показателем',
+                  })
+              : undefined
+          }
+        />
+      )}
+
+      {mailOpen && slug && <ScheduleDialog slug={slug} onClose={() => setMailOpen(false)} />}
+
+      {drill && slug && (
+        <DrilldownDialog
+          slug={slug}
+          target={drill.target}
+          title={drill.title}
+          onClose={() => setDrill(null)}
+        />
       )}
 
       {confirming && (

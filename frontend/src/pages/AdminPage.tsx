@@ -16,6 +16,7 @@ import {
   fetchReports,
 } from '../lib/api'
 import { useAuth } from '../lib/auth'
+import { MailServersPanel } from '../components/MailServersPanel'
 import {
   Alert,
   Button,
@@ -78,13 +79,15 @@ export function AdminPage() {
 
   return (
     <Page>
-      <PageHeader title="Администрирование" subtitle="Пользователи, группы и назначение отчётов." />
+      <PageHeader title="Администрирование" subtitle="Почтовые серверы, пользователи, группы и назначение отчётов." />
       {error && <Alert className="mb-4">{error}</Alert>}
       {notice && (
         <Alert tone="success" className="mb-4">
           {notice}
         </Alert>
       )}
+
+      <MailServersPanel />
 
       <div className="mb-6 grid grid-cols-[repeat(auto-fit,minmax(340px,1fr))] gap-4">
         <UsersPanel users={users} onChanged={reload} onFail={fail} onNotice={setNotice} />

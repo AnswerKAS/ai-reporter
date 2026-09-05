@@ -1,5 +1,13 @@
 import type { Report, ReportMeta } from '../types/report'
-import type { AccessEntry, Group, User } from '../types/user'
+import type {
+  AccessEntry,
+  Group,
+  MailServer,
+  MailServerInput,
+  ReportSchedule,
+  ScheduleInput,
+  User,
+} from '../types/user'
 import type { Dataset, DatasetCreateInput, DatasetDetail } from '../types/dataset'
 import type {
   ComputedField,
@@ -316,6 +324,133 @@ export async function uploadDatasetCsv(slug: string, file: File): Promise<{ data
     body: form,
   })
   return json
+}
+
+// --- рассылка отчётов ---
+
+export async function fetchMailServers(): Promise<{ servers: MailServer[]; presets: Record<string, { host: string; port: number; security: string }> }> {
+  return await request('/admin/mail-servers')
+}
+
+export async function createMailServer(input: MailServerInput): Promise<MailServer> {
+  const json = await request<{ server: MailServer }>('/admin/mail-servers', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  return json.server
+}
+
+export async function patchMailServer(id: string, patch: Partial<MailServerInput>): Promise<MailServer> {
+  const json = await request<{ server: MailServer }>(`/admin/mail-servers/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  })
+  return json.server
+}
+
+export async function testMailServer(id: string, to: string): Promise<MailServer> {
+  const json = await request<{ server: MailServer }>(`/admin/mail-servers/${id}/test`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ to }),
+  })
+  return json.server
+}
+
+export async function deleteMailServer(id: string): Promise<void> {
+  await request(`/admin/mail-servers/${id}`, { method: 'DELETE' })
+}
+
+export async function fetchSchedules(
+  slug: string,
+): Promise<{ schedules: ReportSchedule[]; servers: { id: string; title: string; isDefault: boolean }[] }> {
+  return await request(`/reports/${slug}/schedules`)
+}
+
+export async function createSchedule(slug: string, input: ScheduleInput): Promise<ReportSchedule> {
+  const json = await request<{ schedule: ReportSchedule }>(`/reports/${slug}/schedules`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  return json.schedule
+}
+
+export async function patchSchedule(
+  slug: string,
+  id: string,
+  patch: Partial<ScheduleInput>,
+): Promise<ReportSchedule> {
+  const json = await request<{ schedule: ReportSchedule }>(`/reports/${slug}/schedules/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  })
+  return json.schedule
+}
+
+export async function sendScheduleNow(slug: string, id: string): Promise<ReportSchedule> {
+  const json = await request<{ schedule: ReportSchedule }>(`/reports/${slug}/schedules/${id}/send`, {
+    method: 'POST',
+  })
+  return json.schedule
+}
+
+export async function deleteSchedule(slug: string, id: string): Promise<void> {
+  await request(`/reports/${slug}/schedules/${id}`, { method: 'DELETE' })
+}
+
+// --- детализация отчёта ---
+
+export interface DrillPoint {
+  sectionIndex?: number
+  datasetSlug?: string
+  point?: Record<string, string | number | null>
+}
+
+export interface DrillPage {
+  dataset: string
+  title: string
+  datasets: { slug: string; title: string }[]
+  columns: string[]
+  rows: Record<string, unknown>[]
+  offset: number
+  hasMore: boolean
+}
+
+export async function fetchDrilldown(
+  slug: string,
+  body: DrillPoint & { limit?: number; offset?: number },
+): Promise<DrillPage> {
+  return await request<DrillPage>(`/reports/${slug}/drilldown`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+}
+
+/** Выгрузка детализации в Excel: файл приходит потоком, поэтому мимо request(). */
+export async function exportDrilldown(slug: string, body: DrillPoint): Promise<Blob> {
+  const res = await fetch(`${BASE}/reports/${slug}/drilldown.xlsx`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}),
+    },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`
+    try {
+      detail = ((await res.json()) as { detail?: string }).detail ?? detail
+    } catch {
+      // тело не json — оставляем код ответа
+    }
+    throw new ApiError(res.status, detail)
+  }
+  return await res.blob()
 }
 
 // --- семантический слой и конструктор отчётов ---

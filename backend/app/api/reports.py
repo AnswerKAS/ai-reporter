@@ -7,7 +7,7 @@
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from starlette.concurrency import run_in_threadpool
 
 from ..core import database as db
@@ -16,7 +16,8 @@ from ..schemas.report import FiltersPatch, ReportMeta, ReportUpdate
 from ..datasets.base import DatasetError
 from ..query import builder as query_builder
 from ..query import interpret
-from ..reports import executor
+from ..mail import registry as mail_registry
+from ..reports import drilldown, executor
 from ..schemas.definition import ReportDefinition
 
 router = APIRouter(prefix='/api', tags=['reports'])
@@ -179,6 +180,8 @@ async def _render(report: dict, slug: str) -> dict:
     payload['sections'] = spec['sections']
     payload['filters'] = spec.get('filters') or []
     payload['dataOrigin'] = spec.get('dataOrigin')
+    # включена ли детализация — знает определение, а рисует страница отчёта
+    payload['drilldown'] = bool(definition.get('drilldown'))
     return payload
 
 
@@ -217,7 +220,71 @@ def delete_report(slug: str, user: dict = Depends(require_admin)) -> dict:
     if report is None:
         raise HTTPException(404, 'отчёт не найден')
     db.delete_report(slug)
+    # рассылки удалённого отчёта отправлять нечем
+    mail_registry.delete_report_schedules(slug)
     return {'ok': True}
+
+
+def _drilldown_args(payload: dict) -> dict:
+    """Разбирает запрос детализации: секция и точка либо датасет целиком."""
+    section = payload.get('sectionIndex')
+    point = {str(k): v for k, v in (payload.get('point') or {}).items() if v not in (None, '')}
+    return {
+        'section_index': int(section) if section is not None else None,
+        'dataset_slug': payload.get('datasetSlug') or None,
+        'point': point,
+    }
+
+
+async def _drilldown_context(slug: str, user: dict) -> tuple[dict, dict]:
+    _check_access(user, slug)
+    report = await _db(db.get_report, slug)
+    if report is None:
+        raise HTTPException(404, 'отчёт не найден')
+    definition = await _db(db.get_definition, slug)
+    if definition is None:
+        raise HTTPException(409, 'у отчёта нет определения')
+    return report, definition
+
+
+@router.post('/reports/{slug}/drilldown')
+async def report_drilldown(slug: str, payload: dict, user: dict = Depends(get_current_user)) -> dict:
+    """Сырые строки под отчётом: по датасету целиком или под точкой секции.
+
+    Читателю с доступом к отчёту доступны и строки, из которых он посчитан:
+    иначе проверить цифру нечем. Выключается автором отчёта (`drilldown`).
+    """
+    report, definition = await _drilldown_context(slug, user)
+    args = _drilldown_args(payload)
+    limit = min(int(payload.get('limit') or drilldown.PAGE_LIMIT), drilldown.PAGE_LIMIT)
+    try:
+        return await run_in_threadpool(
+            drilldown.fetch, definition,
+            filter_values=report.get('filter_values') or {},
+            limit=limit, offset=max(int(payload.get('offset') or 0), 0), **args,
+        )
+    except DatasetError as exc:
+        raise HTTPException(422, str(exc))
+
+
+@router.post('/reports/{slug}/drilldown.xlsx')
+async def report_drilldown_export(slug: str, payload: dict,
+                                  user: dict = Depends(get_current_user)) -> Response:
+    """Та же выборка файлом для Excel — до потолка выгрузки."""
+    report, definition = await _drilldown_context(slug, user)
+    try:
+        data = await run_in_threadpool(
+            drilldown.export_xlsx, definition,
+            filter_values=report.get('filter_values') or {}, **_drilldown_args(payload),
+        )
+    except DatasetError as exc:
+        raise HTTPException(422, str(exc))
+    name = f'{slug}-detail.xlsx'
+    return Response(
+        data,
+        media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition': f'attachment; filename="{name}"'},
+    )
 
 
 @router.post('/reports/{slug}/filters')

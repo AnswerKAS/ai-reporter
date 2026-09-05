@@ -117,6 +117,15 @@ cd backend && .venv/bin/python -c "import app.main; print('backend import ok')"
 - Конструктор (`/builder`): шаг «Данные» (датасеты, показатели, разрезы, свои
   поля из колонок, формулы) → шаг «Раскладка» (секции перетаскиванием или
   кликом) → живой предпросмотр `POST /api/reports/preview`.
+- Группировка: до 5 разрезов в таблице, до 2 в графике (первый — ось, второй
+  разворачивается в серии, не больше 12 крупнейших — остальное пометкой),
+  KPI без разрезов. Разрезы таблицы — иерархия: секция отдаёт `groupKeys`,
+  строки сортируются сначала по старшим разрезам (`group_order` в
+  `SectionQuery`), а `TableSectionView` показывает вложенность отступами и
+  заливкой колонок-родителей (токены `--group-level-1/2` в `theme.css`) и не
+  повторяет значение родителя в каждой строке. Потолки — `schemas/definition.py` (`MAX_GROUP_BY`,
+  `MAX_CHART_BY`) и `byLimit()` в конструкторе; лишнее отсекается при смене
+  вида секции.
 - Свои поля и формулы живут внутри отчёта и общий словарь не меняют: колонка
   сверяется со схемой датасета, действие — со списком (`sum`, `count`,
   `count_distinct`, `avg`, `min`, `max`), SQL пользователь не пишет.
@@ -129,9 +138,16 @@ cd backend && .venv/bin/python -c "import app.main; print('backend import ok')"
 
 ## Фильтры и реалтайм
 
-Фильтры объявляются в определении (`filters: [{dimension, label, kind}]`);
-значения select построитель берёт запросом DISTINCT, а сами значения уходят
-в SQL параметрами диалекта. Значения хранятся в БД (`filters`, JSON).
+Фильтры объявляются в определении (`filters: [{dimension, label, kind}]`,
+kind — `select` | `text` | `number` | `daterange`); значения select построитель
+берёт запросом DISTINCT, а сами значения уходят в SQL параметрами диалекта.
+Значения хранятся в БД (`filters`, JSON).
+
+- Разрез типа `date` даёт фильтр-период: границы приезжают ключами
+  `<разрез>__from` и `<разрез>__to` (пусто = без ограничения), верхняя
+  сравнивается строго со следующим днём — иначе метки времени последнего дня
+  выпадали бы из периода. Не-дата в границе игнорируется
+  (`query/builder.py:split_filter_key`, `_valid_date`, `dialects.date_bound`).
 
 - `POST /api/reports/{slug}/filters` `{values: {region: "Москва"}}` — сохранить
   значения и сразу пересчитать отчёт; возвращает свежий `report`.
@@ -157,6 +173,22 @@ cd backend && .venv/bin/python -c "import app.main; print('backend import ok')"
 - Admin API: `/api/admin/users` (+`/{id}`, `/{id}/password`),
   `/api/admin/groups` (+`/{id}/members`), `/api/admin/access` (назначение
   отчёта пользователю ИЛИ группе), `/api/admin/access/{slug}` — список.
+- Рассылка отчётов: `app/mail/registry.py` (серверы и расписания), `app/mail/sender.py`
+  (сборка письма и SMTP), `reports/render.py` (xlsx/pdf), планировщик — в
+  `services/worker.py` (проверка раз в минуту). Админ заводит серверы в
+  `/api/admin/mail-servers` (пароль наружу не отдаётся), сотрудник — рассылки в
+  `/api/reports/{slug}/schedules`. Внешний адрес для ссылки в письме — `PUBLIC_BASE_URL`.
+- Детализация (`drilldown` в определении): `reports/drilldown.py` + эндпоинты
+  `POST /api/reports/{slug}/drilldown` и `/drilldown.xlsx`; строки берёт
+  `SectionQuery.run_raw` (тот же план и фильтры, точка сравнивается выражением
+  из GROUP BY) либо `dataset_rows` для датасета целиком. Страница — 500 строк
+  с признаком `hasMore`, выгрузка — openpyxl до `EXPORT_LIMIT`. На фронте —
+  `components/DrilldownDialog.tsx`, клики раздаёт `SectionRenderer`.
+- Сетка отчёта — `components/SectionsGrid.tsx`: ширину секции задаёт её
+  `perRow` (1 — весь ряд, 2 — половина; без него дефолт по виду секции —
+  `PER_ROW_DEFAULT` в `schemas/definition.py` и в конструкторе), карточки KPI
+  до пяти в ряд; ступени считаются по ширине контейнера (`@container`),
+  поэтому предпросмотр конструктора сам сворачивается в одну колонку.
 - Фронт: `/login`, `/reports`, `/reports/<slug>`, `/builder` и
   `/builder/<slug>`, `/datasets`, `/model` (админ), `/account` (свои отчёты +
   смена пароля), `/admin` (пользователи, группы, назначения).

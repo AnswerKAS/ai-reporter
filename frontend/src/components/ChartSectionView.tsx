@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import {
   Area,
   AreaChart,
@@ -137,28 +137,94 @@ function ChartLegend({ payload, theme }: { payload?: Array<{ value?: string; col
   )
 }
 
-function pointValue(arg: unknown, xAxisKey: string): string | null {
+function pointValue(arg: unknown, xAxisKey: string, data?: ChartPoint[]): string | null {
   if (!arg || typeof arg !== 'object') return null
   const obj = arg as Record<string, unknown>
-  const row = (obj.payload && typeof obj.payload === 'object' ? obj.payload : obj) as Partial<ChartPoint>
-  const value = row[xAxisKey] ?? obj.name
+  // клик по элементу серии несёт саму точку в payload; клик по площади графика
+  // отдаёт только состояние графика, и точку там находит индекс активной оси
+  const active = Array.isArray(obj.activePayload) ? obj.activePayload[0] : null
+  const byIndex =
+    data && typeof obj.activeIndex !== 'undefined' && obj.activeIndex !== null
+      ? data[Number(obj.activeIndex)]
+      : null
+  const source =
+    (obj.payload && typeof obj.payload === 'object' ? obj.payload : null) ??
+    (active && typeof active === 'object' ? (active as Record<string, unknown>).payload : null) ??
+    byIndex ??
+    obj
+  const row = source as Partial<ChartPoint>
+  const value = row[xAxisKey] ?? obj.activeLabel ?? obj.name
   return value === undefined || value === null ? null : String(value)
 }
 
-export function ChartSectionView({ section }: { section: ChartSection }) {
-  const { kind, data, xKey, series, detail } = section
+export function ChartSectionView({
+  section,
+  onDrill,
+}: {
+  section: ChartSection
+  onDrill?: (point: Record<string, string | number | null>, label: string) => void
+}) {
+  const { kind, data, xKey, series, detail, groupKeys, seriesSplit } = section
   const [selected, setSelected] = useState<string | null>(null)
   const theme = useChartTheme()
   const xAxisKey = xKey ?? 'name'
   const firstKey = series[0]?.key
 
-  const onPointClick = (arg: unknown) => {
-    if (!detail) return
-    const value = pointValue(arg, xAxisKey)
-    if (value) setSelected(value)
+  // клик по самой линии уже обработан: контейнерный обработчик нужен лишь
+  // как подстраховка для промаха мимо кривой, и дублировать его не должен
+  const handled = useRef(0)
+
+  /** Клик по точке: детализация из спеки — если она есть, иначе сырые строки.
+
+      У точки известен разрез оси; если график разбит на серии, второй разрез
+      берётся по ключу серии — карту прислал исполнитель. */
+  const onPointClick = (arg: unknown, seriesKey?: string) => {
+    if (seriesKey !== undefined) handled.current = Date.now()
+    const value = pointValue(arg, xAxisKey, data)
+    if (detail) {
+      if (value) setSelected(value)
+      return
+    }
+    if (!onDrill || !value) return
+    const point: Record<string, string | number | null> = {}
+    if (groupKeys?.[0]) point[groupKeys[0]] = value
+    const split = seriesKey !== undefined ? seriesSplit?.[seriesKey] : undefined
+    if (groupKeys?.[1] && split !== undefined) point[groupKeys[1]] = split
+    // в подписи только значения разрезов: ключ серии без разбивки — это имя
+    // метрики, и в заголовке окна оно ничего не объясняет
+    onDrill(point, [value, split].filter((v) => v != null && v !== '').join(' · '))
+  }
+
+
+  /** Клик по площади графика: линию мышью не поймать, а вертикаль — легко.
+
+      Recharts отдаёт здесь ближайшую точку оси; серию в этом случае не знаем,
+      поэтому детализация ограничивается разрезом оси. */
+  const onChartClick = (arg: unknown) => {
+    if (Date.now() - handled.current < 150) return
+    onPointClick(arg)
   }
 
   const color = (i: number) => theme.palette[i % theme.palette.length]
+
+  /** Точка линии как цель клика.
+
+      Обработчик висит на самом кружке: клик по нему до линии не всплывает,
+      а попасть мышью в кривую толщиной два пикселя — задача не для читателя. */
+  const drillDot = (seriesKey: string, fill: string) =>
+    function DrillDot({ cx, cy, payload }: { cx?: number; cy?: number; payload?: ChartPoint }) {
+      if (cx === undefined || cy === undefined) return null
+      return (
+        <circle
+          cx={cx}
+          cy={cy}
+          r={3}
+          fill={fill}
+          className="cursor-pointer"
+          onClick={() => onPointClick({ payload }, seriesKey)}
+        />
+      )
+    }
 
   const tooltip = <Tooltip content={<ChartTooltip theme={theme} />} cursor={{ fill: theme.grid, fillOpacity: 0.35 }} />
   const legend = <Legend content={<ChartLegend theme={theme} />} />
@@ -195,14 +261,14 @@ export function ChartSectionView({ section }: { section: ChartSection }) {
             fill={s.color ?? color(i)}
             radius={[4, 4, 0, 0]}
             cursor={detail ? 'pointer' : undefined}
-            onClick={onPointClick}
+            onClick={(arg: unknown) => onPointClick(arg, s.key)}
           />
         ))}
       </BarChart>
     )
   } else if (kind === 'line') {
     chart = (
-      <LineChart data={data}>
+      <LineChart data={data} onClick={onChartClick}>
         {baseAxes}
         {tooltip}
         {legend}
@@ -214,9 +280,9 @@ export function ChartSectionView({ section }: { section: ChartSection }) {
             name={s.name ?? s.key}
             stroke={s.color ?? color(i)}
             strokeWidth={2}
-            dot={false}
+            dot={onDrill ? drillDot(s.key, s.color ?? color(i)) : false}
             activeDot={{ r: 5 }}
-            onClick={onPointClick}
+            onClick={(arg: unknown) => onPointClick(arg, s.key)}
           />
         ))}
       </LineChart>
@@ -262,9 +328,9 @@ export function ChartSectionView({ section }: { section: ChartSection }) {
               name={s.name ?? s.key}
               stroke={s.color ?? color(i)}
               strokeWidth={2}
-              dot={false}
+              dot={onDrill ? drillDot(s.key, s.color ?? color(i)) : false}
               activeDot={{ r: 4 }}
-              onClick={onPointClick}
+              onClick={(arg: unknown) => onPointClick(arg, s.key)}
             />
           ) : (
             <Bar
@@ -274,7 +340,7 @@ export function ChartSectionView({ section }: { section: ChartSection }) {
               name={s.name ?? s.key}
               fill={s.color ?? color(i)}
               radius={[4, 4, 0, 0]}
-              onClick={onPointClick}
+              onClick={(arg: unknown) => onPointClick(arg, s.key)}
             />
           ),
         )}
@@ -282,7 +348,7 @@ export function ChartSectionView({ section }: { section: ChartSection }) {
     )
   } else if (kind === 'area') {
     chart = (
-      <AreaChart data={data}>
+      <AreaChart data={data} onClick={onChartClick}>
         {baseAxes}
         {tooltip}
         {legend}
@@ -295,8 +361,9 @@ export function ChartSectionView({ section }: { section: ChartSection }) {
             stroke={s.color ?? color(i)}
             fill={s.color ?? color(i)}
             fillOpacity={0.15}
+            dot={onDrill ? drillDot(s.key, s.color ?? color(i)) : false}
             activeDot={{ r: 5 }}
-            onClick={onPointClick}
+            onClick={(arg: unknown) => onPointClick(arg, s.key)}
           />
         ))}
       </AreaChart>
@@ -313,8 +380,8 @@ export function ChartSectionView({ section }: { section: ChartSection }) {
           innerRadius={60}
           outerRadius={110}
           paddingAngle={2}
-          cursor={detail ? 'pointer' : undefined}
-          onClick={onPointClick}
+          cursor={detail || onDrill ? 'pointer' : undefined}
+          onClick={(arg: unknown) => onPointClick(arg, firstKey)}
         >
           {data.map((_, i) => (
             <Cell key={i} fill={color(i)} stroke={theme.surface} />
@@ -328,7 +395,7 @@ export function ChartSectionView({ section }: { section: ChartSection }) {
   const detailTitle = detail?.title ?? 'Детализация: {point}'
 
   return (
-    <div className={detail ? 'w-full [&_.recharts-wrapper]:cursor-pointer' : 'w-full'}>
+    <div className={detail || onDrill ? 'w-full [&_.recharts-wrapper]:cursor-pointer' : 'w-full'}>
       <ResponsiveContainer width="100%" height={300}>
         {chart}
       </ResponsiveContainer>

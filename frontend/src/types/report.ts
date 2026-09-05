@@ -31,6 +31,8 @@ export interface ChartDetail {
 export interface MarkdownSection {
   type: 'markdown'
   content: string
+  /** Ширина секции в сетке отчёта. */
+  perRow?: PerRow
 }
 
 export interface KpiSection {
@@ -38,6 +40,8 @@ export interface KpiSection {
   items: KpiItem[]
   /** Фильтр отчёта, который к этой секции неприменим. */
   filterNote?: string
+  /** Ширина секции в сетке отчёта. */
+  perRow?: PerRow
 }
 
 export interface ChartSection {
@@ -48,7 +52,15 @@ export interface ChartSection {
   xKey?: string
   series: ChartSeries[]
   detail?: ChartDetail
+  /** Разрезы секции в порядке вложенности — по ним собирается точка детализации. */
+  groupKeys?: string[]
+  /** Ключ серии → значение второго разреза (для детализации по клику). */
+  seriesSplit?: Record<string, string | number | null>
   filterNote?: string
+  /** Показаны не все серии разбивки — их было больше потолка. */
+  rowsNote?: string
+  /** Ширина секции в сетке отчёта. */
+  perRow?: PerRow
 }
 
 export interface TableColumn {
@@ -62,10 +74,17 @@ export interface TableSection {
   title?: string
   columns: TableColumn[]
   rows: Record<string, unknown>[]
+  /** Разрезы группировки в порядке вложенности: первый родитель, дальше потомки. */
+  groupKeys?: string[]
   filterNote?: string
   /** Выдача обрезана потолком строк — читатель должен знать, что видит часть. */
   rowsNote?: string
+  /** Ширина секции в сетке отчёта. */
+  perRow?: PerRow
 }
+
+/** Сколько таких секций встаёт в ряд: 1 — во всю ширину, 2 — половина. */
+export type PerRow = 1 | 2
 
 export type ReportSection =
   | MarkdownSection
@@ -76,7 +95,8 @@ export type ReportSection =
 export interface ReportFilter {
   key: string
   label: string
-  kind: 'select' | 'number' | 'text'
+  /** daterange — период «с — по»: значения приходят ключами `<key>__from` и `<key>__to`. */
+  kind: 'select' | 'number' | 'text' | 'daterange'
   options: string[]
   default?: string | number | null
 }
@@ -91,6 +111,8 @@ export interface Report {
   updatedAt: string
   filters?: ReportFilter[]
   filterValues?: Record<string, string>
+  /** Детализация включена автором: клики по секциям открывают сырые строки. */
+  drilldown?: boolean
   sections: ReportSection[]
 }
 

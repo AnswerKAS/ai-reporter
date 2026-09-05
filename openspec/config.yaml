@@ -14,7 +14,8 @@ context: |
   - Конструктор отчётов: ReportDefinition (schemas/definition.py) → query/builder.py → reports/executor.py → ReportSpec; словарь метрик/разрезов/связей — semantic/registry.py.
   - Словесное ТЗ: query/interpret.py (модель выбирает только из словаря) с откатом на детерминированный парсер query/phrase.py.
   - Артефакты: фасад services/storage.py (local-режим, ARTIFACTS_DIR; S3-реализация запланирована) — загруженные CSV-датасеты.
-  - Фон: services/worker.py — только уборка просроченных сессий; сборок отчётов нет.
+  - Фон: services/worker.py — рассылка отчётов по расписанию и уборка просроченных сессий; сборок отчётов нет.
+  - Почта: app/mail/{registry,sender}.py, файлы отчёта — reports/render.py (xlsx через openpyxl, pdf через reportlab + matplotlib).
 
   Возможности (openspec/specs/):
   - platform — приложение, метабаза, конфигурация, воркер, деплой;
@@ -25,6 +26,7 @@ context: |
   - report-builder — конструктор отчёта-декларации;
   - nl-parsing — словесное ТЗ → декларация;
   - reports — жизненный цикл отчёта и контракт ReportSpec;
+  - mail-delivery — почтовые серверы и рассылка отчётов по расписанию;
   - artifacts — хранилище загруженных файлов;
   - web-ui — оболочка интерфейса, темы, страница отчёта.
 

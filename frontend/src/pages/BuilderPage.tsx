@@ -28,7 +28,7 @@ import {
   saveDefinition,
   updateReport,
 } from '../lib/api'
-import { SectionRenderer } from '../components/SectionRenderer'
+import { SectionsGrid } from '../components/SectionsGrid'
 import { ReportFilters } from '../components/ReportFilters'
 import { Alert, Button, Field, Input, Modal, Page, PageHeader, Select, SkeletonRows, Textarea } from '../components/ui'
 import { cn } from '../lib/cn'
@@ -49,6 +49,30 @@ const CHART_KINDS = [
   { value: 'area', label: 'область' },
   { value: 'pie', label: 'круговая' },
 ] as const
+
+// Потолки группировки те же, что и на бэкенде: таблица читается по строкам,
+// а график разворачивает второй разрез в серии — третьему места нет.
+const MAX_GROUP_BY = 5
+const MAX_CHART_BY = 2
+
+/** Сколько секций встаёт в ряд, если автор не выбирал: график — половинный,
+    карточки и таблица — во всю ширину (как и рисует сетка отчёта). */
+const DEFAULT_PER_ROW: Record<SectionDefinition['type'], 1 | 2> = { chart: 2, kpi: 1, table: 1 }
+
+/** Селекты в шапке секции: та же типографика и рамка, что у прочих контролов,
+    но по ширине содержимого — в строке рядом с ними ещё ручка переноса,
+    стрелки порядка и кнопка удаления. */
+const SECTION_SELECT = 'px-2 py-1.5'
+
+const PER_ROW_OPTIONS = [
+  { value: 1, label: 'вся ширина' },
+  { value: 2, label: 'половина' },
+] as const
+
+function byLimit(type: SectionDefinition['type']): number {
+  if (type === 'kpi') return 0
+  return type === 'chart' ? MAX_CHART_BY : MAX_GROUP_BY
+}
 
 const SECTION_TYPES = [
   { value: 'kpi', label: 'Карточки KPI' },
@@ -201,6 +225,8 @@ export function BuilderPage() {
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [reportSlug, setReportSlug] = useState('')
+  // детализация: сырые строки по кнопке и по клику на секцию
+  const [drilldown, setDrilldown] = useState(false)
   const [preview, setPreview] = useState<Report | null>(null)
   const [previewError, setPreviewError] = useState<string | null>(null)
   // фильтр надо уметь проверить до сохранения, иначе он выглядит нерабочим
@@ -296,6 +322,7 @@ export function BuilderPage() {
         setComputed(formulas)
         setSections(def.sections.length ? def.sections : [emptySection()])
         setFilters(def.filters ?? [])
+        setDrilldown(Boolean(def.drilldown))
         setStep(2)
       })
       .catch((err) =>
@@ -358,22 +385,23 @@ export function BuilderPage() {
       dimensions: [
         ...availableDimensions
           .filter((d) => d.datasetSlug === slug)
-          .map((d) => ({ key: d.slug, title: d.title, own: false, hint: `${slug}.${d.field}` })),
+          .map((d) => ({ key: d.slug, title: d.title, own: false, type: d.type, hint: `${slug}.${d.field}` })),
         ...ownDimensions
           .filter((f) => f.datasetSlug === slug)
-          .map((f) => ({ key: f.key, title: f.title, own: true, hint: `${slug}.${f.field}` })),
+          .map((f) => ({ key: f.key, title: f.title, own: true, type: f.type, hint: `${slug}.${f.field}` })),
       ],
     }))
   }, [availableMetrics, ownMetrics, availableDimensions, ownDimensions, datasetTitle])
 
   const definition = useMemo<ReportDefinition>(
     () => ({
+      drilldown,
       sections: sections.filter((s) => s.metrics.length > 0),
       filters,
       fields: ownFields,
       computed,
     }),
-    [sections, filters, ownFields, computed],
+    [drilldown, sections, filters, ownFields, computed],
   )
 
   /** Разрез подходит секции, только если он из датасета её показателей. */
@@ -493,7 +521,7 @@ export function BuilderPage() {
     )
   }
 
-  /** Положить разрез в секцию.
+  /** Положить разрез в секцию (группировка — до пяти полей).
 
       drop и клик ведут себя по-разному намеренно: щелчок по уже выбранному
       разрезу снимает его, а перетаскивание — всегда кладёт. «Бросить, чтобы
@@ -514,16 +542,45 @@ export function BuilderPage() {
       })
       return
     }
-    setDropNote(null)
     if (section.type === 'kpi') {
       if (!byDrag) return
+      setDropNote(null)
       patchSection(index, { type: 'chart', kind: 'bar', by: [dimensionSlug], grain: null })
       return
     }
-    patchSection(index, {
-      by: byDrag || section.by[0] !== dimensionSlug ? [dimensionSlug] : [],
-      grain: null,
-    })
+    if (section.by.includes(dimensionSlug)) {
+      // повторный щелчок снимает разрез; перетаскивание уже выбранного — не действие
+      if (!byDrag) removeDimension(index, dimensionSlug)
+      return
+    }
+    const limit = byLimit(section.type)
+    if (section.by.length >= limit) {
+      setDropNote({
+        index,
+        text:
+          section.type === 'chart'
+            ? `в графике не больше ${MAX_CHART_BY} разрезов: первый — ось, второй — разбивка на серии. ` +
+              'Для более дробной группировки переключите секцию в таблицу'
+            : `в секции не больше ${MAX_GROUP_BY} разрезов группировки`,
+      })
+      return
+    }
+    setDropNote(null)
+    patchSection(index, { by: [...section.by, dimensionSlug] })
+  }
+
+  const removeDimension = (index: number, dimensionSlug: string) => {
+    setSections((prev) =>
+      prev.map((s, i) => {
+        if (i !== index) return s
+        const by = s.by.filter((b) => b !== dimensionSlug)
+        // шаг по дате нужен, только пока в разрезах есть дата
+        const grain = by.some((b) => dimensionInfo(b)?.type === 'date') ? s.grain : null
+        // сортировка по убранному разрезу больше не существует
+        const orderBy = s.orderBy === dimensionSlug ? null : s.orderBy
+        return { ...s, by, grain, orderBy }
+      }),
+    )
   }
 
   const moveSection = (from: number, to: number) => {
@@ -738,6 +795,22 @@ export function BuilderPage() {
             {!editing && (
               <Field label="Адрес (необязательно)">                <Input value={reportSlug} onChange={(e) => setReportSlug(e.target.value)} placeholder="sales-by-city" /></Field>
             )}
+            {/* детализация даёт читателю сырые строки источника — это решение
+                автора отчёта, а не настройка по умолчанию */}
+            <label className="flex max-w-72 cursor-pointer items-start gap-2 self-end pb-1.5 text-sm">
+              <input
+                type="checkbox"
+                className="mt-0.5 cursor-pointer"
+                checked={drilldown}
+                onChange={(e) => setDrilldown(e.target.checked)}
+              />
+              <span>
+                Детализация
+                <span className="block text-xs text-fg-muted">
+                  кнопка сырых строк и раскрытие по клику на карточку, график или строку
+                </span>
+              </span>
+            </label>
           </div>
 
           <div className="mt-4 grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(190px,230px)_minmax(0,1fr)] xl:grid-cols-[minmax(190px,230px)_minmax(300px,380px)_minmax(0,1fr)]">
@@ -830,21 +903,33 @@ export function BuilderPage() {
                 {palette.flatMap((group) =>
                   group.dimensions.map((d) => {
                     const on = filters.some((f) => f.dimension === d.key)
+                    // по дате фильтруют периодом: список всех дат в выпадающем
+                    // списке читателю бесполезен
+                    const kind = d.type === 'date' ? 'daterange' : 'select'
                     return (
                       <button
                         key={d.key}
                         className={cn(CHIP, on && CHIP_ON)}
-                        title={`${group.title} · ${d.hint}`}
+                        title={`${group.title} · ${d.hint}${kind === 'daterange' ? ' · период с — по' : ''}`}
                         onClick={() => {
-                          if (on) setPreviewFilters(({ [d.key]: _drop, ...rest }) => rest)
+                          if (on)
+                            // у периода два ключа значений — снимаем оба
+                            setPreviewFilters((prev) =>
+                              Object.fromEntries(
+                                Object.entries(prev).filter(
+                                  ([k]) => k !== d.key && !k.startsWith(`${d.key}__`),
+                                ),
+                              ),
+                            )
                           setFilters((prev) =>
                             on
                               ? prev.filter((f) => f.dimension !== d.key)
-                              : [...prev, { dimension: d.key, kind: 'select' }],
+                              : [...prev, { dimension: d.key, kind }],
                           )
                         }}
                       >
                         {d.title}
+                        {kind === 'daterange' && <span className="ml-1.5 text-[10px] opacity-70">период</span>}
                       </button>
                     )
                   }),
@@ -858,7 +943,6 @@ export function BuilderPage() {
 
             <div className="flex flex-col gap-3">
               {sections.map((section, index) => {
-                const dimension = section.by[0] ? dimensionInfo(section.by[0]) : null
                 const active = dropTarget === index
                 const rejects =
                   active &&
@@ -880,7 +964,7 @@ export function BuilderPage() {
                     onDragLeave={() => setDropTarget((prev) => (prev === index ? null : prev))}
                     onDrop={(e) => onDropToSection(e, index)}
                   >
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
                       <span
                         className="cursor-grab px-0.5 text-base tracking-tighter text-fg-muted select-none active:cursor-grabbing"
                         draggable
@@ -921,31 +1005,63 @@ export function BuilderPage() {
                           <span aria-hidden="true">▼</span>
                         </button>
                       </span>
-                      <select
+                      <Select
+                        fit
+                        className={SECTION_SELECT}
+                        aria-label="Вид секции"
                         value={section.type}
                         onChange={(e) => {
                           const type = e.target.value as SectionDefinition['type']
+                          // у графика разрезов меньше, чем у таблицы: лишние отсекаем
+                          // здесь, иначе бэкенд отклонил бы всё определение целиком
+                          const by = section.by.slice(0, byLimit(type))
                           patchSection(index, {
                             type,
                             kind: type === 'chart' ? section.kind ?? 'bar' : null,
-                            by: type === 'kpi' ? [] : section.by,
+                            // ширину, которую автор не выбирал, оставляем на
+                            // усмотрение нового вида секции
+                            perRow: section.perRow ?? null,
+                            by,
+                            grain: by.some((b) => dimensionInfo(b)?.type === 'date') ? section.grain : null,
+                            orderBy: section.orderBy && !by.includes(section.orderBy) &&
+                              !section.metrics.includes(section.orderBy)
+                              ? null
+                              : section.orderBy,
                           })
                         }}
                       >
                         {SECTION_TYPES.map((t) => (
                           <option key={t.value} value={t.value}>{t.label}</option>
                         ))}
-                      </select>
+                      </Select>
                       {section.type === 'chart' && (
-                        <select
+                        <Select
+                          fit
+                          className={SECTION_SELECT}
+                          aria-label="Вид графика"
                           value={section.kind ?? 'bar'}
                           onChange={(e) => patchSection(index, { kind: e.target.value as SectionDefinition['kind'] })}
                         >
                           {CHART_KINDS.map((k) => (
                             <option key={k.value} value={k.value}>{k.label}</option>
                           ))}
-                        </select>
+                        </Select>
                       )}
+                      {/* ширина секции в отчёте: одна в ряд или две рядом */}
+                      <Select
+                        fit
+                        className={SECTION_SELECT}
+                        aria-label="Ширина секции"
+                        title="Сколько таких секций встаёт в ряд"
+                        value={section.perRow ?? DEFAULT_PER_ROW[section.type]}
+                        onChange={(e) =>
+                          patchSection(index, { perRow: Number(e.target.value) as 1 | 2 })
+                        }
+                      >
+                        {PER_ROW_OPTIONS.map((o) => (
+                          <option key={o.value} value={o.value}>{o.label}</option>
+                        ))}
+                      </Select>
                       {sections.length > 1 && (
                         <Button
                           variant="ghost"
@@ -988,32 +1104,52 @@ export function BuilderPage() {
 
                     {section.type !== 'kpi' && (
                       <div className="flex flex-col gap-1.5 rounded-control border border-dashed border-line px-2.5 py-2">
-                        <span className="text-xs font-medium tracking-wide text-fg-muted uppercase">Разрез</span>
-                        {!dimension ? (
+                        <span className="text-xs font-medium tracking-wide text-fg-muted uppercase">
+                          Группировка{' '}
+                          <span className="normal-case">
+                            ({section.by.length} из {byLimit(section.type)})
+                          </span>
+                        </span>
+                        {section.by.length === 0 ? (
                           <p className="text-xs text-fg-muted">перетащите разрез сюда</p>
                         ) : (
-                          <div className="flex flex-wrap gap-1.5">
-                            <span
-                              className={cn(CHIP, CHIP_ON, 'border-dashed')}
-                              title={`${datasetTitle(dimension.datasetSlug)} · ${dimension.field}`}
-                            >
-                              {dimension.title}
-                              <button
-                                className="ml-1.5 cursor-pointer text-sm leading-none"
-                                onClick={() => patchSection(index, { by: [], grain: null })}
-                                title="убрать"
-                              >
-                                ×
-                              </button>
-                            </span>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {section.by.map((slug, position) => {
+                              const info = dimensionInfo(slug)
+                              // роль разреза видна сразу: в графике первый — ось,
+                              // второй разворачивается в серии; в таблице это колонки
+                              const role =
+                                section.type === 'chart'
+                                  ? position === 0
+                                    ? 'ось'
+                                    : 'разбивка на серии'
+                                  : `уровень ${position + 1}`
+                              return (
+                                <span
+                                  key={slug}
+                                  className={cn(CHIP, CHIP_ON, 'border-dashed')}
+                                  title={`${datasetTitle(info?.datasetSlug ?? '')} · ${info?.field ?? slug} · ${role}`}
+                                >
+                                  {info?.title ?? slug}
+                                  <span className="ml-1.5 text-[10px] opacity-70">{role}</span>
+                                  <button
+                                    className="ml-1.5 cursor-pointer text-sm leading-none"
+                                    onClick={() => removeDimension(index, slug)}
+                                    title="убрать"
+                                  >
+                                    ×
+                                  </button>
+                                </span>
+                              )
+                            })}
                           </div>
                         )}
                       </div>
                     )}
 
-                    {section.type !== 'kpi' && dimension && (
+                    {section.type !== 'kpi' && section.by.length > 0 && (
                       <div className="flex flex-wrap gap-3">
-                        {dimension.type === 'date' && (
+                        {section.by.some((b) => dimensionInfo(b)?.type === 'date') && (
                           <Field label="Шаг">                            <Select
                               value={section.grain ?? 'day'}
                               onChange={(e) => patchSection(index, { grain: e.target.value as Grain })}
@@ -1090,9 +1226,7 @@ export function BuilderPage() {
               {!preview && !previewError && (
                 <p className="max-w-[60ch] text-sm text-fg-muted">Положите поля в секцию — отчёт появится здесь.</p>
               )}
-              {preview?.sections.map((section, i) => (
-                <SectionRenderer key={i} section={section} />
-              ))}
+              {preview && <SectionsGrid sections={preview.sections} />}
             </div>
           </div>
 

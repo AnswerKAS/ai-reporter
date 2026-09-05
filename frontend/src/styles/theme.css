@@ -11,6 +11,10 @@
   --surface: #ffffff;
   --surface-sunken: #f2f2f7;
   --line: #e6e6ee;
+  /* Заливка колонок-родителей в таблице с вложенной группировкой:
+     верхний уровень темнее, вложенные светлее — глубина видна оттенком. */
+  --group-level-1: #ebebf3;
+  --group-level-2: #f3f3f8;
   --line-strong: #d3d3e0;
   --fg: #2b2b33;
   --fg-muted: #5f5f6e;
@@ -35,6 +39,8 @@
   --surface: #17181f;
   --surface-sunken: #1e1f28;
   --line: #2a2b35;
+  --group-level-1: #23242f;
+  --group-level-2: #1c1d26;
   --line-strong: #3a3b48;
   --fg: #e8e8ee;
   --fg-muted: #9a9aa8;
@@ -59,6 +65,8 @@
   --color-surface: var(--surface);
   --color-surface-sunken: var(--surface-sunken);
   --color-line: var(--line);
+  --color-group-level-1: var(--group-level-1);
+  --color-group-level-2: var(--group-level-2);
   --color-line-strong: var(--line-strong);
   --color-fg: var(--fg);
   --color-fg-muted: var(--fg-muted);
