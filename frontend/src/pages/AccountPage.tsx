@@ -53,7 +53,7 @@ export function AccountPage() {
                     {r.title}
                   </Link>
                   <span className="text-xs text-fg-muted">
-                    {r.skill} · {r.status === 'ready' ? r.updatedAt : r.status}
+                    {r.slug} · {r.status === 'ready' ? r.updatedAt : r.status}
                   </span>
                 </li>
               ))}

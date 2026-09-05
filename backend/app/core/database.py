@@ -1,12 +1,14 @@
 """PostgreSQL-хранилище приложения (схема PG_SCHEMA, по умолчанию ai_reporter).
 
-Все данные приложения: отчёты, пользователи/группы/доступы, сессии,
-датасеты, черновики скиллов. Разовая миграция данных из legacy-SQLite
-(backend/reports.db) выполняется при первом старте.
+Все данные приложения: отчёты (определения конструктора), пользователи,
+группы, доступы, сессии, датасеты, словарь метрик и разрезов. Разовая
+миграция данных из legacy-SQLite (backend/reports.db) выполняется при
+первом старте.
 """
 
 import json
 import os
+import shutil
 import sqlite3
 import time
 from contextlib import contextmanager
@@ -157,14 +159,10 @@ def init_db() -> None:
                 slug TEXT UNIQUE NOT NULL,
                 title TEXT NOT NULL,
                 description TEXT,
-                skill TEXT NOT NULL,
-                params TEXT NOT NULL DEFAULT '{}',
-                mode TEXT NOT NULL DEFAULT 'auto',
+                definition TEXT,
                 filters TEXT NOT NULL DEFAULT '{}',
-                status TEXT NOT NULL DEFAULT 'queued',
+                status TEXT NOT NULL DEFAULT 'ready',
                 error TEXT,
-                artifact_dir TEXT,
-                spec TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
@@ -235,26 +233,6 @@ def init_db() -> None:
             )
             '''
         )
-        conn.execute(
-            '''
-            CREATE TABLE IF NOT EXISTS skill_drafts (
-                id TEXT PRIMARY KEY,
-                domain TEXT NOT NULL,
-                name TEXT NOT NULL,
-                title TEXT NOT NULL,
-                description TEXT NOT NULL,
-                datasets TEXT NOT NULL DEFAULT '[]',
-                content TEXT NOT NULL DEFAULT '',
-                status TEXT NOT NULL DEFAULT 'generating',
-                issues TEXT NOT NULL DEFAULT '[]',
-                author_id TEXT NOT NULL,
-                republish TEXT,
-                report_slug TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-            '''
-        )
         # --- семантический слой: что означают колонки датасетов ---
         conn.execute(
             '''
@@ -310,14 +288,45 @@ def init_db() -> None:
             '''
         )
         # миграции существующих таблиц
-        for ddl in (
-            'ALTER TABLE skill_drafts ADD COLUMN IF NOT EXISTS republish TEXT',
-            'ALTER TABLE skill_drafts ADD COLUMN IF NOT EXISTS report_slug TEXT',
-            # отчёт-конструктор: декларация вместо сгенерированного report.py
-            "ALTER TABLE reports ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'llm'",
-            'ALTER TABLE reports ADD COLUMN IF NOT EXISTS definition TEXT',
-        ):
-            conn.execute(ddl)
+        conn.execute('ALTER TABLE reports ADD COLUMN IF NOT EXISTS definition TEXT')
+        drop_skill_stack(conn)
+
+
+def _has_column(conn, table: str, column: str) -> bool:
+    row = conn.execute(
+        'SELECT 1 FROM information_schema.columns '
+        'WHERE table_schema = %s AND table_name = %s AND column_name = %s',
+        (PG.schema, table, column),
+    ).fetchone()
+    return row is not None
+
+
+def drop_skill_stack(conn) -> None:
+    """Убирает наследие скилл-отчётов: их записи, черновики и колонки.
+
+    Отчёт теперь всегда декларация, которую исполняет построитель запросов.
+    Отчёты, чья логика жила в сгенерированном report.py, без этого стека
+    пересчитать нечем — они удаляются вместе со своими артефактами, а не
+    остаются в списке нерабочими.
+    """
+    if not _has_column(conn, 'reports', 'kind'):
+        return  # уже перенесено
+
+    from ..services import storage
+
+    doomed = conn.execute("SELECT id, slug FROM reports WHERE kind <> 'builder'").fetchall()
+    for row in doomed:
+        shutil.rmtree(storage.LOCAL_BASE / row['id'], ignore_errors=True)
+    if doomed:
+        slugs = tuple(r['slug'] for r in doomed)
+        conn.execute('DELETE FROM report_access WHERE report_slug = ANY(%s)', (list(slugs),))
+        conn.execute("DELETE FROM reports WHERE kind <> 'builder'")
+        print(f'[db] удалено отчётов на скиллах: {len(doomed)}')
+
+    conn.execute('DROP TABLE IF EXISTS skill_drafts')
+    shutil.rmtree(storage.LOCAL_BASE / 'skill_drafts', ignore_errors=True)
+    for column in ('skill', 'params', 'mode', 'artifact_dir', 'spec', 'kind'):
+        conn.execute(f'ALTER TABLE reports DROP COLUMN IF EXISTS {column}')
 
 
 def _meta_get(conn, key: str) -> str | None:
@@ -335,7 +344,6 @@ def _meta_set(conn, key: str, value: str) -> None:
 
 def _row_to_dict(row: dict) -> dict:
     data = dict(row)
-    data['params'] = json.loads(data.get('params') or '{}')
     data['filter_values'] = json.loads(data.pop('filters') or '{}')
     return data
 
@@ -352,15 +360,15 @@ def migrate_from_sqlite() -> None:
         src = sqlite3.connect(DB_PATH)
         src.row_factory = sqlite3.Row
         try:
+            # отчёты той эпохи строились скиллами и сгенерированным report.py —
+            # исполнять их больше нечем, поэтому переносим только то, что
+            # осталось осмысленным
             tables = {
-                'reports': ['id', 'slug', 'title', 'description', 'skill', 'params', 'mode', 'filters', 'status', 'error', 'artifact_dir', 'spec', 'created_at', 'updated_at'],
                 'users': ['id', 'username', 'password_hash', 'role', 'created_at'],
                 'groups': ['id', 'name', 'created_at'],
                 'group_members': ['group_id', 'user_id'],
-                'report_access': ['report_slug', 'user_id', 'group_id'],
                 'sessions': ['token', 'user_id', 'created_at'],
                 'datasets': ['slug', 'title', 'description', 'source', 'dsn', 'table_name', 'file', 'schema', 'status', 'error', 'created_at', 'updated_at'],
-                'skill_drafts': ['id', 'domain', 'name', 'title', 'description', 'datasets', 'content', 'status', 'issues', 'author_id', 'created_at', 'updated_at'],
             }
             for table, columns in tables.items():
                 try:
@@ -395,28 +403,17 @@ def create_report(
     slug: str,
     title: str,
     description: str | None,
-    skill: str,
-    params: dict[str, str],
-    mode: str = 'auto',
-    kind: str = 'llm',
-    definition: dict | None = None,
+    definition: dict,
 ) -> dict:
-    """Отчёт в реестре.
-
-    kind='builder' — отчёт-конструктор: логика лежит в definition (декларация),
-    сборка не нужна, статус сразу ready. kind='llm' — прежний путь через
-    скилл и генерацию report.py, стартует в очереди.
-    """
+    """Отчёт в реестре: логика лежит в определении, сборка не нужна."""
     now = utcnow()
-    status = 'ready' if kind == 'builder' else 'queued'
     with _conn() as conn:
         conn.execute(
-            'INSERT INTO reports (id, slug, title, description, skill, params, mode, status, '
-            'kind, definition, created_at, updated_at) '
-            'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)',
-            (id, slug, title, description, skill, json.dumps(params), mode, status, kind,
-             json.dumps(definition, ensure_ascii=False) if definition is not None else None,
-             now, now),
+            'INSERT INTO reports (id, slug, title, description, status, definition, '
+            'created_at, updated_at) '
+            "VALUES (%s, %s, %s, %s, 'ready', %s, %s, %s)",
+            (id, slug, title, description,
+             json.dumps(definition, ensure_ascii=False), now, now),
         )
     return get_report(slug)
 
@@ -457,56 +454,22 @@ def set_filters(slug: str, values: dict[str, str]) -> None:
         )
 
 
-def set_mode(slug: str, mode: str) -> None:
-    with _conn() as conn:
-        conn.execute('UPDATE reports SET mode = %s WHERE slug = %s', (mode, slug))
-
-
-def set_spec(slug: str, spec: dict) -> None:
-    with _conn() as conn:
-        conn.execute('UPDATE reports SET spec = %s WHERE slug = %s', (json.dumps(spec, ensure_ascii=False), slug))
-
-
-def get_spec(slug: str) -> dict | None:
-    with _conn() as conn:
-        row = conn.execute('SELECT spec FROM reports WHERE slug = %s', (slug,)).fetchone()
-    if row is None or not row['spec']:
-        return None
-    return json.loads(row['spec'])
-
-
-def update_status(slug: str, *, status: str, error: str | None = None, artifact_dir: str | None = None) -> None:
+def update_status(slug: str, *, status: str, error: str | None = None) -> None:
     now = utcnow()
     fields = ['status = %s', 'updated_at = %s']
     values: list = [status, now]
     if error is not None:
         fields.append('error = %s')
         values.append(error)
-    if artifact_dir is not None:
-        fields.append('artifact_dir = %s')
-        values.append(artifact_dir)
     with _conn() as conn:
         conn.execute(f'UPDATE reports SET {", ".join(fields)} WHERE slug = %s', (*values, slug))
 
 
-def claim_queued() -> dict | None:
-    with _conn() as conn:
-        row = conn.execute(
-            'SELECT * FROM reports WHERE status = %s ORDER BY created_at ASC LIMIT 1', ('queued',)
-        ).fetchone()
-    return _row_to_dict(row) if row is not None else None
-
-
-def update_report(slug: str, *, title: str | None = None, description: str | None = None,
-                  skill: str | None = None, mode: str | None = None) -> dict | None:
+def update_report(slug: str, *, title: str | None = None,
+                  description: str | None = None) -> dict | None:
     """Обновляет метаданные отчёта; None = не менять."""
     fields, values = ['updated_at = %s'], [utcnow()]
-    for column, value in (
-        ('title', title),
-        ('description', description),
-        ('skill', skill),
-        ('mode', mode),
-    ):
+    for column, value in (('title', title), ('description', description)):
         if value is not None:
             fields.append(f'{column} = %s')
             values.append(value)
@@ -515,30 +478,11 @@ def update_report(slug: str, *, title: str | None = None, description: str | Non
     return get_report(slug)
 
 
-def delete_report(slug: str) -> str | None:
-    """Удаляет отчёт и его назначения; возвращает artifact_dir (report_id) или None."""
+def delete_report(slug: str) -> None:
+    """Удаляет отчёт и его назначения."""
     with _conn() as conn:
-        row = conn.execute('SELECT id FROM reports WHERE slug = %s', (slug,)).fetchone()
-        if row is None:
-            return None
-        report_id = row['id']
         conn.execute('DELETE FROM reports WHERE slug = %s', (slug,))
         conn.execute('DELETE FROM report_access WHERE report_slug = %s', (slug,))
-    return report_id
-
-
-def reset_stale_building() -> int:
-    """Возвращает зависшие в building отчёты в очередь (crash/reload recovery).
-
-    Вызывается при старте воркера: в этот момент сборок в процессе ещё нет,
-    поэтому building может остаться только после падения/рестарта приложения.
-    """
-    with _conn() as conn:
-        cur = conn.execute(
-            "UPDATE reports SET status = 'queued', updated_at = %s WHERE status = 'building'",
-            (utcnow(),),
-        )
-    return cur.rowcount
 
 
 # --- пользователи / группы / права -------------------------------------
@@ -707,98 +651,3 @@ def purge_expired_sessions() -> int:
     with _conn() as conn:
         cur = conn.execute('DELETE FROM sessions WHERE created_at <= %s', (_session_cutoff(),))
     return cur.rowcount
-
-
-# --- миграции ------------------------------------------------------------
-
-SKILL_NAME_ALIASES = {
-    'sales': 'sales/sales',
-    'drilldown': 'sales/drilldown',
-    'manager': 'managers/manager',
-    'support': 'support/support',
-    'cost': 'finance/cost',
-}
-
-
-def migrate_skill_names() -> None:
-    """Разовая миграция плоских имён скиллов к иерархическим (папка/файл)."""
-    for old, new in SKILL_NAME_ALIASES.items():
-        with _conn() as conn:
-            conn.execute('UPDATE reports SET skill = %s WHERE skill = %s', (new, old))
-
-
-# --- черновики скиллов -----------------------------------------------------
-
-def _draft_to_dict(row: dict) -> dict:
-    data = dict(row)
-    data['datasets'] = json.loads(data.get('datasets') or '[]')
-    data['issues'] = json.loads(data.pop('issues') or '[]')
-    return data
-
-
-def create_skill_draft(
-    *,
-    id: str,
-    domain: str,
-    name: str,
-    title: str,
-    description: str,
-    datasets: list[str],
-    author_id: str,
-) -> dict:
-    now = utcnow()
-    with _conn() as conn:
-        conn.execute(
-            'INSERT INTO skill_drafts (id, domain, name, title, description, datasets, content, status, issues, author_id, created_at, updated_at) '
-            'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)',
-            (id, domain, name, title, description, json.dumps(datasets), '', 'generating', '[]', author_id, now, now),
-        )
-    return get_skill_draft(id)
-
-
-def get_skill_draft(draft_id: str) -> dict | None:
-    with _conn() as conn:
-        row = conn.execute('SELECT * FROM skill_drafts WHERE id = %s', (draft_id,)).fetchone()
-    return _draft_to_dict(row) if row is not None else None
-
-
-def list_skill_drafts(*, author_id: str | None = None) -> list[dict]:
-    with _conn() as conn:
-        if author_id is None:
-            rows = conn.execute('SELECT * FROM skill_drafts ORDER BY updated_at DESC').fetchall()
-        else:
-            rows = conn.execute(
-                'SELECT * FROM skill_drafts WHERE author_id = %s ORDER BY updated_at DESC',
-                (author_id,),
-            ).fetchall()
-    return [_draft_to_dict(r) for r in rows]
-
-
-def update_skill_draft(draft_id: str, *, content: str | None = None, status: str | None = None,
-                       issues: list | None = None, datasets: list[str] | None = None,
-                       description: str | None = None, republish: str | None = None,
-                       report_slug: str | None = None,
-                       clear_republish: bool = False) -> dict | None:
-    fields, values = ['updated_at = %s'], [utcnow()]
-    for column, value in (
-        ('content', content),
-        ('status', status),
-        ('issues', json.dumps(issues, ensure_ascii=False) if issues is not None else None),
-        ('datasets', json.dumps(datasets) if datasets is not None else None),
-        ('description', description),
-        ('republish', republish),
-        ('report_slug', report_slug),
-    ):
-        if value is not None:
-            fields.append(f'{column} = %s')
-            values.append(value)
-    if clear_republish:
-        fields.append('republish = NULL')
-    with _conn() as conn:
-        conn.execute(f'UPDATE skill_drafts SET {", ".join(fields)} WHERE id = %s', (*values, draft_id))
-    return get_skill_draft(draft_id)
-
-
-def delete_skill_draft(draft_id: str) -> None:
-    with _conn() as conn:
-        conn.execute('DELETE FROM skill_drafts WHERE id = %s', (draft_id,))

@@ -86,13 +86,9 @@ export interface Report {
   slug: string
   title: string
   description?: string
-  /** 'builder' — отчёт-декларация, правится в конструкторе; 'llm' — старый стек. */
-  kind?: 'builder' | 'llm'
-  skill?: string
   status?: string
   createdAt: string
   updatedAt: string
-  params?: Record<string, string>
   filters?: ReportFilter[]
   filterValues?: Record<string, string>
   sections: ReportSection[]
@@ -103,11 +99,8 @@ export interface ReportMeta {
   slug: string
   title: string
   description?: string
-  kind?: 'builder' | 'llm'
   status?: string
   error?: string
-  skill?: string
-  params?: Record<string, string>
   filterValues?: Record<string, string>
   updatedAt: string
 }

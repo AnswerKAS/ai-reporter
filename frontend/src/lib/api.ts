@@ -1,13 +1,6 @@
 import type { Report, ReportMeta } from '../types/report'
 import type { AccessEntry, Group, User } from '../types/user'
-import type {
-  Dataset,
-  DatasetCreateInput,
-  DatasetDetail,
-  SkillDraft,
-  SkillDraftStatus,
-  SkillInfo,
-} from '../types/dataset'
+import type { Dataset, DatasetCreateInput, DatasetDetail } from '../types/dataset'
 import type {
   ComputedField,
   DatasetLink,
@@ -174,7 +167,7 @@ export async function applyFilters(
 
 export async function updateReport(
   slug: string,
-  patch: { title?: string; description?: string; skill?: string; mode?: 'auto' | 'demo' | 'llm' },
+  patch: { title?: string; description?: string },
 ): Promise<ReportMeta> {
   const json = await request<{ report: ReportMeta }>(`/reports/${slug}`, {
     method: 'PATCH',
@@ -284,28 +277,6 @@ export async function adminRevokeAccess(
   })
 }
 
-export async function fetchSkills(): Promise<SkillInfo[]> {
-  const json = await request<{ skills: SkillInfo[] }>('/skills')
-  return json.skills
-}
-
-export async function fetchSkillContent(name: string): Promise<string> {
-  const json = await request<{ name: string; content: string }>(`/skills/${name}`)
-  return json.content
-}
-
-export async function createReport(
-  skill: string,
-  title: string,
-  mode: 'demo' | 'llm' | 'auto' = 'demo',
-): Promise<void> {
-  await request('/reports', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ skill, title, mode }),
-  })
-}
-
 // --- датасеты ---
 
 export async function fetchDatasets(): Promise<Dataset[]> {
@@ -346,79 +317,6 @@ export async function uploadDatasetCsv(slug: string, file: File): Promise<{ data
   })
   return json
 }
-
-// --- черновики скиллов ---
-
-export interface SkillDraftCreateInput {
-  domain: string
-  name: string
-  title: string
-  description: string
-  datasets: string[]
-}
-
-export async function createSkillDraft(input: SkillDraftCreateInput): Promise<SkillDraft> {
-  const json = await request<{ draft: SkillDraft }>('/skill-drafts', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(input),
-  })
-  return json.draft
-}
-
-export async function fetchSkillDrafts(): Promise<SkillDraft[]> {
-  const json = await request<{ drafts: SkillDraft[] }>('/skill-drafts')
-  return json.drafts
-}
-
-export async function fetchSkillDraft(id: string): Promise<SkillDraft> {
-  const json = await request<{ draft: SkillDraft }>(`/skill-drafts/${id}`)
-  return json.draft
-}
-
-export async function regenerateSkillDraft(id: string, description?: string): Promise<SkillDraft> {
-  const json = await request<{ draft: SkillDraft }>(`/skill-drafts/${id}/regenerate`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(description ? { description } : {}),
-  })
-  return json.draft
-}
-
-export async function submitSkillDraft(id: string): Promise<SkillDraft> {
-  const json = await request<{ draft: SkillDraft }>(`/skill-drafts/${id}/submit`, { method: 'POST' })
-  return json.draft
-}
-
-export async function checkSkillDraft(id: string): Promise<SkillDraft> {
-  const json = await request<{ draft: SkillDraft }>(`/skill-drafts/${id}/check`, { method: 'POST' })
-  return json.draft
-}
-
-export async function improveSkillDraft(id: string): Promise<SkillDraft> {
-  const json = await request<{ draft: SkillDraft }>(`/skill-drafts/${id}/improve`, { method: 'POST' })
-  return json.draft
-}
-
-export async function cancelSkillDraft(id: string): Promise<SkillDraft> {
-  const json = await request<{ draft: SkillDraft }>(`/skill-drafts/${id}/cancel`, { method: 'POST' })
-  return json.draft
-}
-
-export async function publishSkillDraft(id: string, mode: 'auto' | 'demo' | 'llm' = 'auto'): Promise<{ draft: SkillDraft; reportSlug: string }> {
-  const json = await request<{ draft: SkillDraft; report_slug: string }>(`/skill-drafts/${id}/publish`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ mode }),
-  })
-  return { draft: json.draft, reportSlug: json.report_slug }
-}
-
-export async function deleteSkillDraft(id: string): Promise<void> {
-  await request(`/skill-drafts/${id}`, { method: 'DELETE' })
-}
-
-export type { SkillDraftStatus }
 
 // --- семантический слой и конструктор отчётов ---
 

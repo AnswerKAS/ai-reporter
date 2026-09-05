@@ -1,56 +1,60 @@
 # AI Reporter
 
-Веб-система для формирования отчётности из датасетов. Отчёт описывается
-**скиллом** (markdown-файл с заданием), по которому LLM-агент **opencode**
-компилирует Python-скрипт доступа к данным; бэкенд исполняет скрипт,
-валидирует JSON-спеку и отдаёт её React-фронту.
+Веб-система формирования отчётности из датасетов. Отчёт — **декларация**:
+что показать, а не как посчитать. Пользователь собирает его в конструкторе
+мышью или описывает словами; SQL по декларации собирает построитель запросов,
+опираясь на общий словарь метрик и разрезов.
 
 ```
-skills/*.md ──(opencode, LLM)──▶ report.py ──(исполнение)──▶ ReportSpec (JSON)
-                                                                    │
-                                              FastAPI + SQLite      ▼
-                                              права, фильтры  ◀── React (Vite)
+датасеты ──▶ словарь (метрики, разрезы, связи) ──▶ декларация отчёта
+                                                          │
+                             построитель SQL ──▶ источник ▼
+                             FastAPI + PostgreSQL ◀── React (Vite)
 ```
 
 Ключевое свойство: **данные всегда живые** — `GET /api/reports/{slug}` при
-каждом обращении заново исполняет `report.py` (SQL → ClickHouse). Изменения
-в БД видны на странице сразу; логика отчёта (секции/фильтры/формулы) меняется
-только перекомпиляцией скилла.
+каждом обращении заново исполняет определение отчёта (SQL к ClickHouse или
+PostgreSQL). Изменения в источнике видны на странице сразу; логика отчёта
+(секции, поля, фильтры) правится в конструкторе и сохраняется как данные —
+её можно версионировать, диффать и читать глазами.
+
+Кода в отчёте нет ни на входе, ни на выходе: пользователь SQL не пишет,
+модель его тоже не пишет. Выражения метрик заводит администратор — это
+граница доверия системы.
 
 ## Структура
 
 ```
-frontend/                  React 19 + Vite + TS (react-router-dom, recharts)
+frontend/                  React 19 + Vite + TS (react-router-dom, recharts, Tailwind v4)
 backend/
   app/
-    main.py                FastAPI: auth, admin, отчёты, фоновый воркер
-    compiler.py            сборка: opencode → report.py → исполнение → спека
-    prompt.py              промпт для opencode + схема ReportSpec
-    template_report.py     демо report.py (fallback без LLM, скиллы sales/manager)
-    warehouse.py           ClickHouse: подключение, схема витрины, seed
-    auth.py                pbkdf2-пароли, Bearer-сессии, guard-зависимости
-    schemas.py             Pydantic-контракт ReportSpec (camelCase) + модели прав
-    db.py                  SQLite-реестр: отчёты, пользователи, группы, права
-    config.py              чтение .env, парсинг DATABASE_URL
-    seed.py                CLI наполнения витрины тестовыми данными
-  skills/*.md              скиллы: sales, manager, support, cost
-  artifacts/<report_id>/   скомпилированный report.py (спека хранится в БД)
-  recompile.sh             команда перекомпиляции отчёта по актуальному скиллу
+    main.py                FastAPI: auth, отчёты, датасеты, словарь, админка
+    core/                  config.py (.env), database.py (PostgreSQL), security.py
+    schemas/               Pydantic-контракты: report, definition, dataset, semantic, user
+    api/                   роутеры: auth, reports, datasets, semantic, admin
+    semantic/registry.py   словарь: метрики, разрезы, связи датасетов
+    query/                 builder.py (декларация → SQL), dialects.py,
+                           interpret.py + phrase.py (словесное ТЗ → декларация)
+    reports/executor.py    исполнение определения → ReportSpec
+    reports/warehouse.py   демо-витрина ClickHouse + seed
+    datasets/              реестр датасетов и адаптеры (clickhouse, postgres, csv)
+    services/storage.py    фасад хранилища артефактов (CSV-файлы)
+  artifacts/datasets/      загруженные CSV
 ```
 
 ## Быстрый старт
 
-Требования: Python 3.12, Node.js, `opencode` CLI (авторизованный в OpenRouter).
+Требования: Python 3.12, Node.js, доступ к PostgreSQL (метабаза приложения).
 
 ```bash
 # backend
 cd backend
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-cp .env.example .env        # прописать DATABASE_URL (ClickHouse) и OPENCODE_MODEL
+cp .env.example .env        # PG* — метабаза; DATABASE_URL — витрина ClickHouse
 
-# создать таблицы витрины и залить тестовые данные (30 дней)
-.venv/bin/python -m app.seed
+# опционально: демо-витрина с тестовыми данными (30 дней)
+.venv/bin/python -m app.reports.seed
 
 # запустить
 .venv/bin/uvicorn app.main:app --port 8000
@@ -68,70 +72,40 @@ npm run dev                 # http://localhost:5173 (/api проксируетс
 
 | Переменная | Назначение |
 |---|---|
-| `DATABASE_URL` | DSN ClickHouse: `clickhouse://user:pass@host:port/db`. Пароль может содержать спецсимволы (`@`, `!`) — парсер режет по последнему `@` |
-| `OPENCODE_MODEL` | Модель opencode для генерации `report.py` (пример: `openrouter/z-ai/glm-5.3-flash`). Дефолтная модель может не поддерживать инструменты |
+| `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD` | метабаза приложения; `PG_SCHEMA` меняет имя схемы (по умолчанию `ai_reporter`) |
+| `DATABASE_URL` | DSN ClickHouse-витрины: `clickhouse://user:pass@host:port/db`. Пароль может содержать спецсимволы (`@`, `!`) — парсер режет по последнему `@` |
 | `CLICKHOUSE_SECURE` | TLS к ClickHouse (по умолчанию `true`, сертификат — `certifi`) |
-| `OPENCODE_TIMEOUT` | Таймаут opencode-сборки, сек (по умолчанию 900) |
+| `OPENROUTER_API_KEY`, `INTERPRET_MODEL` | разбор словесного ТЗ моделью; без ключа разбирает встроенный парсер |
+| `ARTIFACTS_DIR`, `ARTIFACTS_STORAGE` | каталог и режим хранилища загруженных CSV |
+| `CORS_ORIGINS`, `SESSION_TTL_DAYS` | источники фронта и срок жизни сессии |
 
-## Скиллы и генерация отчёта
+## Как собирается отчёт
 
-Скилл — `backend/skills/<name>.md`: цель отчёта, источник данных (таблицы
-и поля), состав секций (KPI/графики/таблицы), фильтры, параметры.
-Действующий пример — `skills/sales.md`.
+1. **Датасеты** (`/datasets`) — именованные источники: ClickHouse, PostgreSQL
+   или загруженный CSV. Схема полей вычитывается из источника вместе с
+   комментариями колонок.
+2. **Модель данных** (`/model`, админ) — словарь: метрика («Выручка» =
+   `sum(revenue)`), разрез («Город» = `region`) и связи между датасетами.
+   Выражение метрики проверяется на источнике сразу: битая метрика получает
+   статус `error` и в отчёт не проходит.
+3. **Конструктор** (`/builder`) — два шага: выбор данных (датасеты,
+   показатели, разрезы, свои поля из колонок и формулы) и раскладка секций
+   (KPI, график, таблица) перетаскиванием или кликом. Рядом — живой
+   предпросмотр по реальным данным.
+4. **Отчёт** (`/reports/<slug>`) — читатель применяет фильтры, данные
+   пересчитываются сразу; страница обновляется, пока открыта.
 
-```bash
-# создать отчёт по скиллу (только админ)
-curl -X POST localhost:8000/api/reports -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{"skill":"sales","slug":"my-sales","title":"Мои продажи","mode":"llm"}'
-```
+Описание словами (`«выручка и заказы по городам топ-15 столбцами»`)
+превращается в ту же декларацию: модель выбирает имена **только из словаря**,
+числа не видит и не производит, а без ключа модели разбор делает
+детерминированный парсер.
 
-`mode`: `llm` — opencode пишет `report.py` по скиллу; `demo` — шаблонный скрипт
-без LLM (умеет только `sales`/`manager`, при недоступности БД использует
-синтетику); `auto` — LLM с откатом на шаблон.
+## Права
 
-Жизненный цикл: `queued → building → ready | error` (фоновый воркер).
-
-### Перекомпиляция
-
-Данные в БД меняются — отчёт показывает их без действий (реалтайм).
-Изменение **логики** скилла (новый фильтр/секция) требует перекомпиляции:
-
-```bash
-cd backend && ./recompile.sh manager-live        # через LLM
-./recompile.sh manager-live demo                 # быстрая пересборка шаблоном
-# либо напрямую: POST /api/reports/{slug}/recompile {"mode": "llm"}
-```
-
-Прошлый `report.py` сохраняется до успеха — при сбое LLM отчёт продолжает
-работать на старой версии.
-
-## Отчёт (ReportSpec)
-
-Спека — JSON с секциями, который рендерит фронт (типы: `frontend/src/types/report.ts`):
-
-- `markdown` — обзор;
-- `kpi` — карточки `{label, value, format, delta, deltaGoodWhenUp}`;
-- `chart` — `bar | line | area | pie` с `data/xKey/series`;
-- `table` — колонки с форматами (`number | money | percent | date`).
-
-`report.py` может объявить фильтры (`filters: [{key,label,kind,options}]`):
-бэкенд хранит выбранные значения и передаёт скрипту переменными
-`FILTER_<KEY>`; скрипт обязан проверять значение по `options` (защита от
-SQL-инъекций). Значения фильтров меняются через
-`POST /api/reports/{slug}/filters` и сразу пересчитывают отчёт.
-
-## Права доступа
-
-- Логин/пароль → Bearer-токен; все `/api/reports*` и `/api/admin/*` требуют токен.
-- Пользователь видит только назначенные отчёты (напрямую или через группу).
-- Создавать/удалять отчёты, `refresh`, `recompile` — только админ;
-  фильтры — любой пользователь с доступом к отчёту.
-- Admin API: `/api/admin/users`, `/api/admin/groups`, `/api/admin/access`
-  (назначение отчёта пользователю или группе).
-
-Фронт: `/login`, `/reports` (группировка по скиллам), `/account` (свои отчёты,
-смена пароля), `/admin` (пользователи, группы, назначения).
+- любой авторизованный: просмотр датасетов и словаря, конструктор,
+  предпросмотр, свои отчёты, фильтры, правка названия/описания;
+- администратор: датасеты, метрики/разрезы/связи, создание и удаление
+  отчётов, сохранение определения, пользователи, группы и назначения доступа.
 
 ## Проверка
 
@@ -139,7 +113,6 @@ SQL-инъекций). Значения фильтров меняются чер
 # frontend
 cd frontend && npm run lint && npm run build
 
-# backend: компиляция демо-отчёта
-cd backend && .venv/bin/python -c "from app import compiler; import asyncio; \
-asyncio.run(compiler.compile_report({'id':'t','slug':'t','title':'t','skill':'sales','params':{}}, mode='demo'))"
+# backend: импорт приложения
+cd backend && .venv/bin/python -c "import app.main; print('backend import ok')"
 ```

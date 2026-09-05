@@ -1,10 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import type { ReportMeta } from '../types/report'
 import { deleteReport, updateReport } from '../lib/api'
 import { useAuth } from '../lib/auth'
 import { useReports } from '../lib/reports'
-import { domainLabel, reportGroup } from '../lib/domains'
 import { cn } from '../lib/cn'
 import { Alert, Button, Field, Input, Modal, Skeleton, useConfirm } from './ui'
 
@@ -85,7 +84,6 @@ function ReportRow({
   onDelete: () => void
 }) {
   const { isAdmin } = useAuth()
-  const canEditDefinition = report.kind === 'builder'
 
   return (
     <div className="group/row flex items-center gap-0.5">
@@ -105,17 +103,15 @@ function ReportRow({
       </NavLink>
 
       <span className="flex shrink-0 items-center opacity-0 transition-opacity group-hover/row:opacity-100 focus-within:opacity-100">
-        {canEditDefinition && (
-          <NavLink
-            to={`/builder/${report.slug}`}
-            onClick={onNavigate}
-            aria-label={`Открыть «${report.title}» в конструкторе`}
-            title="Открыть в конструкторе"
-            className="rounded-control px-1.5 py-1 text-xs text-fg-muted hover:bg-bg hover:text-fg"
-          >
-            <span aria-hidden="true">⚙</span>
-          </NavLink>
-        )}
+        <NavLink
+          to={`/builder/${report.slug}`}
+          onClick={onNavigate}
+          aria-label={`Открыть «${report.title}» в конструкторе`}
+          title="Открыть в конструкторе"
+          className="rounded-control px-1.5 py-1 text-xs text-fg-muted hover:bg-bg hover:text-fg"
+        >
+          <span aria-hidden="true">⚙</span>
+        </NavLink>
         <button
           type="button"
           aria-label={`Переименовать «${report.title}»`}
@@ -142,9 +138,8 @@ function ReportRow({
 }
 
 /**
- * Меню отчётов: список сгруппирован по доменам, активный отчёт подсвечен,
- * а создание, переименование и удаление живут здесь же — раньше в сайдбаре
- * было дерево скиллов, а отчётами управляли с трёх разных экранов.
+ * Меню отчётов: активный отчёт подсвечен, а создание, переименование и
+ * удаление живут здесь же — раньше отчётами управляли с трёх разных экранов.
  */
 export function ReportTree({ className, onNavigate }: { className?: string; onNavigate?: () => void }) {
   const { reports, loading, error, reload } = useReports()
@@ -153,7 +148,6 @@ export function ReportTree({ className, onNavigate }: { className?: string; onNa
   const location = useLocation()
   const { confirm, dialog } = useConfirm()
   const [query, setQuery] = useState('')
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [renaming, setRenaming] = useState<ReportMeta | null>(null)
 
   const activeSlug = useMemo(() => {
@@ -163,51 +157,18 @@ export function ReportTree({ className, onNavigate }: { className?: string; onNa
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
-    if (!q) return reports
-    return reports.filter((r) =>
-      [r.title, r.slug, r.description ?? '', r.skill ?? ''].some((v) => v.toLowerCase().includes(q)),
-    )
+    const found = q
+      ? reports.filter((r) =>
+          [r.title, r.slug, r.description ?? ''].some((v) => v.toLowerCase().includes(q)),
+        )
+      : reports
+    return [...found].sort((a, b) => a.title.localeCompare(b.title))
   }, [reports, query])
-
-  const groups = useMemo(() => {
-    const map = new Map<string, ReportMeta[]>()
-    for (const r of filtered) {
-      const key = reportGroup(r)
-      if (!map.has(key)) map.set(key, [])
-      map.get(key)!.push(r)
-    }
-    for (const items of map.values()) items.sort((a, b) => a.title.localeCompare(b.title))
-    return [...map.entries()].sort(([a], [b]) => domainLabel(a).localeCompare(domainLabel(b)))
-  }, [filtered])
-
-  // группа открытого отчёта не должна оставаться свёрнутой
-  const activeGroup = useMemo(() => {
-    const active = reports.find((r) => r.slug === activeSlug)
-    return active ? reportGroup(active) : null
-  }, [reports, activeSlug])
-
-  useEffect(() => {
-    if (!activeGroup) return
-    setCollapsed((prev) => {
-      if (!prev.has(activeGroup)) return prev
-      const next = new Set(prev)
-      next.delete(activeGroup)
-      return next
-    })
-  }, [activeGroup])
-
-  const toggle = (group: string) =>
-    setCollapsed((prev) => {
-      const next = new Set(prev)
-      if (next.has(group)) next.delete(group)
-      else next.add(group)
-      return next
-    })
 
   const askDelete = (report: ReportMeta) =>
     confirm({
       title: 'Удалить отчёт?',
-      description: `Отчёт «${report.title}» будет удалён вместе с назначениями доступа и артефактами. Действие необратимо.`,
+      description: `Отчёт «${report.title}» будет удалён вместе с назначениями доступа. Действие необратимо.`,
       onConfirm: async () => {
         await deleteReport(report.slug)
         await reload()
@@ -269,38 +230,17 @@ export function ReportTree({ className, onNavigate }: { className?: string; onNa
       ) : filtered.length === 0 ? (
         <p className="px-2 text-sm text-fg-muted">Ничего не найдено</p>
       ) : (
-        groups.map(([group, items]) => {
-          const open = !collapsed.has(group)
-          return (
-            <div key={group}>
-              <button
-                type="button"
-                aria-expanded={open}
-                onClick={() => toggle(group)}
-                className="flex w-full cursor-pointer items-center gap-2 rounded-control px-2.5 py-1.5 text-left text-sm font-semibold text-fg transition-colors hover:bg-bg"
-              >
-                <span aria-hidden="true" className="w-3 shrink-0 text-[11px] text-fg-muted">
-                  {open ? '▾' : '▸'}
-                </span>
-                <span className="truncate">{domainLabel(group)}</span>
-                <span className="ml-auto font-mono text-[11px] font-normal text-fg-muted">{items.length}</span>
-              </button>
-              {open && (
-                <div className="ml-4 flex flex-col border-l border-line pl-3">
-                  {items.map((r) => (
-                    <ReportRow
-                      key={r.slug}
-                      report={r}
-                      onNavigate={onNavigate}
-                      onRename={() => setRenaming(r)}
-                      onDelete={() => askDelete(r)}
-                    />
-                  ))}
-                </div>
-              )}
-            </div>
-          )
-        })
+        <div className="flex flex-col">
+          {filtered.map((r) => (
+            <ReportRow
+              key={r.slug}
+              report={r}
+              onNavigate={onNavigate}
+              onRename={() => setRenaming(r)}
+              onDelete={() => askDelete(r)}
+            />
+          ))}
+        </div>
       )}
 
       {renaming && <RenameDialog report={renaming} onClose={() => setRenaming(null)} />}

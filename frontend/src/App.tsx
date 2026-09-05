@@ -1,11 +1,9 @@
 import { useState } from 'react'
-import { BrowserRouter, Navigate, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
+import { BrowserRouter, Navigate, NavLink, Route, Routes, useNavigate } from 'react-router-dom'
 import type { ReactNode } from 'react'
 import { cn } from './lib/cn'
 import { ReportListPage } from './pages/ReportListPage'
 import { ReportViewPage } from './pages/ReportViewPage'
-import { SkillPage } from './pages/SkillPage'
-import { DomainPage } from './pages/DomainPage'
 import { LoginPage } from './pages/LoginPage'
 import { AccountPage } from './pages/AccountPage'
 import { AdminPage } from './pages/AdminPage'
@@ -117,13 +115,6 @@ function Navbar({ menuOpen, onToggleMenu }: { menuOpen: boolean; onToggleMenu: (
   )
 }
 
-function SkillRoute() {
-  const location = useLocation()
-  const path = decodeURIComponent(location.pathname).replace(/^\/skills\/?/, '')
-  if (!path.includes('/')) return <DomainPage domain={path} />
-  return <SkillPage />
-}
-
 function RequireAuth({ children }: { children: ReactNode }) {
   const { user, loading } = useAuth()
   if (loading)
@@ -186,14 +177,6 @@ function Layout() {
               element={
                 <RequireAuth>
                   <ReportViewPage />
-                </RequireAuth>
-              }
-            />
-            <Route
-              path="/skills/*"
-              element={
-                <RequireAuth>
-                  <SkillRoute />
                 </RequireAuth>
               }
             />

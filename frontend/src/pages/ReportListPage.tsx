@@ -1,9 +1,7 @@
-import { useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import type { ReportMeta } from '../types/report'
 import { useAuth } from '../lib/auth'
 import { useReports } from '../lib/reports'
-import { BUILDER_GROUP, domainLabel, reportGroup } from '../lib/domains'
 import { Alert, Badge, Card, EmptyState, Page, PageHeader, SkeletonCards } from '../components/ui'
 
 export function ReportCard({ report }: { report: ReportMeta }) {
@@ -39,16 +37,6 @@ export function ReportListPage() {
   // список живёт в контексте — тот же, что и в меню слева
   const { reports, loading, error } = useReports()
 
-  const groups = useMemo(() => {
-    const map = new Map<string, ReportMeta[]>()
-    for (const r of reports) {
-      const key = reportGroup(r)
-      if (!map.has(key)) map.set(key, [])
-      map.get(key)!.push(r)
-    }
-    return [...map.entries()].sort(([a], [b]) => domainLabel(a).localeCompare(domainLabel(b)))
-  }, [reports])
-
   const newReport = isAdmin ? (
     <Link
       to="/builder"
@@ -70,7 +58,7 @@ export function ReportListPage() {
   if (loading && reports.length === 0) {
     return (
       <Page>
-        <PageHeader title="Отчёты" subtitle="Сгруппированы по скиллам" actions={newReport} />
+        <PageHeader title="Отчёты" actions={newReport} />
         <SkeletonCards />
       </Page>
     )
@@ -80,7 +68,7 @@ export function ReportListPage() {
     <Page>
       <PageHeader
         title="Отчёты"
-        subtitle={user ? `${user.username}: сгруппированы по скиллам` : 'Сгруппированы по скиллам'}
+        subtitle={user ? `Доступны пользователю ${user.username}` : undefined}
         actions={newReport}
       />
 
@@ -91,17 +79,7 @@ export function ReportListPage() {
           action={newReport}
         />
       ) : (
-        groups.map(([group, items]) => (
-          <section key={group} className="mb-8">
-            <h2 className="mb-3 flex items-baseline gap-2 text-lg font-semibold tracking-tight">
-              {domainLabel(group)}
-              {group !== BUILDER_GROUP && (
-                <span className="font-mono text-xs font-normal text-fg-muted">{group}</span>
-              )}
-            </h2>
-            <ReportGrid reports={items} />
-          </section>
-        ))
+        <ReportGrid reports={reports} />
       )}
     </Page>
   )

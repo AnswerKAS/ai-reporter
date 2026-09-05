@@ -1,12 +1,14 @@
 """Точка входа FastAPI-приложения AI Reporter.
 
 Модули сгруппированы по пакетам:
-- core/       — конфигурация, SQLite, безопасность;
-- schemas/    — Pydantic-контракты (ReportSpec, датасеты, пользователи);
+- core/       — конфигурация, метабаза, безопасность;
+- schemas/    — Pydantic-контракты (отчёты, датасеты, словарь, пользователи);
 - api/        — HTTP-роутеры;
-- services/   — компилятор, воркер, промпты;
+- services/   — хранилище артефактов, фоновая уборка;
 - datasets/   — реестр датасетов и адаптеры источников;
-- reports/    — витрина ClickHouse, сиды, миграции.
+- semantic/   — словарь метрик, разрезов и связей;
+- query/      — построитель SQL и разбор словесного ТЗ;
+- reports/    — исполнитель определений, витрина ClickHouse, сиды.
 """
 
 import os
@@ -20,11 +22,9 @@ from .api import auth as auth_api
 from .api import datasets as datasets_api
 from .api import reports as reports_api
 from .api import semantic as semantic_api
-from .api import skills as skills_api
 from .core import database as db
 from .core.security import ensure_default_admin
 from .datasets import registry as dataset_registry
-from .services import skill_drafts
 from .services.worker import worker
 
 
@@ -32,10 +32,8 @@ from .services.worker import worker
 async def lifespan(app: FastAPI):
     db.init_db()
     db.migrate_from_sqlite()
-    db.migrate_skill_names()
     ensure_default_admin()
     dataset_registry.ensure_default_datasets()
-    skill_drafts.rescue_interrupted_generations()
     await worker.start()
     yield
     await worker.stop()
@@ -60,7 +58,6 @@ app.add_middleware(
 
 app.include_router(auth_api.router)
 app.include_router(reports_api.router)
-app.include_router(skills_api.router)
 app.include_router(datasets_api.router)
 app.include_router(semantic_api.router)
 app.include_router(admin_api.router)

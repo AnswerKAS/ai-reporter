@@ -41,36 +41,3 @@ export interface DatasetCreateInput {
   dsn?: string
   tableName?: string
 }
-
-export interface SkillInfo {
-  name: string
-  domain: string
-  path: string
-}
-
-export type SkillDraftStatus =
-  | 'generating'
-  | 'draft'
-  | 'review'
-  | 'checked'
-  | 'rejected'
-  | 'failed'
-  | 'unavailable'
-  | 'improving'
-  | 'checking'
-  | 'published'
-
-export interface SkillDraft {
-  id: string
-  domain: string
-  name: string
-  title: string
-  description: string
-  datasets: string[]
-  content: string
-  status: SkillDraftStatus
-  issues: string[]
-  authorId: string
-  createdAt: string
-  updatedAt: string
-}

@@ -108,7 +108,6 @@ jobs:
         run: |
           RSH="ssh"
           rsync -az --delete --rsh="$RSH" backend/app/      $SERVER:$APP_DIR/backend/app/
-          rsync -az --ignore-existing --rsh="$RSH" backend/skills/   $SERVER:$APP_DIR/backend/skills/  # не перезаписываем скиллы, опубликованные на сервере
           rsync -az           --rsh="$RSH" backend/requirements.txt $SERVER:$APP_DIR/backend/
           rsync -az --delete --rsh="$RSH" frontend/dist/    $SERVER:$APP_DIR/frontend/dist/
           rsync -az --delete --rsh="$RSH" deploy/           $SERVER:$APP_DIR/deploy/

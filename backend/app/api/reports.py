@@ -1,42 +1,30 @@
-"""Роутер отчётов: CRUD, пересчёт, фильтры, скиллы."""
+"""Роутер отчётов: список, чтение с живым пересчётом, определение, фильтры.
 
-import json
+Отчёт — это декларация: что показать, а не как посчитать. Данные считает
+построитель запросов при каждом чтении, поэтому очереди сборки, статусов
+компиляции и артефактов-скриптов здесь нет.
+"""
+
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException
 from starlette.concurrency import run_in_threadpool
 
 from ..core import database as db
 from ..core.security import get_current_user, require_admin
-from ..schemas.report import (
-    FiltersPatch,
-    RecompilePatch,
-    ReportMeta,
-    ReportPatch,
-    ReportUpdate,
-)
+from ..schemas.report import FiltersPatch, ReportMeta, ReportUpdate
 from ..datasets.base import DatasetError
 from ..query import builder as query_builder
 from ..query import interpret
 from ..reports import executor
 from ..schemas.definition import ReportDefinition
-from ..services import compiler
-from ..services import storage
-from ..services.worker import worker
 
 router = APIRouter(prefix='/api', tags=['reports'])
 
 
-def now_str() -> str:
-    from datetime import datetime, timezone
-
-    return datetime.now(timezone.utc).isoformat(timespec='seconds')
-
-
-# Внутренние поля строки reports наружу не отдаются: спека может весить
-# сотни килобайт и уезжала бы в каждый список отчётов, а definition и
-# artifact_dir клиенту не нужны (для правки определения есть отдельный GET).
-_INTERNAL_FIELDS = ('spec', 'definition', 'artifact_dir')
+# Определение наружу со списком не отдаётся: оно может весить сотни
+# килобайт и уезжало бы в каждый список отчётов (для правки есть отдельный GET).
+_INTERNAL_FIELDS = ('definition',)
 
 
 def _report_meta(report: dict) -> ReportMeta:
@@ -50,6 +38,15 @@ def _check_access(user: dict, slug: str) -> None:
         raise HTTPException(403, 'нет доступа к отчёту')
 
 
+async def _db(fn, *args, **kwargs):
+    """Синхронный вызов БД из async-обработчика — через пул потоков.
+
+    На event loop он держит весь процесс: при нехватке соединений _conn()
+    ждёт до 15s, и всё это время не отвечает ни один другой запрос.
+    """
+    return await run_in_threadpool(fn, *args, **kwargs)
+
+
 @router.get('/reports')
 def list_reports(user: dict = Depends(get_current_user)) -> dict:
     reports = db.list_reports()
@@ -57,31 +54,6 @@ def list_reports(user: dict = Depends(get_current_user)) -> dict:
     if slugs is not None:
         reports = [r for r in reports if r['slug'] in slugs]
     return {'reports': [_report_meta(r) for r in reports]}
-
-
-@router.post('/reports', status_code=202)
-def create_report(patch: ReportPatch, user: dict = Depends(require_admin)) -> dict:
-    skill_file = compiler.skill_path(patch.skill)
-    if not skill_file.exists():
-        raise HTTPException(404, f'скилл {patch.skill} не найден')
-    if any(part.startswith('_') for part in patch.skill.split('/')):
-        raise HTTPException(400, 'служебные файлы скиллов (с префиксом _) не могут быть использованы для отчёта')
-    slug = patch.slug or f"{patch.skill.replace('/', '-')}-{uuid.uuid4().hex[:6]}"
-    if db.get_report(slug) is not None:
-        raise HTTPException(409, f'отчёт с slug {slug} уже существует')
-    report_id = uuid.uuid4().hex
-    title = patch.title or f'Отчёт по скиллу {patch.skill}'
-    _ = db.create_report(
-        id=report_id,
-        slug=slug,
-        title=title,
-        description=patch.description,
-        skill=patch.skill,
-        params=patch.params or {},
-        mode=patch.mode,
-    )
-    worker.wake()
-    return {'report': _report_meta(db.get_report(slug))}
 
 
 @router.post('/reports/parse')
@@ -128,7 +100,7 @@ def preview_definition(definition: ReportDefinition, user: dict = Depends(get_cu
 
 @router.post('/reports/builder', status_code=201)
 def create_builder_report(payload: dict, user: dict = Depends(require_admin)) -> dict:
-    """Создаёт отчёт-конструктор: логика в декларации, сборка не нужна."""
+    """Создаёт отчёт: логика в декларации, сборка не нужна."""
     title = str(payload.get('title') or '').strip()
     if not title:
         raise HTTPException(422, 'нужно название отчёта')
@@ -149,8 +121,8 @@ def create_builder_report(payload: dict, user: dict = Depends(require_admin)) ->
         raise HTTPException(409, f'отчёт с slug {slug} уже существует')
     db.create_report(
         id=uuid.uuid4().hex, slug=slug, title=title,
-        description=payload.get('description'), skill='', params={},
-        kind='builder', definition=definition.model_dump(by_alias=True),
+        description=payload.get('description'),
+        definition=definition.model_dump(by_alias=True),
     )
     return {'report': _report_meta(db.get_report(slug))}
 
@@ -178,8 +150,6 @@ def update_definition(slug: str, definition: ReportDefinition,
     report = db.get_report(slug)
     if report is None:
         raise HTTPException(404, 'отчёт не найден')
-    if report.get('kind') != 'builder':
-        raise HTTPException(409, 'у этого отчёта логика в скилле, а не в определении')
     try:
         executor.execute(definition)
     except DatasetError as exc:
@@ -188,214 +158,77 @@ def update_definition(slug: str, definition: ReportDefinition,
     return {'report': _report_meta(db.get_report(slug))}
 
 
-async def _db(fn, *args, **kwargs):
-    """Синхронный вызов БД из async-обработчика — через пул потоков.
-
-    На event loop он держит весь процесс: при нехватке соединений _conn()
-    ждёт до 15s, и всё это время не отвечает ни один другой запрос.
-    """
-    return await run_in_threadpool(fn, *args, **kwargs)
+async def _render(report: dict, slug: str) -> dict:
+    """Выполняет определение отчёта и складывает результат в ответ API."""
+    definition = await _db(db.get_definition, slug)
+    if definition is None:
+        raise HTTPException(409, 'у отчёта нет определения')
+    try:
+        # execute() делает блокирующие запросы к БД: в event loop его звать
+        # нельзя — иначе он держит цикл и остальные запросы ждут пул
+        spec = await run_in_threadpool(
+            executor.execute, definition, report.get('filter_values') or {},
+            meta={'id': report['id'], 'slug': slug, 'title': report['title'],
+                  'description': report.get('description')},
+        )
+    except DatasetError as exc:
+        await _db(db.update_status, slug, status='error', error=str(exc))
+        raise HTTPException(502, str(exc))
+    await _db(db.update_status, slug, status='ready', error='')
+    payload = _report_meta(await _db(db.get_report, slug))
+    payload['sections'] = spec['sections']
+    payload['filters'] = spec.get('filters') or []
+    payload['dataOrigin'] = spec.get('dataOrigin')
+    return payload
 
 
 @router.get('/reports/{slug}')
 async def get_report(slug: str, user: dict = Depends(get_current_user)) -> dict:
-    """Отдаёт отчёт, всегда пересчитывая данные из БД через report.py.
-
-    Если пересчёт не удался (БД недоступна) — отдаёт последнюю сохранённую
-    спеку (last-known-good), чтобы отчёт всегда рендерился.
-    """
+    """Отдаёт отчёт, всегда пересчитывая данные: определение исполняется сейчас."""
     _check_access(user, slug)
     report = await _db(db.get_report, slug)
     if report is None:
         raise HTTPException(404, 'отчёт не найден')
-    payload = _report_meta(report)
-
-    if report.get('kind') == 'builder':
-        # сборки нет: определение выполняется прямо сейчас, данные всегда живые
-        definition = await _db(db.get_definition, slug)
-        if definition is None:
-            raise HTTPException(409, 'у отчёта нет определения')
-        try:
-            # execute() делает блокирующие запросы к БД: в event loop его звать
-            # нельзя — иначе он держит цикл и остальные запросы ждут пул
-            spec = await run_in_threadpool(
-                executor.execute, definition, report.get('filter_values') or {},
-                meta={'id': report['id'], 'slug': slug, 'title': report['title'],
-                      'description': report.get('description')},
-            )
-        except DatasetError as exc:
-            await _db(db.update_status, slug, status='error', error=str(exc))
-            raise HTTPException(502, str(exc))
-        await _db(db.update_status, slug, status='ready', error='')
-        payload['sections'] = spec['sections']
-        payload['filters'] = spec.get('filters') or []
-        payload['dataOrigin'] = spec.get('dataOrigin')
-        return {'report': payload}
-
-    if report['status'] == 'ready':
-        spec = None
-        try:
-            spec = await compiler.refresh_report(report)
-            await _db(db.set_spec, slug, spec)
-            await _db(db.update_status, slug, status='ready', artifact_dir=report['id'])
-        except Exception as exc:
-            spec = await _db(db.get_spec, slug)
-            if spec is None:
-                await _db(db.update_status, slug, status='error', error=str(exc))
-        if spec is not None:
-            payload['sections'] = spec['sections']
-            payload['filters'] = spec.get('filters') or []
-    return {'report': payload}
+    return {'report': await _render(report, slug)}
 
 
 @router.patch('/reports/{slug}')
 def update_report(slug: str, patch: ReportUpdate, user: dict = Depends(get_current_user)) -> dict:
-    """Правка опубликованного отчёта.
-
-    Название/описание — любой пользователь с доступом; скилл и режим
-    сборки — только администратор (смена скилла ставит отчёт в очередь
-    на перекомпиляцию).
-    """
+    """Правка отчёта: название и описание — любой пользователь с доступом."""
     _check_access(user, slug)
     report = db.get_report(slug)
     if report is None:
         raise HTTPException(404, 'отчёт не найден')
-    is_admin = user.get('role') == 'admin'
-    if not is_admin and (patch.skill is not None or patch.mode is not None):
-        raise HTTPException(403, 'изменять скилл и режим сборки может только администратор')
-
     if patch.title is not None and not patch.title.strip():
         raise HTTPException(422, 'название не может быть пустым')
-
-    skill_changed = False
-    if patch.skill is not None and patch.skill != report['skill']:
-        skill_file = compiler.skill_path(patch.skill)
-        if not skill_file.exists():
-            raise HTTPException(404, f'скилл {patch.skill} не найден')
-        if any(part.startswith('_') for part in patch.skill.split('/')):
-            raise HTTPException(400, 'служебные файлы скиллов (с префиксом _) не могут быть использованы для отчёта')
-        skill_changed = True
 
     db.update_report(
         slug,
         title=patch.title.strip() if patch.title is not None else None,
         description=patch.description,
-        skill=patch.skill,
-        mode=patch.mode,
     )
-    if skill_changed:
-        # новый скилл требует новой сборки report.py (прошлая версия
-        # сохраняется до успеха — self-healing компилятора)
-        db.update_status(slug, status='queued')
-        worker.wake()
     return {'report': _report_meta(db.get_report(slug))}
 
 
 @router.delete('/reports/{slug}')
 def delete_report(slug: str, user: dict = Depends(require_admin)) -> dict:
-    """Удаление отчёта (только админ): запись, назначения и артефакты."""
+    """Удаление отчёта (только админ): запись и назначения доступа."""
     report = db.get_report(slug)
     if report is None:
         raise HTTPException(404, 'отчёт не найден')
     db.delete_report(slug)
-    storage.delete_owner('report', report['id'])
     return {'ok': True}
-
-
-@router.get('/reports/{slug}/spec')
-def get_spec(slug: str, user: dict = Depends(get_current_user)) -> Response:
-    _check_access(user, slug)
-    report = db.get_report(slug)
-    if report is None:
-        raise HTTPException(404, 'отчёт не найден')
-    if report['status'] != 'ready':
-        raise HTTPException(409, 'отчёт ещё не готов')
-    spec = db.get_spec(slug)
-    if spec is None:
-        raise HTTPException(404, 'spec не найден')
-    return Response(json.dumps(spec, ensure_ascii=False), media_type='application/json')
-
-
-@router.post('/reports/{slug}/refresh', status_code=202)
-async def refresh_report(slug: str, user: dict = Depends(require_admin)) -> dict:
-    report = await _db(db.get_report, slug)
-    if report is None:
-        raise HTTPException(404, 'отчёт не найден')
-    if not compiler.has_report_script(report['id']):
-        raise HTTPException(409, 'нет report.py — выполните первичную сборку')
-    await _db(db.update_status, slug, status='building')
-    try:
-        spec = await compiler.refresh_report(report)
-        await _db(db.set_spec, slug, spec)
-        await _db(db.update_status, slug, status='ready', artifact_dir=report['id'])
-        payload = _report_meta(await _db(db.get_report, slug))
-        payload['sections'] = spec['sections']
-        payload['filters'] = spec.get('filters') or []
-        return {'report': payload}
-    except Exception as exc:
-        await _db(db.update_status, slug, status='error', error=str(exc))
-        raise HTTPException(500, str(exc))
-
-
-@router.post('/reports/{slug}/recompile', status_code=202)
-async def recompile_report(
-    slug: str, patch: RecompilePatch | None = None, user: dict = Depends(require_admin)
-) -> dict:
-    """Перекомпиляция report.py по актуальному тексту скилла (LLM).
-
-    Ставит отчёт в очередь с режимом llm (или из тела запроса), воркер
-    заново генерирует скрипт. Прошлый report.py сохраняется до успеха —
-    при сбое отчёт остаётся рабочим.
-    """
-    report = await _db(db.get_report, slug)
-    if report is None:
-        raise HTTPException(404, 'отчёт не найден')
-    mode = (patch.mode if patch else 'llm') or 'llm'
-    await _db(db.set_mode, slug, mode)
-    await _db(db.update_status, slug, status='queued')
-    worker.wake()
-    return {'report': _report_meta(await _db(db.get_report, slug))}
 
 
 @router.post('/reports/{slug}/filters')
 async def set_report_filters(
     slug: str, patch: FiltersPatch, user: dict = Depends(get_current_user)
 ) -> dict:
-    """Сохраняет значения фильтров и сразу пересчитывает отчёт (SQL в report.py)."""
+    """Сохраняет значения фильтров и сразу пересчитывает отчёт."""
     _check_access(user, slug)
     report = await _db(db.get_report, slug)
     if report is None:
         raise HTTPException(404, 'отчёт не найден')
-    if report.get('kind') != 'builder' and not compiler.has_report_script(report['id']):
-        raise HTTPException(409, 'нет report.py — выполните первичную сборку')
     await _db(db.set_filters, slug, patch.values)
     report = await _db(db.get_report, slug)
-
-    if report.get('kind') == 'builder':
-        definition = await _db(db.get_definition, slug)
-        try:
-            spec = await run_in_threadpool(
-                executor.execute, definition, report.get('filter_values') or {},
-                meta={'id': report['id'], 'slug': slug, 'title': report['title'],
-                      'description': report.get('description')},
-            )
-        except DatasetError as exc:
-            raise HTTPException(502, str(exc))
-        payload = _report_meta(await _db(db.get_report, slug))
-        payload['sections'] = spec['sections']
-        payload['filters'] = spec.get('filters') or []
-        payload['dataOrigin'] = spec.get('dataOrigin')
-        return {'report': payload}
-
-    await _db(db.update_status, slug, status='building')
-    try:
-        spec = await compiler.refresh_report(report)
-        await _db(db.set_spec, slug, spec)
-        await _db(db.update_status, slug, status='ready', artifact_dir=report['id'])
-        payload = _report_meta(await _db(db.get_report, slug))
-        payload['sections'] = spec['sections']
-        payload['filters'] = spec.get('filters') or []
-        return {'report': payload}
-    except Exception as exc:
-        await _db(db.update_status, slug, status='error', error=str(exc))
-        raise HTTPException(500, str(exc))
+    return {'report': await _render(report, slug)}

@@ -16,7 +16,6 @@ import {
   fetchReports,
 } from '../lib/api'
 import { useAuth } from '../lib/auth'
-import { DraftCard, useDraftReload } from '../components/SkillDraftViews'
 import {
   Alert,
   Button,
@@ -25,39 +24,11 @@ import {
   Page,
   PageHeader,
   Select,
-  SkeletonRows,
 } from '../components/ui'
 
 const PANEL = 'rounded-card border border-line bg-surface p-5'
 const PANEL_TITLE = 'mb-3.5 text-base font-semibold'
 const ROW = 'flex items-center justify-between gap-3 text-sm'
-
-function SkillDraftsAdmin() {
-  const { drafts, reload } = useDraftReload()
-  const [error, setError] = useState<string | null>(null)
-
-  if (drafts !== null && drafts.length === 0) return null
-
-  return (
-    <section className="mb-7">
-      <h2 className="mb-2 flex items-center gap-3 text-lg font-semibold tracking-tight">
-        Черновики скиллов
-        <Button variant="ghost" size="sm" onClick={reload}>
-          Обновить
-        </Button>
-      </h2>
-      <p className="mb-3 text-sm text-fg-muted">
-        Проверьте скилл по правилам (агент-ревьюер) и опубликуйте: появится файл скилла и отчёт с доступом для автора.
-      </p>
-      {error && <Alert className="mb-3">{error}</Alert>}
-      {drafts === null ? (
-        <SkeletonRows count={2} />
-      ) : (
-        drafts.map((d) => <DraftCard key={d.id} draft={d} isAdmin onChanged={reload} onFail={setError} />)
-      )}
-    </section>
-  )
-}
 
 export function AdminPage() {
   const { isAdmin } = useAuth()
@@ -114,8 +85,6 @@ export function AdminPage() {
           {notice}
         </Alert>
       )}
-
-      <SkillDraftsAdmin />
 
       <div className="mb-6 grid grid-cols-[repeat(auto-fit,minmax(340px,1fr))] gap-4">
         <UsersPanel users={users} onChanged={reload} onFail={fail} onNotice={setNotice} />

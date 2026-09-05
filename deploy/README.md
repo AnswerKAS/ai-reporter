@@ -27,7 +27,7 @@ cat ~/.ssh/ai-reporter-deploy             # → секрет SSH_PRIVATE_KEY
 После первого успешного деплоя по ключу стоит закрыть парольный вход:
 `PasswordAuthentication no` в `/etc/ssh/sshd_config` + `systemctl reload ssh`.
 
-Сервер хранит своё состояние сам: `backend/.env` (PG*, DATABASE_URL, OPENCODE_MODEL) и `backend/artifacts/` rsync-ом не перетираются — в репо только код и skills.
+Сервер хранит своё состояние сам: `backend/.env` (PG*, DATABASE_URL) и `backend/artifacts/` (загруженные CSV) rsync-ом не перетираются — в репо только код.
 
 ## Первичная настройка сервера (один раз)
 
@@ -57,7 +57,7 @@ chmod 440 /etc/sudoers.d/ai-reporter
 
 ```bash
 # 5. .env (секреты вручную, в git не попадает)
-nano /home/deploy/ai-reporter/backend/.env    # PGHOST/PGUSER/..., DATABASE_URL, OPENCODE_MODEL
+nano /home/deploy/ai-reporter/backend/.env    # PGHOST/PGUSER/..., DATABASE_URL
 
 # 6. Юнит systemd (приедет на сервер rsync-ом при первом деплое)
 sudo cp /home/deploy/ai-reporter/deploy/ai-reporter.service /etc/systemd/system/
@@ -73,14 +73,6 @@ sudo nginx -t && sudo systemctl reload nginx
 ```
 
 HTTPS: `sudo apt install certbot python3-certbot-nginx && sudo certbot --nginx -d ваш-домен`.
-
-## opencode (опционально)
-
-Нужен только для LLM-генерации отчётов (mode auto/llm); без него компилятор работает в demo-режиме:
-
-```bash
-curl -fsSL https://opencode.ai/install | bash   # под пользователем deploy
-```
 
 ## Проверка
 

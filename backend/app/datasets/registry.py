@@ -1,4 +1,4 @@
-"""Реестр датасетов в SQLite + фабрика адаптеров.
+"""Реестр датасетов в метабазе + фабрика адаптеров.
 
 Датасет = именованный источник: тип (clickhouse | postgres | csv), DSN
 (литерал или ссылка env:VAR), таблица/файл, вычитанная схема полей.
@@ -6,8 +6,6 @@
 
 import json
 import os
-import re
-import uuid
 from pathlib import Path
 
 from ..core.database import _conn, utcnow
@@ -207,54 +205,3 @@ def ensure_default_datasets() -> None:
                 status='new',
                 error=None,
             )
-
-
-def for_slugs(slugs: list[str] | None) -> list[dict]:
-    """Датасеты по списку slug'ов; None/пусто → все зарегистрированные."""
-    all_items = list_all()
-    if not slugs:
-        return all_items
-    wanted = {s.strip() for s in slugs if s.strip()}
-    return [d for d in all_items if d['slug'] in wanted]
-
-
-def parse_skill_datasets(skill_text: str) -> list[str] | None:
-    """Секция '## Датасеты' скилла → список slug'ов (None, если секции нет).
-
-    Поддерживаются два формата:
-    - инлайн: '## Датасеты: slug1, slug2';
-    - список: '## Датасеты' + буллеты вида '- `slug` — описание'.
-    """
-    lines = skill_text.splitlines()
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-        if not stripped.startswith('#'):
-            continue
-        header = stripped.lstrip('#').strip().lower()
-        if not header.startswith('датасет'):
-            continue
-        if ':' in stripped:
-            rest = stripped.split(':', 1)[1]
-            return [p.strip().strip('`') for p in rest.replace(',', ' ').split() if p.strip().strip('`')] or []
-        # формат списком: имя датасета — первый slug-подобный токен в кавычках
-        # каждого буллета (дальше в буллете могут быть кавычковые имена полей —
-        # их брать нельзя, иначе «form_id» станет «датасетом»)
-        names: list[str] = []
-        for bullet in lines[i + 1:]:
-            b = bullet.strip()
-            if not b:
-                continue
-            if b.startswith('#') or not b.startswith(('-', '*', '•')):
-                break
-            for token in re.findall(r'`([^`]+)`', b):
-                token = token.strip()
-                if re.fullmatch(r'[a-z0-9][a-z0-9_-]*', token):
-                    if token not in names:
-                        names.append(token)
-                    break
-        return names
-    return None
-
-
-def new_id() -> str:
-    return uuid.uuid4().hex

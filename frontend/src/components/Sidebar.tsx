@@ -1,15 +1,13 @@
 import { useRef, useState, type PointerEvent as ReactPointerEvent, type KeyboardEvent } from 'react'
 import { cn } from '../lib/cn'
 import { ReportTree } from './ReportTree'
-import { SkillTree } from './SkillTree'
 
-/** Левое меню: отчёты — главный раздел, скиллы — вспомогательный под ними. */
+/** Левое меню: список отчётов с поиском и управлением. */
 export function Sidebar({ className, onNavigate }: { className?: string; onNavigate?: () => void }) {
   return (
     <div className={className}>
       <div className="flex flex-col gap-4">
         <ReportTree onNavigate={onNavigate} />
-        <SkillTree className="border-t border-line pt-3" onNavigate={onNavigate} />
       </div>
     </div>
   )

@@ -1,19 +1,36 @@
 schema: spec-driven
 
 context: |
-  Проект: AI Reporter — веб-система генерации аналитических отчётов по текстовым скиллам.
+  Проект: AI Reporter — веб-система построения аналитических отчётов по данным
+  из внешних источников. Отчёт — декларация: пользователь собирает его в
+  конструкторе (мышью или словами), SQL по декларации собирает построитель
+  запросов, опираясь на словарь метрик и разрезов. Кода в отчёте нет.
   Тексты спек: русский язык; структурные маркеры OpenSpec (ADDED/MODIFIED/REMOVED, Requirement, Scenario, SHALL/WHEN/THEN) — как в формате.
 
   Стек:
-  - Backend: FastAPI (Python 3.12, venv в backend/.venv), пакеты app/{core,schemas,api,services,datasets,reports}.
-  - Хранилище: PostgreSQL, схема ai_reporter (PG* переменные backend/.env), psycopg 3 (ClientCursor, client_encoding=utf8).
-  - Frontend: React 19 + Vite + TypeScript, react-router-dom, recharts; страницы /reports, /datasets, /skills/<name>, /account, /admin.
-  - Генерация отчётов: фоновый воркер → compiler → opencode run (LLM пишет report.py) → report.py --output report.spec.json → валидация ReportSpec; fallback — демо-скрипт template_report.py.
-  - Артефакты: фасад services/storage.py (local-режим, ARTIFACTS_DIR; S3-реализация запланирована).
-  - Скиллы отчётов: backend/skills/<домен>/<файл>.md; правила — opencode-скилл report-skill (.opencode/skills/report-skill/SKILL.md).
+  - Backend: FastAPI (Python 3.12, venv в backend/.venv), пакеты app/{core,schemas,api,services,datasets,semantic,query,reports}.
+  - Хранилище: PostgreSQL, схема ai_reporter (PG* переменные backend/.env), psycopg 3 (ClientCursor, client_encoding=utf8), пул psycopg_pool.
+  - Frontend: React 19 + Vite + TypeScript, react-router-dom, recharts, Tailwind v4; страницы /reports, /builder, /datasets, /model, /account, /admin.
+  - Конструктор отчётов: ReportDefinition (schemas/definition.py) → query/builder.py → reports/executor.py → ReportSpec; словарь метрик/разрезов/связей — semantic/registry.py.
+  - Словесное ТЗ: query/interpret.py (модель выбирает только из словаря) с откатом на детерминированный парсер query/phrase.py.
+  - Артефакты: фасад services/storage.py (local-режим, ARTIFACTS_DIR; S3-реализация запланирована) — загруженные CSV-датасеты.
+  - Фон: services/worker.py — только уборка просроченных сессий; сборок отчётов нет.
+
+  Возможности (openspec/specs/):
+  - platform — приложение, метабаза, конфигурация, воркер, деплой;
+  - access-control — аутентификация, пользователи, группы, доступы;
+  - datasets — реестр источников и адаптеры;
+  - semantic-model — словарь метрик, разрезов и связей;
+  - query-engine — построитель SQL: планы джойнов, защита от размножения строк, фильтры;
+  - report-builder — конструктор отчёта-декларации;
+  - nl-parsing — словесное ТЗ → декларация;
+  - reports — жизненный цикл отчёта и контракт ReportSpec;
+  - artifacts — хранилище загруженных файлов;
+  - web-ui — оболочка интерфейса, темы, страница отчёта.
 
   Конвенции:
   - Основной конвеншн-документ — AGENTS.md в корне репо.
-  - Все /api/* требуют Bearer-токен; CRUD отчётов/датасетов — только админ; доступ к отчётам — через report_access (пользователь или группа).
+  - Все /api/* требуют Bearer-токен; CRUD отчётов/датасетов/словаря — только админ; доступ к отчётам — через report_access (пользователь или группа).
+  - SQL пишет только админ (выражения метрик); пользовательские значения попадают в запрос параметрами, произвольный SQL от пользователя невозможен.
   - Секреты (DSN, логины, пароли, хосты) не выводятся в API и UI: sanitize_error в datasets/base.py; поле dsn не отдаётся.
   - Форматы отчёта: ReportSpec (camelCase, Pydantic alias) — markdown/kpi/chart/bar|line|area|pie|combo/table, детализация по клику (detail.rowsBy).

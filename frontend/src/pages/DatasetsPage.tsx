@@ -3,7 +3,6 @@ import type { Dataset, DatasetDetail, DatasetSource } from '../types/dataset'
 import {
   ApiError,
   createDataset,
-  createSkillDraft,
   deleteDataset,
   fetchDataset,
   fetchDatasets,
@@ -11,7 +10,6 @@ import {
   uploadDatasetCsv,
 } from '../lib/api'
 import { useAuth } from '../lib/auth'
-import { DraftCard, useDraftReload } from '../components/SkillDraftViews'
 import {
   Alert,
   Badge,
@@ -24,10 +22,8 @@ import {
   PageHeader,
   Select,
   SkeletonCards,
-  SkeletonRows,
   Table,
   Td,
-  Textarea,
   Th,
   Tr,
 } from '../components/ui'
@@ -105,7 +101,7 @@ export function DatasetsPage() {
 
   return (
     <Page>
-      <PageHeader title="Датасеты" subtitle="Источники данных, доступные скиллам отчётов" />
+      <PageHeader title="Датасеты" subtitle="Источники данных, из которых собираются отчёты" />
 
       {error && <Alert className="mb-4">{error}</Alert>}
 
@@ -124,7 +120,6 @@ export function DatasetsPage() {
         </details>
       )}
 
-      <MyDrafts />
 
       {datasets === null ? (
         <SkeletonCards count={4} />
@@ -181,7 +176,6 @@ export function DatasetsPage() {
       {detail && (
         <DatasetDetailPanel
           detail={detail}
-          datasets={datasets ?? []}
           isAdmin={isAdmin}
           busy={busy}
           onRefresh={() => runAdminAction(() => refreshDataset(detail.dataset.slug))}
@@ -278,7 +272,6 @@ function DatasetCreateForm({ busy, onCreated }: { busy: boolean; onCreated: (slu
 
 function DatasetDetailPanel({
   detail,
-  datasets,
   isAdmin,
   busy,
   onRefresh,
@@ -286,7 +279,6 @@ function DatasetDetailPanel({
   onUpload,
 }: {
   detail: DatasetDetail
-  datasets: Dataset[]
   isAdmin: boolean
   busy: boolean
   onRefresh: () => void
@@ -325,8 +317,6 @@ function DatasetDetailPanel({
         )}
       </div>
       {dataset.error && <Alert className="mb-3">{dataset.error}</Alert>}
-
-      <SkillGenerator datasets={datasets} currentSlug={dataset.slug} />
 
       <h3 className="mt-5 mb-2 text-sm font-semibold">Поля</h3>
       {dataset.fields.length > 0 ? (
@@ -372,124 +362,6 @@ function DatasetDetailPanel({
         </Table>
       ) : (
         <p className="text-sm text-fg-muted">Превью недоступно.</p>
-      )}
-    </section>
-  )
-}
-
-function SkillGenerator({ datasets, currentSlug }: { datasets: Dataset[]; currentSlug: string }) {
-  const [open, setOpen] = useState(false)
-  const [domain, setDomain] = useState('reports')
-  const [name, setName] = useState('')
-  const [title, setTitle] = useState('')
-  const [description, setDescription] = useState('')
-  const [extra, setExtra] = useState<string[]>([])
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [created, setCreated] = useState(false)
-
-  const picked = [currentSlug, ...extra.filter((s) => s !== currentSlug)]
-
-  const toggleExtra = (slug: string) => {
-    setExtra((prev) => (prev.includes(slug) ? prev.filter((s) => s !== slug) : [...prev, slug]))
-  }
-
-  const submit = async () => {
-    setError(null)
-    setBusy(true)
-    try {
-      await createSkillDraft({ domain, name, title, description, datasets: picked })
-      setCreated(true)
-      setName('')
-      setTitle('')
-      setDescription('')
-      setExtra([])
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'не удалось создать черновик')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <details open={open} onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}>
-      <summary className="inline-flex w-fit cursor-pointer list-none items-center rounded-control border border-accent bg-accent px-3.5 py-1.5 text-sm font-semibold text-accent-fg hover:bg-accent-hover [&::-webkit-details-marker]:hidden">
-        Сгенерировать скилл по этому датасету
-      </summary>
-      <div className={FORM}>
-        <Field label="Домен">
-          <Input value={domain} onChange={(e) => setDomain(e.target.value)} placeholder="sales" />
-        </Field>
-        <Field label="Имя скилла (slug)">
-          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="region-report" />
-        </Field>
-        <Field label="Название">
-          <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Отчёт по регионам" />
-        </Field>
-        <Field label="Какие данные нужны в отчёте (словами)" className="col-span-full">
-          <Textarea
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            placeholder="Например: выручка по городам с детализацией по категориям, топ-5 менеджеров и динамика по неделям…"
-            rows={4}
-          />
-        </Field>
-        <div className="col-span-full">
-          <p className="mb-1.5 text-sm text-fg-muted">Датасеты для скилла:</p>
-          <div className="flex flex-wrap gap-x-4 gap-y-2">
-            {datasets.map((d) => {
-              const isCurrent = d.slug === currentSlug
-              const checked = isCurrent || extra.includes(d.slug)
-              return (
-                <label key={d.slug} className="inline-flex items-center gap-1.5 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    disabled={isCurrent}
-                    onChange={() => toggleExtra(d.slug)}
-                  />
-                  {d.title} <span className="font-mono text-xs text-fg-muted">{d.slug}</span>
-                  {isCurrent && <span className="text-xs text-fg-muted">(текущий)</span>}
-                </label>
-              )
-            })}
-          </div>
-        </div>
-        {error && (
-          <div className="col-span-full">
-            <Alert>{error}</Alert>
-          </div>
-        )}
-        <div className="col-span-full flex flex-wrap items-center gap-3">
-          <Button variant="primary" disabled={busy || !name || !title || !description} onClick={submit}>
-            {busy ? 'Создаём…' : 'Сгенерировать скилл'}
-          </Button>
-          {created && <Alert tone="success">Черновик создан — генерация идёт в фоне, следите в списке «Мои черновики».</Alert>}
-        </div>
-      </div>
-    </details>
-  )
-}
-
-function MyDrafts() {
-  const { drafts, reload } = useDraftReload()
-  const [error, setError] = useState<string | null>(null)
-
-  if (drafts !== null && drafts.length === 0) return null
-
-  return (
-    <section className="mb-7">
-      <h2 className="mb-3 flex items-center gap-3 text-lg font-semibold tracking-tight">
-        Мои черновики скиллов
-        <Button variant="ghost" size="sm" onClick={reload}>
-          Обновить
-        </Button>
-      </h2>
-      {error && <Alert className="mb-3">{error}</Alert>}
-      {drafts === null ? (
-        <SkeletonRows count={2} />
-      ) : (
-        drafts.map((d) => <DraftCard key={d.id} draft={d} isAdmin={false} onChanged={reload} onFail={setError} />)
       )}
     </section>
   )

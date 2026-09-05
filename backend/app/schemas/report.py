@@ -1,7 +1,7 @@
 from enum import Enum
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
 
@@ -11,13 +11,6 @@ class CamelModel(BaseModel):
         populate_by_name=True,
         extra='allow',
     )
-
-
-def _stringify_params(v: Any) -> Any:
-    """LLM-скрипты кладут в params числа (id форм и т.п.) — приводим к строкам."""
-    if isinstance(v, dict):
-        return {k: str(x) if isinstance(x, (int, float)) and not isinstance(x, bool) else x for k, x in v.items()}
-    return v
 
 
 class NumberFormat(str, Enum):
@@ -102,15 +95,14 @@ class ReportFilter(CamelModel):
 
 
 class Report(CamelModel):
+    """Отчёт с данными: контракт, который рендерит фронт."""
+
     id: str
     slug: str
     title: str
     description: str | None = None
-    skill: str | None = None
     created_at: str
     updated_at: str
-    params: dict[str, str] | None = None
-    _stringify = field_validator('params', mode='before')(_stringify_params)
     filters: list[ReportFilter] | None = None
     sections: list[ReportSection]
 
@@ -120,37 +112,19 @@ class ReportMeta(CamelModel):
     slug: str
     title: str
     description: str | None = None
-    skill: str | None = None
     status: str
     error: str | None = None
     created_at: str
     updated_at: str
-    params: dict[str, str] | None = None
     filter_values: dict[str, str] | None = None
 
 
-class ReportPatch(CamelModel):
-    slug: str | None = None
-    title: str | None = None
-    description: str | None = None
-    skill: str
-    params: dict[str, str] | None = None
-    mode: Literal['auto', 'demo', 'llm'] = 'auto'
-
-
 class ReportUpdate(CamelModel):
-    """Правка опубликованного отчёта: название/описание — любой с доступом,
-    скилл и режим сборки — только админ (все поля опциональны)."""
+    """Правка отчёта: название и описание — любой пользователь с доступом."""
 
     title: str | None = None
     description: str | None = None
-    skill: str | None = None
-    mode: Literal['auto', 'demo', 'llm'] | None = None
 
 
 class FiltersPatch(CamelModel):
     values: dict[str, str]
-
-
-class RecompilePatch(CamelModel):
-    mode: Literal['auto', 'demo', 'llm'] = 'llm'
