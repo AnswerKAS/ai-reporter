@@ -6,6 +6,8 @@ __pycache__/
 *.db
 .env
 .DS_Store
+# локальное состояние инструментов; внутри бывают рабочие копии репозитория
+.claude/
 nohup.out
 backend/report.py
 backend/report.spec.json
