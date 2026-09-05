@@ -1327,6 +1327,7 @@ function StepData({
       {modalFor && (
         <FieldModal
           dataset={datasets.find((d) => d.slug === modalFor)!}
+          dimensions={dimensions}
           formulaSource={[
             ...metrics.filter((m) => pickedMetrics.includes(m.slug)).map((m) => ({ key: m.slug, title: m.title })),
             ...ownFields.filter((f) => f.role === 'metric').map((f) => ({ key: f.key, title: f.title })),
@@ -1357,6 +1358,88 @@ function StepData({
   )
 }
 
+/** Русские названия колонок датасета: имя → человеческое название.
+
+    Оба источника лежат в базе: комментарий колонки вычитывается из самого
+    источника вместе со схемой, название разреза — из модели данных. Комментарий
+    точнее, поэтому он и перекрывает словарь: он живёт рядом с колонкой и его
+    правят владельцы данных. */
+function russianNames(dataset: Dataset, dimensions: Dimension[]): Map<string, string> {
+  const names = new Map<string, string>()
+  for (const d of dimensions) {
+    if (d.datasetSlug === dataset.slug && d.field && d.title) names.set(d.field, d.title)
+  }
+  for (const f of dataset.fields) {
+    const comment = f.comment?.trim()
+    if (comment) names.set(f.name, comment)
+  }
+  return names
+}
+
+/** Первая мысль из описания колонки — то, что влезает в строку списка.
+
+    Комментарий в базе пишут предложением («Сумма продажи в рублях, включая
+    возвраты»), а строку выпадающего списка это растягивает так, что имя колонки
+    теряется. Режем по первому знаку конца мысли и по длине; полный текст всё
+    равно стоит под списком, поэтому ничего не пропадает. */
+function shortName(text: string): string {
+  const head = text.split(/[,;:.(\n]/, 1)[0].trim() || text.trim()
+  if (head.length <= 32) return head
+  const cut = head.slice(0, 32)
+  const space = cut.lastIndexOf(' ')
+  return `${(space > 16 ? cut.slice(0, space) : cut).trimEnd()}…`
+}
+
+// Длинные имена типов PostgreSQL → общепринятые короткие синонимы: в строке
+// списка тип занимает место, которое нужнее названию колонки.
+const TYPE_ALIASES: Record<string, string> = {
+  'timestamp with time zone': 'timestamptz',
+  'timestamp without time zone': 'timestamp',
+  'time with time zone': 'timetz',
+  'time without time zone': 'time',
+  'double precision': 'float8',
+  'character varying': 'varchar',
+  character: 'char',
+}
+
+function shortType(type: string): string {
+  return TYPE_ALIASES[(type || '').trim().toLowerCase()] ?? type
+}
+
+/** Вид колонки по типу источника — что с ней вообще можно сделать.
+
+    Сложить или усреднить можно только число; json, массивы, карты и прочая
+    структура не годятся даже в разрез — по ним нельзя сгруппировать, и отчёт
+    падал бы уже на запросе. Обёртки ClickHouse (`Nullable`, `LowCardinality`)
+    смысла колонки не меняют, поэтому снимаются. */
+function columnKind(sourceType: string): 'number' | 'date' | 'bool' | 'text' | 'complex' {
+  let t = (sourceType || '').trim().toLowerCase()
+  for (let i = 0; i < 4; i += 1) {
+    const inner = /^(?:nullable|lowcardinality)\((.+)\)$/.exec(t)
+    if (!inner) break
+    t = inner[1].trim()
+  }
+  if (t.endsWith('[]') || COMPLEX_TYPE.test(t)) return 'complex'
+  if (t.startsWith('bool')) return 'bool'
+  if (/^(date|time|timestamp)/.test(t)) return 'date'
+  if (/int|float|numeric|decimal|double|real|money|serial/.test(t)) return 'number'
+  return 'text'
+}
+
+const COMPLEX_TYPE =
+  /^(json|array|map|tuple|nested|bytea|xml|tsvector|tsquery|interval|point|line|lseg|box|path|polygon|circle|record|variant|dynamic|object|aggregatefunction|simpleaggregatefunction)/
+
+/** Годится ли колонка под выбранный способ использования.
+
+    Счётные действия работают с чем угодно (считаются строки, а не значения),
+    остальные — только с числом. */
+function fitsRole(sourceType: string, role: 'metric' | 'dimension', agg: ReportField['agg']): boolean {
+  const kind = columnKind(sourceType)
+  if (kind === 'complex') return false
+  if (role === 'dimension') return true
+  return agg === 'count' || agg === 'count_distinct' ? true : kind === 'number'
+}
+
 /** Тип колонки источника → тип разреза: Date это дата, числовые — число. */
 function guessType(sourceType: string): 'string' | 'date' | 'number' {
   const t = (sourceType || '').toLowerCase()
@@ -1378,6 +1461,7 @@ function freeKey(taken: Set<string>): string {
     внутри отчёта, поэтому общий словарь остаётся за администратором. */
 function FieldModal({
   dataset,
+  dimensions,
   formulaSource,
   taken,
   onAddField,
@@ -1385,6 +1469,7 @@ function FieldModal({
   onClose,
 }: {
   dataset: Dataset
+  dimensions: Dimension[]
   formulaSource: { key: string; title: string }[]
   taken: Set<string>
   onAddField: (field: ReportField) => void
@@ -1426,6 +1511,7 @@ function FieldModal({
       {tab === 'column' ? (
         <ColumnForm
           dataset={dataset}
+          dimensions={dimensions}
           taken={taken}
           onAdd={(field) => {
             onAddField(field)
@@ -1448,34 +1534,50 @@ function FieldModal({
 
 function ColumnForm({
   dataset,
+  dimensions,
   taken,
   onAdd,
 }: {
   dataset: Dataset
+  dimensions: Dimension[]
   taken: Set<string>
   onAdd: (field: ReportField) => void
 }) {
-  const [column, setColumn] = useState(dataset.fields[0]?.name ?? '')
+  const ru = useMemo(() => russianNames(dataset, dimensions), [dataset, dimensions])
   const [role, setRole] = useState<'metric' | 'dimension'>('metric')
   const [agg, setAgg] = useState<ReportField['agg']>('sum')
+  const [column, setColumn] = useState('')
   const [format, setFormat] = useState<ReportField['format']>('number')
   const [title, setTitle] = useState('')
 
-  const picked = dataset.fields.find((f) => f.name === column)
+  // список колонок зависит от того, что с ними собираются делать, — поэтому
+  // «Использовать как» и стоит выше: сначала способ, потом подходящие колонки
+  const allowed = useMemo(
+    () => dataset.fields.filter((f) => fitsRole(f.type, role, agg)),
+    [dataset.fields, role, agg],
+  )
+  // выбранная колонка могла выпасть из списка после смены роли или действия;
+  // держим это в производном значении, а не в эффекте, — состояние не
+  // «догоняет» рендер, и submit не увидит колонку, которой уже нет в списке
+  const active = allowed.some((f) => f.name === column) ? column : allowed[0]?.name ?? ''
+  const hidden = dataset.fields.length - allowed.length
+
+  const picked = allowed.find((f) => f.name === active)
   const type = guessType(picked?.type ?? '')
-  const suggested = column
+  // название по умолчанию — русское и короткое: это подпись поля в отчёте
+  const suggested = ru.has(active) ? shortName(ru.get(active)!) : active
 
   return (
     <form
       className="flex flex-col gap-3"
       onSubmit={(e) => {
         e.preventDefault()
-        if (!column) return
+        if (!active) return
         onAdd({
           key: freeKey(taken),
           title: title.trim() || suggested,
           datasetSlug: dataset.slug,
-          field: column,
+          field: active,
           role,
           agg: role === 'metric' ? agg : null,
           type,
@@ -1483,49 +1585,82 @@ function ColumnForm({
         })
       }}
     >
-      <Field label="Колонка">        <Select value={column} onChange={(e) => setColumn(e.target.value)}>
-          {dataset.fields.map((f) => (
-            <option key={f.name} value={f.name}>{f.name} · {f.type}</option>
-          ))}
-        </Select></Field>
-      {/* описание из комментария колонки в источнике: гадать по имени не нужно */}
-      <p className="-mt-1.5 text-xs text-fg-muted">
-        {picked?.comment || 'у колонки нет описания в источнике'}
-      </p>
-
-      <fieldset className="flex flex-col gap-1.5 rounded-control border border-line px-3 pt-2 pb-2.5">
-        <legend>Использовать как</legend>
-        <label>
+      <fieldset className="flex flex-col gap-2 rounded-control border border-line px-3 pt-1 pb-2.5">
+        {/* подпись легенды — теми же классами, что и у Field: иначе браузер
+            рисует её своим шрифтом и она выбивается из остальных подписей */}
+        <legend className="px-1 text-xs text-fg-muted">Использовать как</legend>
+        <label className="flex cursor-pointer items-center gap-2 text-sm text-fg">
           <input
             type="radio"
+            className="accent-accent"
+            name="own-field-role"
             checked={role === 'metric'}
             onChange={() => setRole('metric')}
           />
           показатель — его считают
         </label>
-        <label>
+        <label className="flex cursor-pointer items-center gap-2 text-sm text-fg">
           <input
             type="radio"
+            className="accent-accent"
+            name="own-field-role"
             checked={role === 'dimension'}
             onChange={() => setRole('dimension')}
           />
           разрез — по нему группируют
         </label>
-      </fieldset>
-
-      {role === 'metric' ? (
-        <div className="flex gap-3 [&>*]:flex-1">
-          <Field label="Действие">            <Select value={agg ?? 'sum'} onChange={(e) => setAgg(e.target.value as ReportField['agg'])}>
+        {role === 'metric' && (
+          <Field label="Действие" className="mt-0.5">
+            <Select value={agg ?? 'sum'} onChange={(e) => setAgg(e.target.value as ReportField['agg'])}>
               {AGGS.map((a) => (
                 <option key={a.value} value={a.value}>{a.label}</option>
               ))}
-            </Select></Field>
-          <Field label="Формат">            <Select value={format} onChange={(e) => setFormat(e.target.value as ReportField['format'])}>
-              <option value="number">число</option>
-              <option value="money">деньги</option>
-              <option value="percent">процент</option>
-            </Select></Field>
-        </div>
+            </Select>
+          </Field>
+        )}
+      </fieldset>
+
+      <Field label="Колонка">
+        <Select value={active} onChange={(e) => setColumn(e.target.value)} disabled={allowed.length === 0}>
+          {allowed.length === 0 && <option value="">нет подходящих колонок</option>}
+          {allowed.map((f) => (
+            <option key={f.name} value={f.name}>
+              {f.name} · {shortType(f.type)}
+              {ru.has(f.name) ? ` — ${shortName(ru.get(f.name)!)}` : ''}
+            </option>
+          ))}
+        </Select>
+      </Field>
+      {/* описание из комментария колонки в источнике: гадать по имени не нужно */}
+      <p className="-mt-1.5 text-xs text-fg-muted">
+        {allowed.length === 0
+          ? role === 'metric'
+            ? 'в этом датасете нечего складывать — числовых колонок нет. Выберите «количество строк» или заведите поле разрезом.'
+            : 'в этом датасете нет колонок, по которым можно группировать'
+          : picked?.comment?.trim() ||
+            (ru.has(active)
+              ? `«${ru.get(active)}» — название из модели данных`
+              : 'у колонки нет описания в источнике')}
+      </p>
+      {hidden > 0 && allowed.length > 0 && (
+        <p className="-mt-2 text-xs text-fg-muted">
+          {/* колонка не пропала, а именно не подходит: без этой строки список
+              выглядит так, будто датасет вычитан наполовину */}
+          скрыто колонок: {hidden} —{' '}
+          {role === 'metric'
+            ? 'так их посчитать нельзя (текст, json, массивы)'
+            : 'по ним нельзя сгруппировать (json, массивы, структуры)'}
+        </p>
+      )}
+
+      {role === 'metric' ? (
+        <Field label="Формат">
+          <Select value={format} onChange={(e) => setFormat(e.target.value as ReportField['format'])}>
+            <option value="number">число</option>
+            <option value="money">деньги</option>
+            <option value="percent">процент</option>
+          </Select>
+        </Field>
       ) : (
         <p className="text-xs text-fg-muted">
           Тип определён по схеме: {type === 'date' ? 'дата' : type === 'number' ? 'число' : 'текст'}.
@@ -1533,7 +1668,9 @@ function ColumnForm({
         </p>
       )}
 
-      <Field label="Название">        <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder={suggested} /></Field>
+      <Field label="Название">
+        <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder={suggested} />
+      </Field>
 
       <p className="text-xs text-fg-muted">
         Поле живёт внутри этого отчёта: общий словарь оно не меняет, поэтому смысл
@@ -1541,7 +1678,7 @@ function ColumnForm({
         администратора завести его в «Модели данных».
       </p>
 
-      <Button type="submit" variant="primary" disabled={!column}>
+      <Button type="submit" variant="primary" disabled={!active}>
         Добавить поле
       </Button>
     </form>
