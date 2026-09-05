@@ -224,12 +224,16 @@ _SQL_NOISE = re.compile(
 # сообщении — самое ценное, поэтому оно должно дойти до человека.
 _MISSING_COLUMN_RE = re.compile(
     r'column\s+"?([\w.]+)"?\s+does not exist|'
-    r'Unknown (?:expression or function )?identifier\s+`?([\w.]+)`?',
+    r'Unknown (?:expression or function )?identifier\s+`?([\w.]+)`?|'
+    # Oracle: ORA-00904: "T0"."REVENU": invalid identifier (бывает и без схемы)
+    r'ORA-00904:\s*"?([\w.$#"]+?)"?\s*:\s*invalid identifier',
     re.IGNORECASE,
 )
 _UNAVAILABLE = re.compile(
     r'timeout|timed out|connection|could not connect|closed the connection|'
-    r'network|refused|unreachable',
+    r'network|refused|unreachable|'
+    # Oracle: DPY-* — ошибки драйвера, TNS/ORA-125xx — нет листенера или сервиса
+    r'DPY-\d+|TNS:|ORA-12170|ORA-125\d\d',
     re.IGNORECASE,
 )
 
@@ -250,7 +254,8 @@ def explain_source_error(text: str, sql_datasets: list[str] | None = None) -> st
         return 'источник данных сейчас не отвечает — попробуйте ещё раз через минуту'
     missing = _MISSING_COLUMN_RE.search(text)
     if missing:
-        column = (missing.group(1) or missing.group(2) or '').split('.')[-1]
+        found = next((g for g in missing.groups() if g), '')
+        column = found.split('.')[-1].strip('"')
         return (f'в источнике больше нет колонки «{column}» — поле отчёта, '
                 'которое на неё ссылается, нужно пересоздать или убрать')
     if _SQL_NOISE.search(text):
@@ -782,7 +787,7 @@ class SectionQuery:
         if parts:
             sql += '\nORDER BY ' + ', '.join(parts)
         if self.limit:
-            sql += f'\nLIMIT {int(self.limit)}'
+            sql += '\n' + self.dialect.limit_offset(self.limit)
         return sql
 
     def _build_single(self) -> Query:
@@ -901,16 +906,18 @@ class SectionQuery:
                 select_out.append(f'{at[slug]}.{column}')
 
         head = parts[0]
-        sql = f'SELECT {", ".join(select_out)}\nFROM (\n{head["sql"]}\n) AS {head["alias"]}'
+        sql = (f'SELECT {", ".join(select_out)}\nFROM '
+               + self.dialect.table_alias(f'(\n{head["sql"]}\n)', head['alias']))
         for part in parts[1:]:
+            joined = self.dialect.table_alias(f'(\n{part["sql"]}\n)', part['alias'])
             if dims:
                 on = ' AND '.join(
                     f'{head["alias"]}.{self.dialect.quote(dim_alias(d))} = '
                     f'{part["alias"]}.{self.dialect.quote(dim_alias(d))}' for d in dims
                 )
-                sql += f'\nFULL OUTER JOIN (\n{part["sql"]}\n) AS {part["alias"]} ON {on}'
+                sql += f'\nFULL OUTER JOIN {joined} ON {on}'
             else:
-                sql += f'\nCROSS JOIN (\n{part["sql"]}\n) AS {part["alias"]}'
+                sql += f'\nCROSS JOIN {joined}'
         sql += self._order_limit_sql()
         sql += self.dialect.join_settings()
         return Query(sql=sql, params=params,
@@ -971,9 +978,7 @@ class SectionQuery:
         sql = f'SELECT {select}\nFROM {self._from_sql()}'
         if clauses:
             sql += '\nWHERE ' + ' AND '.join(clauses)
-        sql += f'\nLIMIT {int(limit)}'
-        if offset:
-            sql += f'\nOFFSET {int(offset)}'
+        sql += '\n' + self.dialect.limit_offset(limit, offset)
         return Query(sql=sql, params=params), fields
 
     def run_raw(self, dataset: str | None = None, *, point: dict[str, str] | None = None,
@@ -1025,6 +1030,6 @@ def distinct_values(dimension_slug: str, limit: int = 200,
     field_sql = dialect.quote(dim['field'])
     _, rows = adapter.run_query(
         f'SELECT DISTINCT {field_sql} AS value FROM {source} '
-        f'WHERE {field_sql} IS NOT NULL ORDER BY value LIMIT {int(limit)}'
+        f'WHERE {field_sql} IS NOT NULL ORDER BY value {dialect.limit_offset(limit)}'
     )
     return [str(r[0]) for r in rows if r and r[0] is not None]

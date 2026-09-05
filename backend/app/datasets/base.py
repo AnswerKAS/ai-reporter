@@ -16,8 +16,17 @@ _CONNINFO_RE = re.compile(r'\b(password|user|host|hostname|dbname|database|port)
 _SERVER_AT_RE = re.compile(r'(to server at\s+)"([^"]*)"', re.IGNORECASE)
 _FOR_USER_RE = re.compile(r'(for user\s+)"([^"]*)"', re.IGNORECASE)
 _RESOLVE_HOST_RE = re.compile(r"(resolve host\s+)'([^']+)'", re.IGNORECASE)
-_HOST_QUOTED_RE = re.compile(r'\b(host\s+)"([^"\n]+)"', re.IGNORECASE)
+_HOST_QUOTED_RE = re.compile(r'\b(host(?:\s+name)?\s+)"([^"\n]+)"', re.IGNORECASE)
 _IPV4_RE = re.compile(r'\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b')
+# Oracle пишет адрес в тексте россыпью: «at host db.corp port 1521», а имя
+# базы — как «Service "FREEPDB1"»; Easy Connect встречается целиком в свободном
+# тексте (host:1521/SERVICE) и в дескрипторе ошибки соединения.
+_HOST_BARE_RE = re.compile(r'\b(host(?:\s+name)?|hostname)\s+(?!")(?!name\b)([\w.-]+)',
+                           re.IGNORECASE)
+_PORT_BARE_RE = re.compile(r'\b(port)\s+\d+', re.IGNORECASE)
+_SERVICE_RE = re.compile(r'\b(service(?:[ _]name)?)\s+"[^"\n]*"', re.IGNORECASE)
+_EASY_CONNECT_RE = re.compile(r'\b[\w.-]+:\d{2,5}/[\w.$#]+')
+_CONNECTION_ID_RE = re.compile(r'\b(connection_id)\s*=\s*[^)\s]*', re.IGNORECASE)
 
 
 def _mask_quoted(match: re.Match) -> str:
@@ -38,6 +47,11 @@ def sanitize_error(text: str) -> str:
     out = _FOR_USER_RE.sub(r'\1"***"', out)
     out = _RESOLVE_HOST_RE.sub(r"\1'***'", out)
     out = _HOST_QUOTED_RE.sub(r'\1"***"', out)
+    out = _HOST_BARE_RE.sub(r'\1 ***', out)
+    out = _PORT_BARE_RE.sub(r'\1 ***', out)
+    out = _SERVICE_RE.sub(r'\1 "***"', out)
+    out = _EASY_CONNECT_RE.sub('***', out)
+    out = _CONNECTION_ID_RE.sub(r'\1=***', out)
     out = _IPV4_RE.sub('***', out)
     out = _QUOTED_RE.sub(_mask_quoted, out)
     return out

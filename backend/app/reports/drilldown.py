@@ -95,9 +95,7 @@ def dataset_rows(dataset_slug: str, filter_values: dict, catalog: builder.Catalo
     sql = 'SELECT ' + ', '.join(dialect.quote(f) for f in fields) + f'\nFROM {source}'
     if clauses:
         sql += '\nWHERE ' + ' AND '.join(clauses)
-    sql += f'\nLIMIT {int(limit)}'
-    if offset:
-        sql += f'\nOFFSET {int(offset)}'
+    sql += '\n' + dialect.limit_offset(limit, offset)
     try:
         _, rows = adapter.run_query(sql, params)
     except DatasetError as exc:

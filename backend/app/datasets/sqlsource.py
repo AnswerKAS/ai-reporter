@@ -34,6 +34,11 @@ _FORBIDDEN_RE = re.compile(r'\b(' + '|'.join(FORBIDDEN) + r')\b', re.IGNORECASE)
 # Подстановка параметра ClickHouse: её трактует и драйвер, и сервер.
 _CH_BIND_RE = re.compile(r'\{\s*\w+\s*:[^}]+\}')
 
+# Именованная привязка Oracle. Ищется по scrub'у, поэтому двоеточия внутри
+# литералов ('HH24:MI', форматы дат, интервалы) под запрет не попадают;
+# ':=' не матчится — после двоеточия требуется буква.
+_ORA_BIND_RE = re.compile(r'(?<![:\w]):[A-Za-z_]\w*')
+
 _HEAD_RE = re.compile(r'^\s*(SELECT|WITH)\b', re.IGNORECASE)
 _DOLLAR_OPEN_RE = re.compile(r'\$(\w*)\$')
 
@@ -135,6 +140,12 @@ def validate_source_query(sql: str, source: str) -> str:
     if source == 'clickhouse' and _CH_BIND_RE.search(probe):
         raise DatasetError(
             '{имя:Тип} — это подстановка параметра ClickHouse, в запросе датасета её '
+            'использовать нельзя: значения фильтров подставляет построитель запросов'
+        )
+
+    if source == 'oracle' and _ORA_BIND_RE.search(probe):
+        raise DatasetError(
+            '«:имя» — это подстановка параметра Oracle, в запросе датасета её '
             'использовать нельзя: значения фильтров подставляет построитель запросов'
         )
 

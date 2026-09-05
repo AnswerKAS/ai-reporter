@@ -58,6 +58,16 @@ _PG_STRING = ('text', 'character varying', 'character', 'varchar', 'char', 'bpch
 
 _CSV_NUMBER = ('integer', 'float')
 
+# Oracle. Порядок проверок важен: 'LONG RAW' обязан уйти в «прочее» раньше,
+# чем 'LONG' попадёт в строки, а 'INTERVAL …' — раньше чисел.
+_ORA_OTHER = ('blob', 'long raw', 'raw', 'bfile', 'json', 'xml', 'interval',
+              'anydata', 'sdo_', 'vector', 'object', 'clob', 'nclob')
+_ORA_DATE = ('date', 'timestamp')
+_ORA_NUMBER = ('number', 'float', 'binary_double', 'binary_float', 'integer',
+               'int', 'decimal', 'numeric', 'smallint', 'real', 'double')
+_ORA_STRING = ('varchar', 'nvarchar', 'char', 'nchar', 'long', 'rowid', 'urowid',
+               'boolean')
+
 
 def unwrap(type_name: str) -> str:
     """Снимает обёртки ClickHouse: Nullable(LowCardinality(String)) → String."""
@@ -89,6 +99,17 @@ def field_kind(type_name: str, source: str) -> str:
             return 'date'
         if text.startswith(_CSV_NUMBER):
             return 'number'
+        return 'string'
+    if source == 'oracle':
+        if text.startswith(_ORA_OTHER):
+            return 'other'
+        if text.startswith(_ORA_DATE):
+            return 'date'
+        if text.startswith(_ORA_NUMBER):
+            return 'number'
+        if text.startswith(_ORA_STRING):
+            return 'string'
+        # пользовательские типы группируются, но не суммируются
         return 'string'
     # postgres: тип приходит из format_type — массивы оканчиваются на '[]'
     if text.endswith('[]') or text.startswith(('json', 'record', 'xml')):

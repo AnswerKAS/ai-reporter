@@ -15,7 +15,7 @@ class DatasetMeta(CamelModel):
     slug: str
     title: str
     description: str | None = None
-    source: Literal['clickhouse', 'postgres', 'csv']
+    source: Literal['clickhouse', 'postgres', 'oracle', 'csv']
     table_name: str | None = None
     # текст запроса отдаётся только админу; остальным виден лишь признак is_query
     query: str | None = None
@@ -45,7 +45,7 @@ class DatasetCreate(CamelModel):
     slug: str
     title: str
     description: str | None = None
-    source: Literal['clickhouse', 'postgres', 'csv']
+    source: Literal['clickhouse', 'postgres', 'oracle', 'csv']
     dsn: str = ''
     table_name: str = ''
     query: str = ''

@@ -1,6 +1,6 @@
 """Реестр датасетов в метабазе + фабрика адаптеров.
 
-Датасет = именованный источник: тип (clickhouse | postgres | csv), DSN
+Датасет = именованный источник: тип (clickhouse | postgres | oracle | csv), DSN
 (литерал или ссылка env:VAR), таблица/файл, вычитанная схема полей.
 """
 
@@ -13,9 +13,10 @@ from ..services import storage
 from .base import DatasetAdapter, DatasetError, sanitize_error
 from .clickhouse import ClickHouseAdapter
 from .csvsource import CsvAdapter
+from .oracle import OracleAdapter
 from .postgres import PostgresAdapter
 
-DATASET_TYPES = ('clickhouse', 'postgres', 'csv')
+DATASET_TYPES = ('clickhouse', 'postgres', 'oracle', 'csv')
 
 # Дефолтные датасеты витрины (регистрируются при пустом реестре).
 DEFAULT_DATASETS = [
@@ -52,6 +53,9 @@ def _check_dsn_scheme(source: str, value: str, context: str = '') -> None:
         raise DatasetError(f'{context}: {base}' if context else base)
     if source == 'clickhouse' and not low.startswith(('clickhouse://', 'clickhouses://')):
         base = 'DSN не является DSN ClickHouse (должен начинаться с clickhouse или clickhouses)'
+        raise DatasetError(f'{context}: {base}' if context else base)
+    if source == 'oracle' and not low.startswith('oracle://'):
+        base = 'DSN не является DSN Oracle (должен начинаться с oracle)'
         raise DatasetError(f'{context}: {base}' if context else base)
 
 
@@ -174,6 +178,8 @@ def adapter_for(dataset: dict, reuse: bool = False) -> DatasetAdapter:
         return ClickHouseAdapter(dsn=dsn, table=table, query=query, reuse=reuse)
     if source == 'postgres':
         return PostgresAdapter(dsn=dsn, table=table, query=query, reuse=reuse)
+    if source == 'oracle':
+        return OracleAdapter(dsn=dsn, table=table, query=query, reuse=reuse)
     if source == 'csv':
         return CsvAdapter(file=csv_path(dataset['slug']))
     raise DatasetError(f'неизвестный тип источника: {source}')

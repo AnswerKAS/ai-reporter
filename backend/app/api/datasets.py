@@ -45,6 +45,18 @@ def _meta(d: dict, *, reveal_query: bool = False) -> dict:
     return DatasetMeta.model_validate(data).model_dump(by_alias=True)
 
 
+# Схемы DSN по типу источника: префиксы и текст ошибки для формы.
+DSN_SCHEMES = {
+    'clickhouse': (('clickhouse://', 'clickhouses://'),
+                   'DSN для ClickHouse должен начинаться с clickhouse:// или clickhouses://'),
+    'postgres': (('postgres://', 'postgresql://'),
+                 'DSN для PostgreSQL должен начинаться с postgresql:// или postgres://'),
+    'oracle': (('oracle://',),
+               'DSN для Oracle должен начинаться с oracle:// '
+               '(oracle://user:pass@host:1521/SERVICE)'),
+}
+
+
 def _validate_dsn(source: str, dsn: str) -> str:
     """Проверяет формат DSN по типу источника; возвращает понятную ошибку или ''."""
     text = (dsn or '').strip()
@@ -52,16 +64,13 @@ def _validate_dsn(source: str, dsn: str) -> str:
         return ''
     if text.lower().startswith('env:') or text.lower() == 'app:postgres':
         return ''
-    if source == 'postgres':
-        if not text:
-            return ''  # пусто — сервер приложения (PG* из .env)
-        if not text.lower().startswith(('postgres://', 'postgresql://')):
-            return 'DSN для PostgreSQL должен начинаться с postgresql:// или postgres://'
-        return ''
+    if source == 'postgres' and not text:
+        return ''  # пусто — сервер приложения (PG* из .env)
+    prefixes, message = DSN_SCHEMES.get(source, ((), 'неизвестный тип источника'))
     if not text:
-        return 'для clickhouse нужен DSN или ссылка env:VAR'
-    if source == 'clickhouse' and not text.lower().startswith(('clickhouse://', 'clickhouses://')):
-        return 'DSN для ClickHouse должен начинаться с clickhouse:// или clickhouses://'
+        return f'для {source} нужен DSN или ссылка env:VAR'
+    if prefixes and not text.lower().startswith(prefixes):
+        return message
     return ''
 
 

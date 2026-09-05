@@ -36,6 +36,20 @@ class Dialect:
         """Хвост запроса, нужный источнику для корректного FULL JOIN."""
         return ''
 
+    def limit_offset(self, limit: int, offset: int = 0) -> str:
+        """Ограничение выдачи — без ведущего разделителя: его ставит вызывающий.
+
+        В одном месте (список значений фильтра) клауза приклеена пробелом, во
+        всех остальных — переводом строки, и разделитель внутри метода сделал
+        бы одно из двух мест неверным.
+        """
+        sql = f'LIMIT {int(limit)}'
+        return f'{sql}\nOFFSET {int(offset)}' if offset else sql
+
+    def table_alias(self, expr: str, alias: str) -> str:
+        """Таблица или подзапрос с алиасом: не везде перед алиасом пишется AS."""
+        return f'{expr} AS {alias}'
+
 
 class ClickHouseDialect(Dialect):
     name = 'clickhouse'
@@ -88,9 +102,45 @@ class PostgresDialect(Dialect):
         return f'({param} + 1)' if next_day else param
 
 
+class OracleDialect(Dialect):
+    """Oracle 12.2+ (пагинация OFFSET/FETCH — с 12.1, длинные имена — с 12.2)."""
+
+    name = 'oracle'
+
+    # TRUNC(d, 'IW') — понедельник ISO-недели, как date_trunc('week') в PostgreSQL
+    _TRUNC = {'day': 'DD', 'week': 'IW', 'month': 'MM', 'quarter': 'Q', 'year': 'YYYY'}
+
+    def date_trunc(self, expr: str, grain: str) -> str:
+        fmt = self._TRUNC.get(grain)
+        if fmt is None:
+            raise DatasetError(f'неизвестная гранулярность даты: {grain}')
+        # TRUNC отдаёт DATE с нулевым временем: колонка может быть TIMESTAMP,
+        # а на графике нужна дата
+        return f"TRUNC({expr}, '{fmt}')"
+
+    def placeholder(self, name: str, type_: str = 'string') -> str:
+        # именованная привязка python-oracledb; тип задаёт значение, а не текст
+        return f':{name}'
+
+    def date_bound(self, name: str, *, next_day: bool = False) -> str:
+        # значение приезжает строкой 'YYYY-MM-DD'; арифметика дат Oracle — в сутках
+        param = f"TO_DATE(:{name}, 'YYYY-MM-DD')"
+        return f'({param} + 1)' if next_day else param
+
+    def limit_offset(self, limit: int, offset: int = 0) -> str:
+        # OFFSET строго перед FETCH — обратный порядок Oracle не принимает
+        head = f'OFFSET {int(offset)} ROWS\n' if offset else ''
+        return f'{head}FETCH FIRST {int(limit)} ROWS ONLY'
+
+    def table_alias(self, expr: str, alias: str) -> str:
+        # AS перед алиасом таблицы в Oracle — синтаксическая ошибка
+        return f'{expr} {alias}'
+
+
 _BY_SOURCE = {
     'clickhouse': ClickHouseDialect,
     'postgres': PostgresDialect,
+    'oracle': OracleDialect,
 }
 
 

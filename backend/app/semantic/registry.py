@@ -17,6 +17,7 @@ import uuid
 from ..core.database import _conn, utcnow
 from ..datasets import registry as dataset_registry
 from ..datasets.base import DatasetError, sanitize_error
+from ..query import dialects
 
 METRIC_FORMATS = ('number', 'money', 'percent', 'string', 'date')
 DIMENSION_TYPES = ('string', 'date', 'number')
@@ -197,10 +198,16 @@ def _validate_group(dataset: dict, group: list[dict]) -> dict[str, dict]:
     try:
         adapter = dataset_registry.adapter_for(dataset, reuse=True)
         source = adapter.source_sql('t0')
+        try:
+            tail = ' ' + dialects.for_source(dataset['source']).limit_offset(1)
+        except DatasetError:
+            # источник без диалекта (CSV): до запроса дело всё равно не дойдёт,
+            # и метрика должна получить свою прежнюю ошибку, а не «нужен движок»
+            tail = ' LIMIT 1'
         if len(group) > 1:
             select = ', '.join(f'{m["expression"]} AS a{i}' for i, m in enumerate(group))
             try:
-                adapter.run_query(f'SELECT {select} FROM {source} LIMIT 1')
+                adapter.run_query(f'SELECT {select} FROM {source}{tail}')
                 return {m['slug']: (update_metric(m['slug'], status='ok', clear_error=True) or m)
                         for m in group}
             except Exception:
@@ -209,7 +216,7 @@ def _validate_group(dataset: dict, group: list[dict]) -> dict[str, dict]:
         for metric in group:
             try:
                 adapter.run_query(
-                    f'SELECT {metric["expression"]} AS value FROM {source} LIMIT 1')
+                    f'SELECT {metric["expression"]} AS value FROM {source}{tail}')
                 out[metric['slug']] = update_metric(
                     metric['slug'], status='ok', clear_error=True) or metric
             except Exception as exc:  # драйвер может бросить своё

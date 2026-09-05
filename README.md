@@ -13,8 +13,8 @@
 ```
 
 Ключевое свойство: **данные всегда живые** — `GET /api/reports/{slug}` при
-каждом обращении заново исполняет определение отчёта (SQL к ClickHouse или
-PostgreSQL). Изменения в источнике видны на странице сразу; логика отчёта
+каждом обращении заново исполняет определение отчёта (SQL к ClickHouse,
+PostgreSQL или Oracle). Изменения в источнике видны на странице сразу; логика отчёта
 (секции, поля, фильтры) правится в конструкторе и сохраняется как данные —
 её можно версионировать, диффать и читать глазами.
 
@@ -39,7 +39,7 @@ backend/
                            interpret.py + phrase.py (словесное ТЗ → декларация)
     reports/executor.py    исполнение определения → ReportSpec
     reports/warehouse.py   демо-витрина ClickHouse + seed
-    datasets/              реестр датасетов и адаптеры (clickhouse, postgres, csv)
+    datasets/              реестр датасетов и адаптеры (clickhouse, postgres, oracle, csv)
     services/storage.py    фасад хранилища артефактов (CSV-файлы)
   artifacts/datasets/      загруженные CSV
 ```
@@ -77,14 +77,16 @@ npm run dev                 # http://localhost:5173 (/api проксируетс
 | `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD` | метабаза приложения; `PG_SCHEMA` меняет имя схемы (по умолчанию `ai_reporter`) |
 | `DATABASE_URL` | DSN ClickHouse-витрины: `clickhouse://user:pass@host:port/db`. Пароль может содержать спецсимволы (`@`, `!`) — парсер режет по последнему `@` |
 | `CLICKHOUSE_SECURE` | TLS к ClickHouse (по умолчанию `true`, сертификат — `certifi`) |
+| `ORACLE_DSN` | необязательна: DSN для датасетов Oracle, если ссылаться на него как `env:ORACLE_DSN`. Формат `oracle://user:pass@host:1521/SERVICE` (для SID — `?sid=ORCL`), спецсимволы в пароле percent-encoded |
 | `OPENROUTER_API_KEY`, `INTERPRET_MODEL` | разбор словесного ТЗ моделью; без ключа разбирает встроенный парсер |
 | `ARTIFACTS_DIR`, `ARTIFACTS_STORAGE` | каталог и режим хранилища загруженных CSV |
 | `CORS_ORIGINS`, `SESSION_TTL_DAYS` | источники фронта и срок жизни сессии |
 
 ## Как собирается отчёт
 
-1. **Датасеты** (`/datasets`) — именованные источники: ClickHouse, PostgreSQL
-   или загруженный CSV. Схема полей вычитывается из источника вместе с
+1. **Датасеты** (`/datasets`) — именованные источники: ClickHouse, PostgreSQL,
+   Oracle (12.2+, драйвер в thin-режиме — Instant Client не нужен) или
+   загруженный CSV. Схема полей вычитывается из источника вместе с
    комментариями колонок. Источником может быть таблица (в том числе
    представление или матвью) либо **вставленный SQL-запрос** — тогда
    построитель подставляет его подзапросом, не создавая в источнике никаких

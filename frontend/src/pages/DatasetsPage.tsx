@@ -36,7 +36,23 @@ import { cn } from '../lib/cn'
 const SOURCE_LABELS: Record<DatasetSource, string> = {
   clickhouse: 'ClickHouse',
   postgres: 'PostgreSQL',
+  oracle: 'Oracle',
   csv: 'CSV-файл',
+}
+
+const DSN_PLACEHOLDERS: Record<DatasetSource, string> = {
+  clickhouse: 'clickhouse://user:pass@host:8123/db или env:VAR',
+  postgres: 'app:postgres (сервер приложения) или postgresql://user:pass@host:5432/db',
+  oracle: 'oracle://user:pass@host:1521/SERVICE или env:VAR',
+  csv: '',
+}
+
+/** Имя объекта Oracle без кавычек сервер сворачивает в верхний регистр. */
+const TABLE_PLACEHOLDERS: Record<DatasetSource, string> = {
+  clickhouse: 'my_table',
+  postgres: 'my_table',
+  oracle: 'MY_TABLE или SCHEMA.MY_TABLE',
+  csv: '',
 }
 
 const STATUS_TONES: Record<string, BadgeTone> = {
@@ -240,6 +256,7 @@ function DatasetCreateForm({ busy, onCreated }: { busy: boolean; onCreated: (slu
         <Select value={source} onChange={(e) => setSource(e.target.value as DatasetSource)}>
           <option value="clickhouse">ClickHouse</option>
           <option value="postgres">PostgreSQL</option>
+          <option value="oracle">Oracle</option>
           <option value="csv">CSV-файл</option>
         </Select>
       </Field>
@@ -266,7 +283,7 @@ function DatasetCreateForm({ busy, onCreated }: { busy: boolean; onCreated: (slu
             <Input
               value={dsn}
               onChange={(e) => setDsn(e.target.value)}
-              placeholder={source === 'postgres' ? 'app:postgres (сервер приложения) или postgresql://user:pass@host:5432/db' : 'clickhouse://user:pass@host:8123/db или env:VAR'}
+              placeholder={DSN_PLACEHOLDERS[source]}
             />
           </Field>
           {asQuery ? (
@@ -285,7 +302,7 @@ function DatasetCreateForm({ busy, onCreated }: { busy: boolean; onCreated: (slu
             </Field>
           ) : (
             <Field label="Таблица">
-              <Input value={tableName} onChange={(e) => setTableName(e.target.value)} placeholder="my_table" />
+              <Input value={tableName} onChange={(e) => setTableName(e.target.value)} placeholder={TABLE_PLACEHOLDERS[source]} />
             </Field>
           )}
         </>

@@ -1,6 +1,6 @@
 import type { DimensionType, MetricFormat } from './semantic'
 
-export type DatasetSource = 'clickhouse' | 'postgres' | 'csv'
+export type DatasetSource = 'clickhouse' | 'postgres' | 'oracle' | 'csv'
 export type DatasetStatus = 'new' | 'ok' | 'error'
 
 export interface DatasetField {
