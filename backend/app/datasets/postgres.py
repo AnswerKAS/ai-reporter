@@ -2,6 +2,7 @@
 
 from urllib.parse import urlparse
 
+from . import sqlsource
 from .base import DatasetAdapter, DatasetError, DatasetField, sanitize_error
 
 
@@ -95,11 +96,19 @@ def _resolve_relation(cur, table: str) -> tuple[int, str]:
 
 
 class PostgresAdapter(DatasetAdapter):
-    """reuse=True держит одно соединение на время работы адаптера (см. ClickHouse)."""
+    """reuse=True держит одно соединение на время работы адаптера (см. ClickHouse).
 
-    def __init__(self, dsn: str, table: str, reuse: bool = False) -> None:
+    Источник — либо таблица (`table`), либо готовый SELECT (`query`), который
+    подставляется подзапросом. Текст запроса живёт в адаптере в двух видах:
+    сырой (`self._query`) — для собственных запросов адаптера, которые идут в
+    execute() без параметров, и с удвоенными '%' (`source_sql`) — для запросов
+    построителя, которые идут в execute() вместе со словарём параметров.
+    """
+
+    def __init__(self, dsn: str, table: str, query: str = '', reuse: bool = False) -> None:
         self._dsn = dsn
         self._table = table
+        self._query = (query or '').strip()
         self._reuse = reuse
         self._cached = None
 
@@ -119,14 +128,19 @@ class PostgresAdapter(DatasetAdapter):
             return self._cached
         if not self._dsn:
             raise DatasetError('DSN не задан')
-        if not self._table:
-            raise DatasetError('не указана таблица')
+        if not self._table and not self._query:
+            raise DatasetError('не указана таблица и не задан запрос')
         try:
             import psycopg
         except ImportError as exc:
             raise DatasetError('драйвер psycopg не установлен в venv бэкенда') from exc
         try:
-            conn = psycopg.connect(_dsn_postgres(self._dsn), connect_timeout=10)
+            # autocommit: датасет только читает, а без него первая же ошибка
+            # переводит транзакцию в aborted, и на переиспользуемом соединении
+            # начинает падать всё последующее — одна битая метрика роняла бы
+            # проверку остальных и соседние секции отчёта
+            conn = psycopg.connect(_dsn_postgres(self._dsn), connect_timeout=10,
+                                   autocommit=True)
         except Exception as exc:
             raise DatasetError(f'PostgreSQL недоступен: {sanitize_error(str(exc))}') from exc
         if self._reuse:
@@ -137,8 +151,61 @@ class PostgresAdapter(DatasetAdapter):
         conn = self._connect()
         self._release(conn)
 
+    def _schema_from_query(self, cur) -> list[DatasetField]:
+        """Схема результата запроса: имена, типы и унаследованные комментарии.
+
+        LIMIT 0 планирует и исполняет запрос, но строк не тянет. execute без
+        второго аргумента — иначе psycopg разберёт '%' в тексте как плейсхолдер.
+        """
+        cur.execute(f'SELECT * FROM ({self._query}) _q LIMIT 0')
+        columns = list(cur.description or [])
+        names = [c.name for c in columns]
+        sqlsource.check_columns(names)
+
+        oids = list({c.type_code for c in columns})
+        cur.execute('SELECT oid, format_type(oid, NULL) FROM pg_type WHERE oid = ANY(%s)', (oids,))
+        types = {row[0]: row[1] for row in cur.fetchall()}
+
+        # Колонка результата, которая является прямой ссылкой на колонку таблицы,
+        # приносит с собой её origin — по нему наследуем комментарий: это
+        # единственное человеческое описание смысла поля, и терять его на
+        # подзапросе незачем. Для вычисляемых колонок origin нулевой.
+        comments: dict[int, str] = {}
+        result = cur.pgresult
+        origins = []
+        if result is not None:
+            for i in range(len(columns)):
+                relid, attnum = result.ftable(i), result.ftablecol(i)
+                if relid and attnum:
+                    origins.append((i, relid, attnum))
+        if origins:
+            cur.execute(
+                'SELECT k.relid, k.num, col_description(k.relid, k.num) '
+                'FROM unnest(%s::oid[], %s::int[]) AS k(relid, num)',
+                ([o[1] for o in origins], [o[2] for o in origins]),
+            )
+            found = {(r[0], r[1]): r[2] or '' for r in cur.fetchall()}
+            for i, relid, attnum in origins:
+                comments[i] = found.get((relid, attnum), '')
+
+        return [
+            DatasetField(name=c.name, type=types.get(c.type_code, str(c.type_code)),
+                         comment=comments.get(i, ''))
+            for i, c in enumerate(columns)
+        ]
+
     def fetch_schema(self) -> list[DatasetField]:
         conn = self._connect()
+        if self._query:
+            try:
+                with conn.cursor() as cur:
+                    return self._schema_from_query(cur)
+            except DatasetError:
+                raise
+            except Exception as exc:
+                raise DatasetError(f'не удалось прочитать схему: {sanitize_error(str(exc))}') from exc
+            finally:
+                self._release(conn)
         try:
             with conn.cursor() as cur:
                 oid, relkind = _resolve_relation(cur, self._table)
@@ -167,9 +234,11 @@ class PostgresAdapter(DatasetAdapter):
 
     def sample_rows(self, limit: int = 50) -> tuple[list[str], list[list]]:
         conn = self._connect()
+        # сырой текст запроса и execute без параметров: '%' здесь не плейсхолдер
+        source = f'({self._query}) _q' if self._query else _quote_table(self._table)
         try:
             with conn.cursor() as cur:
-                cur.execute(f'SELECT * FROM {_quote_table(self._table)} LIMIT {int(limit)}')
+                cur.execute(f'SELECT * FROM {source} LIMIT {int(limit)}')
                 cols = [d[0] for d in cur.description or []]
                 rows = [[_fmt(v) for v in row] for row in cur.fetchall()]
         except Exception as exc:
@@ -183,6 +252,10 @@ class PostgresAdapter(DatasetAdapter):
         conn = self._connect()
         try:
             with conn.cursor() as cur:
+                # `params or {}` — не заменять на `params or None`: разбор шаблона
+                # включается на любом не-None словаре, и на нём же схлопываются
+                # удвоенные '%' из source_sql(). С None они остались бы удвоенными,
+                # и LIKE в запросе датасета перестал бы находить строки.
                 cur.execute(sql, params or {})
                 cols = [d[0] for d in cur.description or []]
                 rows = [list(r) for r in cur.fetchall()]
@@ -194,6 +267,13 @@ class PostgresAdapter(DatasetAdapter):
 
     def quoted_table(self, table: str) -> str:
         return _quote_table(table or self._table)
+
+    def source_sql(self, alias: str = '') -> str:
+        # '%' удваивается: результат уходит в run_query вместе со словарём
+        # параметров, а разбор шаблона psycopg включается на любом не-None
+        # словаре, включая пустой, и падает на литеральном '%'.
+        body = f'({self._query.replace("%", "%%")})' if self._query else _quote_table(self._table)
+        return f'{body} AS {alias}' if alias else body
 
 
 def _fmt(value) -> str:

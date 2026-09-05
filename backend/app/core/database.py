@@ -224,6 +224,7 @@ def init_db() -> None:
                 source TEXT NOT NULL,
                 dsn TEXT,
                 table_name TEXT,
+                query TEXT,
                 file TEXT,
                 schema TEXT NOT NULL DEFAULT '[]',
                 status TEXT NOT NULL DEFAULT 'new',
@@ -335,6 +336,8 @@ def init_db() -> None:
         )
         # миграции существующих таблиц
         conn.execute('ALTER TABLE reports ADD COLUMN IF NOT EXISTS definition TEXT')
+        # источник датасета: имя таблицы ИЛИ SQL-запрос (у старых записей NULL)
+        conn.execute('ALTER TABLE datasets ADD COLUMN IF NOT EXISTS query TEXT')
         drop_skill_stack(conn)
 
 

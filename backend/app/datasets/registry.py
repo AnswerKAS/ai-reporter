@@ -113,25 +113,28 @@ def create(
     schema: list[dict],
     status: str,
     error: str | None,
+    query: str = '',
 ) -> dict:
     now = utcnow()
     with _conn() as conn:
         conn.execute(
-            'INSERT INTO datasets (slug, title, description, source, dsn, table_name, file, schema, status, error, created_at, updated_at) '
-            "VALUES (%s, %s, %s, %s, %s, %s, '', %s, %s, %s, %s, %s)",
-            (slug, title, description, source, dsn, table_name, json.dumps(schema, ensure_ascii=False), status, error, now, now),
+            'INSERT INTO datasets (slug, title, description, source, dsn, table_name, query, file, schema, status, error, created_at, updated_at) '
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, '', %s, %s, %s, %s, %s)",
+            (slug, title, description, source, dsn, table_name, query, json.dumps(schema, ensure_ascii=False), status, error, now, now),
         )
     return get(slug)
 
 
 def update(slug: str, *, title: str | None = None, description: str | None = None,
            dsn: str | None = None, table_name: str | None = None,
+           query: str | None = None,
            schema: list[dict] | None = None, status: str | None = None,
            error: str | None = None, clear_error: bool = False) -> dict | None:
     fields, values = ['updated_at = %s'], [utcnow()]
     for column, value in (
         ('title', title), ('description', description), ('dsn', dsn),
-        ('table_name', table_name), ('schema', json.dumps(schema, ensure_ascii=False) if schema is not None else None),
+        ('table_name', table_name), ('query', query),
+        ('schema', json.dumps(schema, ensure_ascii=False) if schema is not None else None),
         ('status', status), ('error', error),
     ):
         if value is not None:
@@ -165,10 +168,12 @@ def adapter_for(dataset: dict, reuse: bool = False) -> DatasetAdapter:
     """reuse=True — адаптер держит соединение до close() (сборка отчёта)."""
     source = dataset.get('source')
     dsn = resolve_dataset_dsn(dataset)
+    table = dataset.get('table_name') or ''
+    query = (dataset.get('query') or '').strip()
     if source == 'clickhouse':
-        return ClickHouseAdapter(dsn=dsn, table=dataset.get('table_name') or '', reuse=reuse)
+        return ClickHouseAdapter(dsn=dsn, table=table, query=query, reuse=reuse)
     if source == 'postgres':
-        return PostgresAdapter(dsn=dsn, table=dataset.get('table_name') or '', reuse=reuse)
+        return PostgresAdapter(dsn=dsn, table=table, query=query, reuse=reuse)
     if source == 'csv':
         return CsvAdapter(file=csv_path(dataset['slug']))
     raise DatasetError(f'неизвестный тип источника: {source}')

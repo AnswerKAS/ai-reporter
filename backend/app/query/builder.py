@@ -201,10 +201,10 @@ def _is_unique_on(dataset: dict, field: str, adapter=None) -> bool:
     """
     dialect = dialects.for_source(dataset['source'])
     adapter = adapter or dataset_registry.adapter_for(dataset)
-    table = adapter.quoted_table(dataset.get('table_name') or '')
+    source = adapter.source_sql('t0')
     quoted = dialect.quote(field)
     _, rows = adapter.run_query(
-        f'SELECT count(*) AS total, count(DISTINCT {quoted}) AS keys FROM {table}'
+        f'SELECT count(*) AS total, count(DISTINCT {quoted}) AS keys FROM {source}'
     )
     if not rows:
         return True
@@ -234,7 +234,7 @@ _UNAVAILABLE = re.compile(
 )
 
 
-def explain_source_error(text: str) -> str:
+def explain_source_error(text: str, sql_datasets: list[str] | None = None) -> str:
     """Ошибка источника → фраза для того, кто SQL не пишет.
 
     Пользователь конструктора не писал запрос и не может починить его по
@@ -242,6 +242,9 @@ def explain_source_error(text: str) -> str:
     наш дефект, и говорить о них надо так, чтобы человек понял, что делать:
     не подбирать поля наугад, а сообщить о поломке. Подробности остаются
     в логе сервера.
+
+    Исключение — секция по датасету на SQL-запросе: синтаксис туда приносит
+    администратор, а не построитель, и виноват скорее сам запрос.
     """
     if _UNAVAILABLE.search(text):
         return 'источник данных сейчас не отвечает — попробуйте ещё раз через минуту'
@@ -251,6 +254,10 @@ def explain_source_error(text: str) -> str:
         return (f'в источнике больше нет колонки «{column}» — поле отчёта, '
                 'которое на неё ссылается, нужно пересоздать или убрать')
     if _SQL_NOISE.search(text):
+        if sql_datasets:
+            names = ', '.join(f'«{name}»' for name in sql_datasets)
+            return (f'запрос датасета {names} не выполнился — проверьте его '
+                    'в разделе «Датасеты»')
         return ('не удалось собрать запрос по этому набору полей — это ошибка '
                 'конструктора, а не ваша. Уберите последнее добавленное поле, '
                 'чтобы продолжить, и сообщите о проблеме')
@@ -720,11 +727,11 @@ class SectionQuery:
         for slug, link in plan:
             if slug not in self.datasets:
                 raise DatasetError(f'датасет {slug} не входит в план секции')
-            dataset = self.datasets[slug]
-            table = self.catalog.adapter(slug).quoted_table(dataset.get('table_name') or '')
             alias = self.aliases[slug]
+            # адаптер сам решает, таблица это или подзапрос, и вешает алиас
+            source = self.catalog.adapter(slug).source_sql(alias)
             if link is None:
-                parts.append(f'{table} AS {alias}')
+                parts.append(source)
                 continue
             # связь хранится как left→right, но подключать можем любую сторону
             if slug == link['left_slug']:
@@ -735,7 +742,7 @@ class SectionQuery:
                     link['right_field'], link['left_slug'], link['left_field'])
             kind = 'LEFT JOIN' if link['kind'] == 'left' else 'INNER JOIN'
             parts.append(
-                f'{kind} {table} AS {alias} ON {alias}.{self.dialect.quote(own_field)} = '
+                f'{kind} {source} ON {alias}.{self.dialect.quote(own_field)} = '
                 f'{self.aliases[other]}.{self.dialect.quote(other_field)}'
             )
         return '\n'.join(parts)
@@ -976,7 +983,7 @@ class SectionQuery:
             _, rows = self.catalog.adapter(self.dataset_slugs[0]).run_query(query.sql, query.params)
         except DatasetError as exc:
             print(f'[query] детализация не выполнена: {exc}\n{query.sql}')
-            raise DatasetError(explain_source_error(str(exc))) from exc
+            raise DatasetError(explain_source_error(str(exc), self._sql_datasets())) from exc
         return fields, rows
 
     def build(self) -> Query:
@@ -992,7 +999,12 @@ class SectionQuery:
             # отказы, которые мы формулируем сами (раздувание, отсутствие связи),
             # сюда не попадают — они поднимаются раньше, до обращения к источнику
             print(f'[query] запрос не выполнен: {exc}\n{query.sql}')
-            raise DatasetError(explain_source_error(str(exc))) from exc
+            raise DatasetError(explain_source_error(str(exc), self._sql_datasets())) from exc
+
+    def _sql_datasets(self) -> list[str]:
+        """Названия датасетов секции, построенных на SQL-запросе."""
+        return [d.get('title') or slug for slug, d in self.datasets.items()
+                if (d.get('query') or '').strip()]
 
 
 def distinct_values(dimension_slug: str, limit: int = 200,
@@ -1009,10 +1021,10 @@ def distinct_values(dimension_slug: str, limit: int = 200,
     dataset = catalog.dataset(dim['dataset_slug'])
     dialect = dialects.for_source(dataset['source'])
     adapter = catalog.adapter(dim['dataset_slug'])
-    table = adapter.quoted_table(dataset.get('table_name') or '')
+    source = adapter.source_sql('t0')
     field_sql = dialect.quote(dim['field'])
     _, rows = adapter.run_query(
-        f'SELECT DISTINCT {field_sql} AS value FROM {table} '
+        f'SELECT DISTINCT {field_sql} AS value FROM {source} '
         f'WHERE {field_sql} IS NOT NULL ORDER BY value LIMIT {int(limit)}'
     )
     return [str(r[0]) for r in rows if r and r[0] is not None]

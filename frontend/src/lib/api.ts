@@ -8,7 +8,16 @@ import type {
   ScheduleInput,
   User,
 } from '../types/user'
-import type { Dataset, DatasetCreateInput, DatasetDetail } from '../types/dataset'
+import type {
+  Dataset,
+  DatasetCreateInput,
+  DatasetDetail,
+  DatasetPatchInput,
+  DatasetSaveResult,
+  DatasetSemanticInput,
+  DatasetSemanticResult,
+  DatasetSuggestions,
+} from '../types/dataset'
 import type {
   ComputedField,
   DatasetLink,
@@ -296,20 +305,42 @@ export async function fetchDataset(slug: string): Promise<DatasetDetail> {
   return await request<DatasetDetail>(`/datasets/${slug}`)
 }
 
-export async function createDataset(input: DatasetCreateInput): Promise<Dataset> {
-  const json = await request<{ dataset: Dataset }>('/datasets', {
+export async function createDataset(input: DatasetCreateInput): Promise<DatasetSaveResult> {
+  return await request<DatasetSaveResult>('/datasets', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input),
   })
-  return json.dataset
 }
 
-export async function refreshDataset(slug: string): Promise<Dataset> {
-  const json = await request<{ dataset: Dataset }>(`/datasets/${slug}/refresh`, {
+export async function patchDataset(slug: string, patch: DatasetPatchInput): Promise<DatasetSaveResult> {
+  return await request<DatasetSaveResult>(`/datasets/${slug}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  })
+}
+
+export async function refreshDataset(slug: string): Promise<DatasetSaveResult> {
+  return await request<DatasetSaveResult>(`/datasets/${slug}/refresh`, {
     method: 'POST',
   })
-  return json.dataset
+}
+
+export async function fetchDatasetSuggestions(slug: string): Promise<DatasetSuggestions> {
+  const json = await request<{ suggestions: DatasetSuggestions }>(`/datasets/${slug}/suggest`)
+  return json.suggestions
+}
+
+export async function createDatasetSemantic(
+  slug: string,
+  selection: DatasetSemanticInput,
+): Promise<DatasetSemanticResult> {
+  return await request<DatasetSemanticResult>(`/datasets/${slug}/semantic`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(selection),
+  })
 }
 
 export async function deleteDataset(slug: string): Promise<void> {

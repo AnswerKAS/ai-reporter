@@ -6,9 +6,11 @@ import {
   deleteDataset,
   fetchDataset,
   fetchDatasets,
+  patchDataset,
   refreshDataset,
   uploadDatasetCsv,
 } from '../lib/api'
+import { DatasetSemanticDraft } from '../components/DatasetSemanticDraft'
 import { useAuth } from '../lib/auth'
 import {
   Alert,
@@ -24,6 +26,7 @@ import {
   SkeletonCards,
   Table,
   Td,
+  Textarea,
   Th,
   Tr,
 } from '../components/ui'
@@ -162,7 +165,7 @@ export function DatasetsPage() {
                 <span className="text-sm text-fg-muted">{d.description ?? '—'}</span>
                 <span className="text-xs text-fg-muted">
                   {SOURCE_LABELS[d.source]}
-                  {d.tableName ? ` · ${d.tableName}` : ''}
+                  {d.isQuery ? ' · SQL-запрос' : d.tableName ? ` · ${d.tableName}` : ''}
                   {` · полей: ${d.fields.length}`}
                 </span>
               </button>
@@ -175,12 +178,14 @@ export function DatasetsPage() {
 
       {detail && (
         <DatasetDetailPanel
+          key={detail.dataset.slug}
           detail={detail}
           isAdmin={isAdmin}
           busy={busy}
           onRefresh={() => runAdminAction(() => refreshDataset(detail.dataset.slug))}
           onDelete={() => setPendingDelete(detail.dataset)}
           onUpload={(file) => runAdminAction(() => uploadDatasetCsv(detail.dataset.slug, file))}
+          onReload={() => runAdminAction(async () => undefined)}
         />
       )}
 
@@ -203,19 +208,27 @@ export function DatasetsPage() {
 
 function DatasetCreateForm({ busy, onCreated }: { busy: boolean; onCreated: (slug: string) => void }) {
   const [source, setSource] = useState<DatasetSource>('clickhouse')
+  const [mode, setMode] = useState<'table' | 'query'>('table')
   const [slug, setSlug] = useState('')
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [dsn, setDsn] = useState('env:DATABASE_URL')
   const [tableName, setTableName] = useState('')
+  const [query, setQuery] = useState('')
   const [error, setError] = useState<string | null>(null)
+
+  const asQuery = source !== 'csv' && mode === 'query'
 
   const submit = async () => {
     setError(null)
     try {
-      const created = await createDataset({ slug, title, description: description || undefined, source, dsn, tableName })
-      onCreated(created.slug)
-      setSlug(''); setTitle(''); setDescription(''); setTableName('')
+      const { dataset } = await createDataset({
+        slug, title, description: description || undefined, source, dsn,
+        tableName: asQuery ? '' : tableName,
+        query: asQuery ? query : '',
+      })
+      onCreated(dataset.slug)
+      setSlug(''); setTitle(''); setDescription(''); setTableName(''); setQuery('')
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Не удалось создать датасет')
     }
@@ -230,6 +243,14 @@ function DatasetCreateForm({ busy, onCreated }: { busy: boolean; onCreated: (slu
           <option value="csv">CSV-файл</option>
         </Select>
       </Field>
+      {source !== 'csv' && (
+        <Field label="Читаем">
+          <Select value={mode} onChange={(e) => setMode(e.target.value as 'table' | 'query')}>
+            <option value="table">Таблицу или представление</option>
+            <option value="query">SQL-запрос</option>
+          </Select>
+        </Field>
+      )}
       <Field label="Slug">
         <Input value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="my-data" />
       </Field>
@@ -248,9 +269,25 @@ function DatasetCreateForm({ busy, onCreated }: { busy: boolean; onCreated: (slu
               placeholder={source === 'postgres' ? 'app:postgres (сервер приложения) или postgresql://user:pass@host:5432/db' : 'clickhouse://user:pass@host:8123/db или env:VAR'}
             />
           </Field>
-          <Field label="Таблица">
-            <Input value={tableName} onChange={(e) => setTableName(e.target.value)} placeholder="my_table" />
-          </Field>
+          {asQuery ? (
+            <Field
+              label="SQL-запрос"
+              className="col-span-full"
+              hint="Один запрос, SELECT или WITH. Выполняется заново на каждую секцию отчёта, на каждый список значений фильтра и на детализацию — держите его дешёвым: тяжёлую агрегацию лучше вынести в представление источника."
+            >
+              <Textarea
+                rows={10}
+                className="font-mono text-xs"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder={'SELECT o.order_date, c.region, o.revenue\nFROM orders o\nJOIN clients c ON c.id = o.client_id'}
+              />
+            </Field>
+          ) : (
+            <Field label="Таблица">
+              <Input value={tableName} onChange={(e) => setTableName(e.target.value)} placeholder="my_table" />
+            </Field>
+          )}
         </>
       )}
       {source === 'csv' && (
@@ -262,7 +299,11 @@ function DatasetCreateForm({ busy, onCreated }: { busy: boolean; onCreated: (slu
         </div>
       )}
       <div className="col-span-full">
-        <Button variant="primary" disabled={busy || !slug || !title} onClick={submit}>
+        <Button
+          variant="primary"
+          disabled={busy || !slug || !title || (asQuery && !query.trim())}
+          onClick={submit}
+        >
           Создать и проверить
         </Button>
       </div>
@@ -277,6 +318,7 @@ function DatasetDetailPanel({
   onRefresh,
   onDelete,
   onUpload,
+  onReload,
 }: {
   detail: DatasetDetail
   isAdmin: boolean
@@ -284,8 +326,10 @@ function DatasetDetailPanel({
   onRefresh: () => void
   onDelete: () => void
   onUpload: (file: File) => void
+  onReload: () => void
 }) {
   const { dataset, preview } = detail
+  const notes = detail.notes ?? []
   return (
     <section className="rounded-card border border-line bg-surface p-5">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
@@ -317,6 +361,15 @@ function DatasetDetailPanel({
         )}
       </div>
       {dataset.error && <Alert className="mb-3">{dataset.error}</Alert>}
+      {notes.map((note) => (
+        <Alert key={note} tone="warn" className="mb-3">{note}</Alert>
+      ))}
+
+      {/* редактор нужен и датасету без источника вовсе: у него isQuery = false,
+          и без этого починить его в интерфейсе было бы нечем */}
+      {isAdmin && dataset.source !== 'csv' && (dataset.isQuery || !dataset.tableName) && (
+        <DatasetQueryEditor dataset={dataset} busy={busy} onSaved={onReload} />
+      )}
 
       <h3 className="mt-5 mb-2 text-sm font-semibold">Поля</h3>
       {dataset.fields.length > 0 ? (
@@ -363,6 +416,85 @@ function DatasetDetailPanel({
       ) : (
         <p className="text-sm text-fg-muted">Превью недоступно.</p>
       )}
+
+      {isAdmin && dataset.status === 'ok' && dataset.fields.length > 0 && (
+        <DatasetSemanticDraft slug={dataset.slug} />
+      )}
     </section>
+  )
+}
+
+/** Правка запроса-источника: схема перечитывается сразу, потерянные поля — предупреждением. */
+function DatasetQueryEditor({
+  dataset,
+  busy,
+  onSaved,
+}: {
+  dataset: Dataset
+  busy: boolean
+  onSaved: () => void
+}) {
+  const initial = dataset.query ?? ''
+  const [open, setOpen] = useState(false)
+  const [value, setValue] = useState(initial)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [warnings, setWarnings] = useState<string[]>([])
+
+  const save = async () => {
+    setSaving(true)
+    setError(null)
+    try {
+      const result = await patchDataset(dataset.slug, { query: value })
+      setWarnings(result.warnings ?? [])
+      onSaved()
+      if (!(result.warnings ?? []).length) setOpen(false)
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Не удалось сохранить запрос')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (!open) {
+    return (
+      <div className="mb-3">
+        <Button variant="ghost" onClick={() => { setValue(initial); setOpen(true) }}>
+          Показать и править SQL-запрос
+        </Button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="mb-3 rounded-card border border-line bg-surface-sunken p-4">
+      <Field
+        label="SQL-запрос"
+        hint="После сохранения схема вычитывается заново. Если колонка исчезнет, разрезы и показатели на ней перестанут работать."
+      >
+        <Textarea
+          rows={12}
+          className="font-mono text-xs"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+        />
+      </Field>
+      {error && <Alert className="mt-3">{error}</Alert>}
+      {warnings.map((w) => (
+        <Alert key={w} className="mt-3">{w}</Alert>
+      ))}
+      <div className="mt-3 flex gap-2">
+        <Button
+          variant="primary"
+          disabled={busy || saving || !value.trim() || value === initial}
+          onClick={save}
+        >
+          Сохранить и проверить
+        </Button>
+        <Button variant="ghost" disabled={saving} onClick={() => { setOpen(false); setWarnings([]); setError(null) }}>
+          Отмена
+        </Button>
+      </div>
+    </div>
   )
 }

@@ -155,22 +155,78 @@ def validate_metric(slug: str) -> dict:
     Битое выражение обязано быть видно сразу, а не всплыть в отчёте: метрика
     получает статус error, и построитель запросов её не пропустит.
     """
-    metric = get_metric(slug)
-    if metric is None:
-        raise DatasetError('метрика не найдена')
-    dataset = dataset_registry.get(metric['dataset_slug'])
-    if dataset is None:
-        return update_metric(slug, status='error',
-                             error=f"датасет {metric['dataset_slug']} не найден") or metric
+    return validate_metrics([slug])[0]
+
+
+def validate_metrics(slugs: list[str]) -> list[dict]:
+    """Проверяет выражения метрик, открывая по одному соединению на датасет.
+
+    Метрики одного датасета сначала проверяются одним запросом: при заведении
+    словаря по датасету их сразу больше десятка, а подключение к ClickHouse
+    стоит на порядок дороже самой проверки. Если пачка не прошла, выражения
+    перепроверяются по одному на том же соединении — иначе одна опечатка
+    пометила бы ошибкой все метрики датасета, не назвав виноватую.
+    """
+    metrics = []
+    for slug in slugs:
+        metric = get_metric(slug)
+        if metric is None:
+            raise DatasetError(f'метрика {slug} не найдена')
+        metrics.append(metric)
+
+    by_dataset: dict[str, list[dict]] = {}
+    for metric in metrics:
+        by_dataset.setdefault(metric['dataset_slug'], []).append(metric)
+
+    results: dict[str, dict] = {}
+    for dataset_slug, group in by_dataset.items():
+        dataset = dataset_registry.get(dataset_slug)
+        if dataset is None:
+            for metric in group:
+                results[metric['slug']] = update_metric(
+                    metric['slug'], status='error',
+                    error=f'датасет {dataset_slug} не найден') or metric
+            continue
+        results.update(_validate_group(dataset, group))
+    return [results[m['slug']] for m in metrics]
+
+
+def _validate_group(dataset: dict, group: list[dict]) -> dict[str, dict]:
+    """Проверяет метрики одного датасета на одном соединении."""
+    adapter = None
     try:
-        adapter = dataset_registry.adapter_for(dataset)
-        table = dataset.get('table_name') or ''
-        adapter.run_query(f'SELECT {metric["expression"]} AS value FROM {adapter.quoted_table(table)} LIMIT 1')
-        return update_metric(slug, status='ok', clear_error=True) or metric
+        adapter = dataset_registry.adapter_for(dataset, reuse=True)
+        source = adapter.source_sql('t0')
+        if len(group) > 1:
+            select = ', '.join(f'{m["expression"]} AS a{i}' for i, m in enumerate(group))
+            try:
+                adapter.run_query(f'SELECT {select} FROM {source} LIMIT 1')
+                return {m['slug']: (update_metric(m['slug'], status='ok', clear_error=True) or m)
+                        for m in group}
+            except Exception:
+                pass  # виноватую назовём поимённо ниже
+        out = {}
+        for metric in group:
+            try:
+                adapter.run_query(
+                    f'SELECT {metric["expression"]} AS value FROM {source} LIMIT 1')
+                out[metric['slug']] = update_metric(
+                    metric['slug'], status='ok', clear_error=True) or metric
+            except Exception as exc:  # драйвер может бросить своё
+                out[metric['slug']] = update_metric(
+                    metric['slug'], status='error', error=sanitize_error(str(exc))) or metric
+        return out
     except DatasetError as exc:
-        return update_metric(slug, status='error', error=sanitize_error(str(exc))) or metric
-    except Exception as exc:  # драйвер может бросить своё
-        return update_metric(slug, status='error', error=sanitize_error(str(exc))) or metric
+        # источник недоступен целиком — ошибка одна на всю группу
+        return {m['slug']: (update_metric(m['slug'], status='error',
+                                          error=sanitize_error(str(exc))) or m)
+                for m in group}
+    finally:
+        if adapter is not None:
+            try:
+                adapter.close()
+            except Exception:
+                pass
 
 
 def validate_link(left_slug: str, right_slug: str) -> None:

@@ -75,7 +75,7 @@ def dataset_rows(dataset_slug: str, filter_values: dict, catalog: builder.Catalo
         )
     dialect = dialects.for_source(dataset['source'])
     adapter = catalog.adapter(dataset_slug)
-    table = adapter.quoted_table(dataset.get('table_name') or '')
+    source = adapter.source_sql('t0')
 
     clauses, params = [], {}
     for key, value in (filter_values or {}).items():
@@ -92,7 +92,7 @@ def dataset_rows(dataset_slug: str, filter_values: dict, catalog: builder.Catalo
             clauses.append(clause)
             params.update(extra)
 
-    sql = 'SELECT ' + ', '.join(dialect.quote(f) for f in fields) + f'\nFROM {table}'
+    sql = 'SELECT ' + ', '.join(dialect.quote(f) for f in fields) + f'\nFROM {source}'
     if clauses:
         sql += '\nWHERE ' + ' AND '.join(clauses)
     sql += f'\nLIMIT {int(limit)}'
@@ -102,7 +102,8 @@ def dataset_rows(dataset_slug: str, filter_values: dict, catalog: builder.Catalo
         _, rows = adapter.run_query(sql, params)
     except DatasetError as exc:
         print(f'[drilldown] строки датасета не получены: {exc}\n{sql}')
-        raise DatasetError(builder.explain_source_error(str(exc))) from exc
+        names = [dataset.get('title') or dataset_slug] if (dataset.get('query') or '').strip() else []
+        raise DatasetError(builder.explain_source_error(str(exc), names)) from exc
     return fields, rows
 
 
