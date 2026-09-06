@@ -12,3 +12,4 @@ nohup.out
 backend/report.py
 backend/report.spec.json
 backend/artifacts/
+.pytest_cache/
