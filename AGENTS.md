@@ -36,9 +36,10 @@
 
 ## Структура проекта
 
-- `frontend/` — React 19 + Vite + TS, роутинг `react-router-dom`, графики `recharts`, стили — **Tailwind v4** (CSS-first, без `tailwind.config.js`). Типы отчёта: `src/types/report.ts`, датасеты: `src/types/dataset.ts`, словарь и декларация: `src/types/semantic.ts`, рендеры секций `src/components/`, страницы `src/pages/` (в т.ч. `/builder`, `/datasets`, `/model`), левое меню — `src/components/Sidebar.tsx`: отчёты (`ReportTree.tsx`: поиск, создание/переименование/удаление); ширину меню читатель тянет за разделитель (`SidebarPanel`, 200–560 px, стрелки и Home с клавиатуры, значение в `localStorage`). Список отчётов один на приложение — контекст `src/lib/reports.tsx` (`ReportsProvider`/`useReports`), после создания, правки или удаления отчёта надо звать `reload()`.
+- `frontend/` — React 19 + Vite + TS, роутинг `react-router-dom`, графики `recharts`, стили — **Tailwind v4** (CSS-first, без `tailwind.config.js`). Типы отчёта: `src/types/report.ts`, датасеты: `src/types/dataset.ts`, словарь и декларация: `src/types/semantic.ts`, рендеры секций `src/components/`, страницы `src/pages/` (в т.ч. `/builder`, `/datasets` — поиск по названию, slug'у, таблице и именам полей и фильтры по источнику и статусу с множественным выбором, выбранное живёт в адресе `?source=postgres,csv&status=error`; `/model`), левое меню — `src/components/Sidebar.tsx`: отчёты (`ReportTree.tsx`: поиск, создание/переименование/удаление); ширину меню читатель тянет за разделитель (`SidebarPanel`, 200–560 px, стрелки и Home с клавиатуры, значение в `localStorage`). Список отчётов один на приложение — контекст `src/lib/reports.tsx` (`ReportsProvider`/`useReports`), после создания, правки или удаления отчёта надо звать `reload()`.
   - `src/styles/theme.css` — **единственный источник цвета**: токены светлой темы в `:root`, тёмной — в `.dark`, наружу отдаются через `@theme inline` (утилиты `bg-surface`, `text-fg-muted`, `border-line`, `rounded-card`). Литеральных hex-цветов в компонентах быть не должно — исключение только `src/lib/chart-theme.ts` (recharts кладёт цвета в SVG-атрибуты, где `var()` не резолвится, поэтому палитра отдаётся значениями и выбирается по теме).
-  - `src/components/ui/` — примитивы (`Button`, `Card`, `Field`/`Input`/`Select`/`Textarea`, `Badge`, `Alert`, `Modal`, `ConfirmDialog`, `Table`, `Skeleton`, `EmptyState`, `Page`/`PageHeader`, хук `useConfirm`). Новую вёрстку собирать из них, а не копировать классы: `Modal` уже несёт фокус-трап, `Esc`, возврат фокуса и блокировку прокрутки, `ConfirmDialog` заменяет `window.confirm`.
+  - `src/components/DatasetPreviewTable.tsx` — превью датасета: сортировка по заголовку (по кругу ↑ / ↓ / без — третье состояние возвращает порядок источника) и фильтр-подстрока под каждой колонкой, всё над уже полученными 50 строками, в источник запросов не уходит. Сравнение — `Intl.Collator('ru', {numeric: true})`: числа сравниваются как числа.
+  - `src/components/ui/` — примитивы (`Button`, `Card`, `Field`/`Input`/`Select`/`Textarea`, `Badge`, `Alert`, `Modal`, `ConfirmDialog`, `Table`, `Skeleton`, `EmptyState`, `Page`/`PageHeader`, `Segmented`, `Chips`, `Panel`/`PanelRow`, хук `useConfirm`). `Segmented` — выбор одного значения, `Chips` — нескольких сразу (фильтр по источникам датасетов): нажатое значение отдаётся наружу по одному, набор складывает владелец состояния — считать его от пропа нельзя, если тот обновляется переходом роутера. Новую вёрстку собирать из них, а не копировать классы: `Modal` уже несёт фокус-трап, `Esc`, возврат фокуса и блокировку прокрутки, `ConfirmDialog` заменяет `window.confirm`.
   - Тема: `src/lib/theme.tsx` (`ThemeProvider`/`useTheme`, выбор light/dark/system в `localStorage`), класс `dark` ставится на `<html>` инлайн-скриптом в `index.html` до первой отрисовки.
 - `backend/app/` — FastAPI, Python 3.12, свой venv в `backend/.venv`. Хранилище — PostgreSQL (схема `ai_reporter`, см. `PG*` переменные в `backend/.env`; `PG_SCHEMA` переопределяет имя схемы). Разовая миграция из legacy-SQLite `backend/reports.db` — при первом старте. Пакеты:
   - `core/` — `config.py` (ClickHouse DSN, PG-коннект из `PG*` env, BASE_DIR), `database.py` (PostgreSQL схема `ai_reporter`: reports, users, groups, sessions, datasets, metrics, dimensions, dataset_links; миграции), `security.py` (pbkdf2, Bearer-сессии);
@@ -54,8 +55,7 @@
 ## Датасеты
 
 - Датасет = именованный источник: `source` (`clickhouse` | `postgres` |
-  `oracle` | `csv`),
-  `dsn` (литерал | `env:VAR` | `app:postgres`/пусто — сервер метаданных),
+  `oracle` | `csv`), `dsn` — **литеральная строка подключения**,
   `table_name` **или** `query` (CH/PG) или CSV-файл, вычитанная
 схема полей (`fields`), статус подключения. `table_name` — любой объект с
 колонками, включая представления и матвью (схема PG читается из `pg_class`/
@@ -64,6 +64,20 @@
 не наследуется, его ставят на самом объекте (`COMMENT ON COLUMN`, в CH —
 `ALTER TABLE <view> COMMENT COLUMN`). Реестр в метабазе, сид дефолтных
 `sales_orders` / `manager_stats` (`env:DATABASE_URL`) при пустом реестре.
+
+- **Заводят датасет в админке** (`/admin?tab=datasets`,
+  `components/admin/DatasetsPanel.tsx`): там задаётся строка подключения к
+  чужой базе — та же граница доверия, что у почтового сервера рядом. Страница
+  `/datasets` — каталог: поиск, фильтры, схема, превью, проверка подключения,
+  черновик словаря.
+
+- **Форматы-указатели вместо DSN больше не заводятся**: `env:VAR`,
+  `app:postgres` и пустой DSN у postgres отклоняются в
+  `api/datasets.py:_validate_dsn` (422). Из них не видно, куда смотрит датасет
+  — за адресом приходилось идти в `.env` на сервере, а `app:postgres` делал
+  метабазу приложения источником отчётов. Резолвер этих форматов
+  (`datasets/registry.py:resolve_dataset_dsn`) остаётся **только ради записей,
+  заведённых раньше**, включая сид витрины.
 
 - `query` — произвольный SELECT вместо имени таблицы (взаимоисключающи).
   Построитель подставляет его подзапросом; выражение источника отдаёт
@@ -293,8 +307,21 @@ kind — `select` | `text` | `number` | `daterange`); значения select п
 - Фронт: `/login`, `/reports`, `/reports/<slug>`, `/builder` и
   `/builder/<slug>`, `/datasets`, `/model` (админ), `/account` (кабинет),
   `/admin` (админ).
-- Админка — `pages/AdminPage.tsx` плюс `components/admin/`: четыре раздела
-  вкладками (`UsersPanel`, `GroupsPanel`, `AccessPanel`, `MailServersPanel`),
+- Окно датасета — `components/DatasetModal.tsx`, одно на два экрана: карточку
+  каталога (`/datasets`) и строку в админке (`/admin?tab=datasets`). Разделы
+  вкладками: «Превью» (`DatasetPreviewTable`), «Поля датасета» (только описание
+  схемы), «Показатели», «Разрезы», «Черновик словаря»
+  (`DatasetSemanticDraft`) и «Источник» (последние две — админу; в «Источнике»
+  редактор SQL для датасета на запросе);
+  действия администратора — в подвале окна, загрузка CSV только у
+  CSV-датасета. Размер окна — `xl` (`Modal`), под таблицы. Во вкладке словаря
+  разрез сопоставляется полю по `field`, показатель — по упоминанию колонки в
+  выражении по границе слова (та же логика, что в `api/datasets.py:_orphaned`);
+  показатели по нескольким колонкам и без ссылки на схему (`count()`) идут
+  отдельным списком, а не приписываются полю.
+- Админка — `pages/AdminPage.tsx` плюс `components/admin/`: пять разделов
+  вкладками (`UsersPanel`, `GroupsPanel`, `AccessPanel`, `DatasetsPanel`,
+  `MailServersPanel`),
   общий каркас блока — `ui/Panel` (`Panel`: шапка со счётчиком, полоса поиска,
   тело; `PanelRow` — строка списка), переключатели — `ui/Segmented`. Оба
   примитива общие: ими собраны и админка, и кабинет. Вкладка живёт в адресе
