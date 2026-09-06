@@ -27,7 +27,9 @@ export function Modal({
   onClose: () => void
   children: ReactNode
   footer?: ReactNode
-  size?: 'md' | 'lg'
+  /** `xl` — для окон с таблицами: превью датасета в `lg` живёт в колодце
+      шириной с половину экрана и прокручивается вбок на каждой колонке. */
+  size?: 'md' | 'lg' | 'xl'
   align?: 'center' | 'top'
 }) {
   const dialogRef = useRef<HTMLDivElement>(null)
@@ -89,8 +91,9 @@ export function Modal({
         tabIndex={-1}
         onKeyDown={onKeyDown}
         className={cn(
-          'flex max-h-[85vh] w-full flex-col gap-3 rounded-card border border-line bg-surface p-5 shadow-modal',
-          size === 'lg' ? 'max-w-3xl' : 'max-w-xl',
+          'flex w-full flex-col gap-3 rounded-card border border-line bg-surface p-5 shadow-modal',
+          size === 'xl' ? 'max-h-[92vh] max-w-6xl' : 'max-h-[85vh]',
+          size === 'lg' ? 'max-w-3xl' : size === 'md' ? 'max-w-xl' : '',
         )}
       >
         <div className="flex items-start justify-between gap-4">
@@ -106,8 +109,17 @@ export function Modal({
             <span aria-hidden="true">×</span>
           </button>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
-        {footer && <div className="flex flex-wrap items-center gap-2">{footer}</div>}
+        {/* -mr-3/pr-3: полоса прокрутки и кольцо фокуса живут в отступе диалога,
+            а не поверх правого столбца формы. На macOS полоса рисуется
+            накладкой — без этого зазора она перекрывает край поля, а кольцо
+            фокуса у крайнего справа контрола обрезается краем прокрутки. */}
+        <div className="-mr-3 min-h-0 flex-1 overflow-y-auto pr-3">{children}</div>
+        {/* полоса над кнопками: тело прокручивается, и без неё длинная форма
+            обрывалась посреди поля — это читалось как обрезанная вёрстка, а
+            не как «дальше есть ещё» */}
+        {footer && (
+          <div className="flex flex-wrap items-center gap-2 border-t border-line pt-3">{footer}</div>
+        )}
       </div>
     </div>,
     document.body,

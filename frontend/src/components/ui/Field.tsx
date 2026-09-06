@@ -2,9 +2,16 @@ import type { InputHTMLAttributes, LabelHTMLAttributes, SelectHTMLAttributes, Te
 import { cn } from '../../lib/cn'
 
 /** Единая геометрия всех контролов — раньше она была описана в CSS десять раз
-    с пятью разными паддингами. */
+    с пятью разными паддингами.
+
+    `min-h` держит одну высоту у инпута и селекта: Chrome в UA-стиле ставит
+    `<select>` `line-height: normal !important`, перебить его нечем, и селект
+    выходил на полтора пикселя ниже соседнего инпута — в одном ряду это видно
+    и читается как «другой шрифт». Число не выдумано: 20px строки (`text-sm`)
+    + 8+8 паддинга + 2 рамки. */
 const CONTROL =
   'rounded-control border border-line bg-bg px-3 py-2 text-sm text-fg ' +
+  'min-h-[calc(1.25rem+1rem+2px)] ' +
   'placeholder:text-fg-muted disabled:cursor-not-allowed disabled:opacity-60'
 
 /** Контрол по умолчанию занимает всю ширину; `fit` — по содержимому.
