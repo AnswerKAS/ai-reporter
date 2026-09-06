@@ -72,6 +72,7 @@ COVERED = {
     ('PATCH', '/api/admin/mail-servers/{server_id}'): 'test_api_mail.py',
     ('POST', '/api/admin/mail-servers/{server_id}/test'): 'test_api_mail.py',
     ('DELETE', '/api/admin/mail-servers/{server_id}'): 'test_api_mail.py',
+    ('GET', '/api/schedules'): 'test_api_mail.py',
     ('GET', '/api/reports/{slug}/schedules'): 'test_api_mail.py',
     ('POST', '/api/reports/{slug}/schedules'): 'test_api_mail.py',
     ('PATCH', '/api/reports/{slug}/schedules/{schedule_id}'): 'test_api_mail.py',

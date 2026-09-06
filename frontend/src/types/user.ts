@@ -76,6 +76,20 @@ export interface ReportSchedule {
   last_error?: string
 }
 
+/** Отправитель в выборе рассылки: сотруднику видно только название сервера. */
+export interface ScheduleServer {
+  id: string
+  title: string
+  isDefault: boolean
+}
+
+/** Рассылка в своде кабинета: та же запись плюс отчёт и автор рядом с ней —
+    иначе свод пришлось бы сшивать на клиенте из трёх ответов. */
+export interface ScheduleDigestItem extends ReportSchedule {
+  report_title: string
+  author_username?: string | null
+}
+
 export interface ScheduleInput {
   recipients: string[]
   format: 'xlsx' | 'pdf'

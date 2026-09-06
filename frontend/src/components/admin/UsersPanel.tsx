@@ -2,19 +2,8 @@ import { useMemo, useState } from 'react'
 import type { Group, User } from '../../types/user'
 import { adminCreateUser, adminDeleteUser, adminResetPassword } from '../../lib/api'
 import { useAuth } from '../../lib/auth'
-import {
-  Alert,
-  Badge,
-  Button,
-  EmptyState,
-  Field,
-  Input,
-  Modal,
-  Select,
-  useConfirm,
-} from '../ui'
-import { AdminRow, AdminSection, Avatar } from './AdminSection'
-import { Segmented } from './Segmented'
+import { Alert, Badge, Button, EmptyState, Field, Input, Modal, Panel, PanelRow, Segmented, Select, useConfirm } from '../ui'
+import { Avatar } from './Avatar'
 import { randomPassword } from './password'
 
 type RoleFilter = 'all' | 'admin' | 'user'
@@ -68,7 +57,7 @@ export function UsersPanel({
   })
 
   return (
-    <AdminSection
+    <Panel
       title="Пользователи"
       count={users.length}
       description="Учётные записи и их роли. Админ видит все отчёты и настройки; обычный пользователь — только назначенные ему отчёты."
@@ -116,7 +105,7 @@ export function UsersPanel({
             const reports = userReports?.[u.id] ?? []
             return (
               <li key={u.id}>
-                <AdminRow>
+                <PanelRow>
                   <div className="flex min-w-0 flex-1 basis-full items-center gap-3 sm:basis-0">
                     <Avatar name={u.username} tone={u.role === 'admin' ? 'accent' : 'neutral'} />
                     <div className="min-w-0 flex-1">
@@ -164,7 +153,7 @@ export function UsersPanel({
                       </Button>
                     )}
                   </div>
-                </AdminRow>
+                </PanelRow>
               </li>
             )
           })}
@@ -194,7 +183,7 @@ export function UsersPanel({
         />
       )}
       {dialog}
-    </AdminSection>
+    </Panel>
   )
 }
 

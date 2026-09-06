@@ -8,8 +8,7 @@ import {
   patchMailServer,
   testMailServer,
 } from '../../lib/api'
-import { Alert, Badge, Button, Field, Input, Modal, Select, useConfirm } from '../ui'
-import { AdminRow, AdminSection } from './AdminSection'
+import { Alert, Badge, Button, Field, Input, Modal, Panel, PanelRow, Select, useConfirm } from '../ui'
 
 const KINDS = [
   { value: 'gmail', label: 'Gmail' },
@@ -101,7 +100,7 @@ export function MailServersPanel({ onCount }: { onCount?: (count: number) => voi
   }
 
   return (
-    <AdminSection
+    <Panel
       title="Почтовые серверы"
       count={servers?.length}
       description="Ящик, из которого уходят отчёты по расписанию. Сотрудники видят только название сервера: адрес, логин и пароль остаются здесь. Для Gmail нужен пароль приложения, для Microsoft 365 — учётная запись с разрешённой SMTP-аутентификацией."
@@ -127,7 +126,7 @@ export function MailServersPanel({ onCount }: { onCount?: (count: number) => voi
       <ul className="flex flex-col gap-2">
         {(servers ?? []).map((s) => (
           <li key={s.id}>
-            <AdminRow className="flex-col items-stretch gap-2">
+            <PanelRow className="flex-col items-stretch gap-2">
               <div className="flex flex-wrap items-center gap-2">
                 <strong>{s.title}</strong>
                 {s.is_default && <Badge tone="accent">по умолчанию</Badge>}
@@ -203,7 +202,7 @@ export function MailServersPanel({ onCount }: { onCount?: (count: number) => voi
                   </Button>
                 </div>
               )}
-            </AdminRow>
+            </PanelRow>
           </li>
         ))}
       </ul>
@@ -231,7 +230,7 @@ export function MailServersPanel({ onCount }: { onCount?: (count: number) => voi
         />
       )}
       {dialog}
-    </AdminSection>
+    </Panel>
   )
 }
 

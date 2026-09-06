@@ -114,15 +114,24 @@ def _schedule(row) -> dict:
     return data
 
 
-def list_schedules(report_slug: str | None = None) -> list[dict]:
+def list_schedules(report_slug: str | None = None, *, author_id: str | None = None) -> list[dict]:
+    """Рассылки отчёта, автора или все сразу.
+
+    Свод кабинета спрашивает по автору: рассылок у человека единицы, и вычитывать
+    ради них всю таблицу незачем.
+    """
+    where, values = [], []
+    if report_slug is not None:
+        where.append('report_slug = %s')
+        values.append(report_slug)
+    if author_id is not None:
+        where.append('author_id = %s')
+        values.append(author_id)
+    clause = f' WHERE {" AND ".join(where)}' if where else ''
     with _conn() as conn:
-        if report_slug is None:
-            rows = conn.execute('SELECT * FROM report_schedules ORDER BY created_at').fetchall()
-        else:
-            rows = conn.execute(
-                'SELECT * FROM report_schedules WHERE report_slug = %s ORDER BY created_at',
-                (report_slug,),
-            ).fetchall()
+        rows = conn.execute(
+            f'SELECT * FROM report_schedules{clause} ORDER BY created_at', tuple(values)
+        ).fetchall()
     return [_schedule(r) for r in rows]
 
 

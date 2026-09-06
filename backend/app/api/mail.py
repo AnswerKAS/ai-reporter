@@ -109,16 +109,51 @@ def _apply_next_run(schedule: dict) -> dict:
     ) or schedule
 
 
+def _servers_brief() -> list[dict]:
+    """Список отправителей для выбора: без единой строчки настроек подключения."""
+    return [{'id': s['id'], 'title': s['title'], 'isDefault': s['is_default']}
+            for s in registry.list_servers()]
+
+
+@router.get('/schedules')
+def digest(scope: str = 'mine', user: dict = Depends(get_current_user)) -> dict:
+    """Свод рассылок: свои по всем отчётам сразу — или все, если спросил админ.
+
+    Обойти отчёты по одному клиент мог бы и сам, но кабинет — первая страница
+    сотрудника: тридцать отчётов дали бы тридцать запросов ради двух рассылок.
+
+    Видеть рассылку вправе тот, у кого есть доступ к её отчёту, поэтому свод
+    фильтруется теми же `accessible_slugs`: отозванный доступ убирает рассылку
+    из свода, хотя запись остаётся в базе. Право менять рассылку свод не
+    расширяет — оно по-прежнему у автора и администратора.
+    """
+    if scope not in ('mine', 'all'):
+        raise HTTPException(422, "scope: 'mine' или 'all'")
+    if scope == 'all' and user.get('role') != 'admin':
+        raise HTTPException(403, 'все рассылки системы видит администратор')
+
+    schedules = registry.list_schedules(author_id=None if scope == 'all' else user['id'])
+    slugs = db.accessible_slugs(user)
+    titles = {r['slug']: r['title'] for r in db.list_reports()}
+    # имя автора нужно только в общем взгляде; для своих оно и так известно
+    authors = ({u['id']: u['username'] for u in db.list_users()} if scope == 'all'
+               else {user['id']: user['username']})
+    return {
+        'schedules': [
+            {**s,
+             'report_title': titles.get(s['report_slug'], s['report_slug']),
+             'author_username': authors.get(s['author_id'])}
+            for s in schedules
+            if slugs is None or s['report_slug'] in slugs
+        ],
+        'servers': _servers_brief(),
+    }
+
+
 @router.get('/reports/{slug}/schedules')
 def list_schedules(slug: str, user: dict = Depends(get_current_user)) -> dict:
     _check_access(user, slug)
-    return {
-        'schedules': registry.list_schedules(slug),
-        # сотруднику нужен список серверов, чтобы выбрать отправителя,
-        # но без единой строчки настроек подключения
-        'servers': [{'id': s['id'], 'title': s['title'], 'isDefault': s['is_default']}
-                    for s in registry.list_servers()],
-    }
+    return {'schedules': registry.list_schedules(slug), 'servers': _servers_brief()}
 
 
 @router.post('/reports/{slug}/schedules', status_code=201)

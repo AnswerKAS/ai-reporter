@@ -353,3 +353,82 @@ def test_удаление_чужого_расписания_403(client, schedule
 def test_удаление_несуществующего_расписания_404(client, admin_headers, report, server):
     assert client.delete('/api/reports/sales-report/schedules/нет',
                          headers=admin_headers).status_code == 404
+
+
+# --- свод рассылок кабинета ----------------------------------------------------
+
+def test_свод_собирает_рассылки_разных_отчётов(client, admin_headers, schedule, model):
+    """Кабинет спрашивает один раз, а не по разу на каждый доступный отчёт."""
+    from app.core import database as db
+
+    db.create_report(id='id2', slug='второй', title='Второй', description=None,
+                     definition={'sections': []})
+    client.post('/api/reports/второй/schedules', headers=admin_headers,
+                json={'recipients': ['boss@corp.ru'], 'kind': 'daily', 'atTime': '10:00'})
+
+    body = client.get('/api/schedules', headers=admin_headers).json()
+
+    assert {s['report_slug'] for s in body['schedules']} == {'sales-report', 'второй'}
+    assert {s['report_title'] for s in body['schedules']} == {'Продажи', 'Второй'}
+
+
+def test_свод_отдаёт_серверы_без_настроек(client, admin_headers, schedule):
+    body = client.get('/api/schedules', headers=admin_headers).json()
+
+    assert set(body['servers'][0]) == {'id', 'title', 'isDefault'}
+
+
+def test_свод_показывает_только_свои_рассылки(client, schedule, report, plain_user, server):
+    """На отчёте есть рассылка админа — в своде сотрудника её быть не должно."""
+    from app.core import database as db
+
+    db.grant_access('sales-report', user_id=plain_user['id'])
+    headers = auth(plain_user)
+    client.post('/api/reports/sales-report/schedules', headers=headers,
+                json={'recipients': ['me@corp.ru'], 'kind': 'daily', 'atTime': '07:00'})
+
+    body = client.get('/api/schedules', headers=headers).json()
+
+    assert [s['recipients'] for s in body['schedules']] == [['me@corp.ru']]
+
+
+def test_свод_без_доступа_к_отчёту_пуст(client, report, server, plain_user):
+    """Доступ отозвали — рассылка исчезает из свода, хотя запись осталась."""
+    from app.core import database as db
+    from app.mail import registry as mail
+
+    db.grant_access('sales-report', user_id=plain_user['id'])
+    headers = auth(plain_user)
+    created = client.post('/api/reports/sales-report/schedules', headers=headers,
+                          json={'recipients': ['me@corp.ru']}).json()['schedule']
+    db.revoke_access('sales-report', user_id=plain_user['id'])
+
+    assert client.get('/api/schedules', headers=headers).json()['schedules'] == []
+    assert mail.get_schedule(created['id']) is not None
+
+
+def test_свод_всех_рассылок_админу(client, admin_headers, schedule, report, plain_user, server):
+    from app.core import database as db
+
+    db.grant_access('sales-report', user_id=plain_user['id'])
+    client.post('/api/reports/sales-report/schedules', headers=auth(plain_user),
+                json={'recipients': ['me@corp.ru']})
+
+    body = client.get('/api/schedules?scope=all', headers=admin_headers).json()
+
+    assert {s['author_username'] for s in body['schedules']} == {'root', 'petrov'}
+
+
+def test_свод_всех_рассылок_обычному_пользователю_403(client, user_headers, metabase):
+    response = client.get('/api/schedules?scope=all', headers=user_headers)
+
+    assert response.status_code == 403
+    assert 'администратор' in response.json()['detail']
+
+
+def test_свод_с_неизвестным_scope_422(client, admin_headers, metabase):
+    assert client.get('/api/schedules?scope=чужие', headers=admin_headers).status_code == 422
+
+
+def test_свод_без_токена_401(client, metabase):
+    assert client.get('/api/schedules').status_code == 401

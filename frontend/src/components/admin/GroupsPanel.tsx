@@ -6,8 +6,7 @@ import {
   adminDeleteGroup,
   adminRemoveMember,
 } from '../../lib/api'
-import { Badge, Button, EmptyState, Field, Input, Modal, Select, useConfirm } from '../ui'
-import { AdminSection } from './AdminSection'
+import { Badge, Button, EmptyState, Field, Input, Modal, Panel, Select, useConfirm } from '../ui'
 
 /** Группы: состав правится прямо в карточке — участника видно чипом, и там же
     крестик, чтобы его убрать (раньше состав был строкой через запятую, а
@@ -33,7 +32,7 @@ export function GroupsPanel({
   const shown = groups.filter((g) => g.name.toLowerCase().includes(query.trim().toLowerCase()))
 
   return (
-    <AdminSection
+    <Panel
       title="Группы"
       count={groups.length}
       description="Группа — способ выдать один отчёт сразу отделу: доступ назначается группе, а состав меняется здесь."
@@ -169,7 +168,7 @@ export function GroupsPanel({
         />
       )}
       {dialog}
-    </AdminSection>
+    </Panel>
   )
 }
 

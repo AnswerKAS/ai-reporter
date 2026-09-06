@@ -1,100 +1,136 @@
-import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
-import type { ReportMeta } from '../types/report'
-import { changePassword, fetchReports } from '../lib/api'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
+import type { ScheduleDigestItem, ScheduleServer } from '../types/user'
+import { ApiError, fetchScheduleDigest } from '../lib/api'
 import { useAuth } from '../lib/auth'
-import { Alert, Button, Input, Page, PageHeader } from '../components/ui'
+import { useReports } from '../lib/reports'
+import { ReportsPanel } from '../components/account/ReportsPanel'
+import { SchedulesPanel } from '../components/account/SchedulesPanel'
+import { SecurityPanel } from '../components/account/SecurityPanel'
+import { ScheduleDialog } from '../components/ScheduleDialog'
+import { Alert, Button, Page, PageHeader, Segmented } from '../components/ui'
 
-const PANEL = 'rounded-card border border-line bg-surface p-5'
+type Tab = 'reports' | 'schedules' | 'security'
 
+const TABS: Tab[] = ['reports', 'schedules', 'security']
+type Scope = 'mine' | 'all'
+
+/**
+ * Кабинет вкладками — той же механикой, что админка: раздел живёт в адресе
+ * (`/account?tab=schedules`), поэтому ссылку можно передать, а возврат «назад»
+ * из отчёта не сбрасывает выбранное.
+ *
+ * Свод рассылок грузится страницей, а не вкладкой: по нему считается и число
+ * рассылок у каждого отчёта в соседней вкладке, и счётчик на самой вкладке.
+ */
 export function AccountPage() {
   const { user, isAdmin } = useAuth()
-  const [reports, setReports] = useState<ReportMeta[]>([])
-  const [password, setPassword] = useState('')
-  const [msg, setMsg] = useState<string | null>(null)
-  const [err, setErr] = useState<string | null>(null)
+  const { reports } = useReports()
+  const [params, setParams] = useSearchParams()
+  const tab = (TABS as string[]).includes(params.get('tab') ?? '')
+    ? (params.get('tab') as Tab)
+    : 'reports'
+
+  const [scope, setScope] = useState<Scope>('mine')
+  const [schedules, setSchedules] = useState<ScheduleDigestItem[] | null>(null)
+  const [servers, setServers] = useState<ScheduleServer[]>([])
+  const [error, setError] = useState<string | null>(null)
+  /** Окно рассылки отчёта — то же, что на его странице: заводится оттуда. */
+  const [scheduling, setScheduling] = useState<string | null>(null)
+
+  const reload = useCallback(async () => {
+    try {
+      const data = await fetchScheduleDigest(scope)
+      setSchedules(data.schedules)
+      setServers(data.servers)
+      setError(null)
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'не удалось загрузить рассылки')
+      setSchedules([])
+    }
+  }, [scope])
 
   useEffect(() => {
-    fetchReports()
-      .then(setReports)
-      .catch(() => setReports([]))
-  }, [])
+    if (user) void reload()
+  }, [user, reload])
 
-  const onSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setMsg(null)
-    setErr(null)
-    try {
-      await changePassword(password)
-      setMsg('Пароль изменён')
-      setPassword('')
-    } catch (error) {
-      setErr(error instanceof Error ? error.message : 'не удалось изменить пароль')
-    }
-  }
+  /** Свои рассылки по отчётам: счётчики не должны меняться от того, что
+      администратор переключил свод на «все в системе». */
+  const mine = useMemo(
+    () => (schedules ?? []).filter((s) => s.author_id === user?.id),
+    [schedules, user],
+  )
+
+  const counts = useMemo(() => {
+    if (schedules === null) return null
+    const map: Record<string, number> = {}
+    for (const s of mine) map[s.report_slug] = (map[s.report_slug] ?? 0) + 1
+    return map
+  }, [schedules, mine])
+
+  if (!user) return null
 
   return (
     <Page>
       <PageHeader
         title="Личный кабинет"
-        subtitle={`${user?.username} · ${user?.role === 'admin' ? 'администратор' : 'пользователь'}`}
-      />
+        subtitle={`${user.username} · ${user.role === 'admin' ? 'администратор' : 'пользователь'}`}
+        actions={
+          <Button onClick={() => void reload()} disabled={schedules === null}>
+            Обновить
+          </Button>
+        }
+      >
+        <Segmented
+          className="mt-4"
+          ariaLabel="Разделы кабинета"
+          value={tab}
+          onChange={(next) => setParams(next === 'reports' ? {} : { tab: next }, { replace: true })}
+          options={[
+            { value: 'reports', label: 'Мои отчёты', count: reports.length },
+            {
+              value: 'schedules',
+              label: 'Мои рассылки',
+              count: schedules === null ? undefined : mine.length,
+            },
+            { value: 'security', label: 'Безопасность' },
+          ]}
+        />
+      </PageHeader>
 
-      <div className="mb-6 grid grid-cols-[repeat(auto-fit,minmax(340px,1fr))] gap-4">
-        <section className={PANEL}>
-          <h2 className="mb-3.5 text-base font-semibold">Мои отчёты ({reports.length})</h2>
-          {reports.length === 0 ? (
-            <p className="text-sm text-fg-muted">Отчёты не назначены.</p>
-          ) : (
-            <ul className="flex flex-col gap-2.5">
-              {reports.map((r) => (
-                <li key={r.slug} className="flex flex-col gap-0.5 text-sm">
-                  <Link to={`/reports/${r.slug}`} className="font-semibold text-accent hover:underline">
-                    {r.title}
-                  </Link>
-                  <span className="text-xs text-fg-muted">
-                    {r.slug} · {r.status === 'ready' ? r.updatedAt : r.status}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
+      {error && <Alert className="mb-4">{error}</Alert>}
 
-        <section className={PANEL}>
-          <h2 className="mb-3.5 text-base font-semibold">Смена пароля</h2>
-          <form className="flex flex-wrap items-center gap-2" onSubmit={onSubmit}>
-            <Input
-              className="w-auto min-w-40 flex-1"
-              type="password"
-              placeholder="Новый пароль"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              minLength={4}
-              required
-              autoComplete="new-password"
-            />
-            <Button type="submit" variant="primary" disabled={password.length < 4}>
-              Сменить
-            </Button>
-          </form>
-          {msg && (
-            <Alert tone="success" className="mt-2">
-              {msg}
-            </Alert>
-          )}
-          {err && <Alert className="mt-2">{err}</Alert>}
-          {isAdmin && (
-            <p className="mt-3.5 text-sm text-fg-muted">
-              Управление пользователями и назначение отчётов — в разделе{' '}
-              <Link to="/admin" className="text-accent hover:underline">
-                «Администрирование»
-              </Link>
-              .
-            </p>
-          )}
-        </section>
-      </div>
+      {tab === 'reports' ? (
+        <ReportsPanel
+          reports={reports}
+          scheduleCounts={counts}
+          isAdmin={isAdmin}
+          onSchedule={setScheduling}
+        />
+      ) : tab === 'schedules' ? (
+        <SchedulesPanel
+          items={schedules}
+          servers={servers}
+          reports={reports}
+          scope={scope}
+          isAdmin={isAdmin}
+          onScope={setScope}
+          onChanged={reload}
+        />
+      ) : (
+        <SecurityPanel user={user} isAdmin={isAdmin} />
+      )}
+
+      {scheduling && (
+        <ScheduleDialog
+          slug={scheduling}
+          onClose={() => {
+            setScheduling(null)
+            // в окне могли завести или удалить рассылку — свод об этом не знает
+            void reload()
+          }}
+        />
+      )}
     </Page>
   )
 }

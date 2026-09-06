@@ -1,11 +1,12 @@
 import type { HTMLAttributes, ReactNode } from 'react'
 import { cn } from '../../lib/cn'
-import { Badge } from '../ui'
+import { Badge } from './Badge'
 
-/** Каркас блока админки: шапка со счётчиком и действиями, полоса инструментов
+/** Каркас блока страницы: шапка со счётчиком и действиями, полоса инструментов
     (поиск, фильтры) и тело. Раньше каждый блок описывал свои отступы сам —
-    и расходился с соседним на пару пикселей. */
-export function AdminSection({
+    и расходился с соседним на пару пикселей. Им собраны разделы админки и
+    кабинета: блок со счётчиком и поиском нужен обеим. */
+export function Panel({
   title,
   count,
   description,
@@ -44,8 +45,8 @@ export function AdminSection({
   )
 }
 
-/** Строка списка внутри блока: пользователь, назначение, сервер рассылки. */
-export function AdminRow({
+/** Строка списка внутри блока: пользователь, назначение, рассылка, сервер. */
+export function PanelRow({
   className,
   children,
   selected = false,
@@ -62,20 +63,5 @@ export function AdminRow({
     >
       {children}
     </div>
-  )
-}
-
-/** Кружок с первой буквой имени — взгляд цепляется за него в длинном списке. */
-export function Avatar({ name, tone = 'neutral' }: { name: string; tone?: 'neutral' | 'accent' }) {
-  return (
-    <span
-      aria-hidden="true"
-      className={cn(
-        'grid size-8 shrink-0 place-items-center rounded-full text-sm font-semibold',
-        tone === 'accent' ? 'bg-accent-soft text-accent' : 'bg-surface-sunken text-fg-muted',
-      )}
-    >
-      {name.slice(0, 1).toUpperCase()}
-    </span>
   )
 }

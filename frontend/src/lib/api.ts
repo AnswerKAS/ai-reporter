@@ -5,7 +5,9 @@ import type {
   MailServer,
   MailServerInput,
   ReportSchedule,
+  ScheduleDigestItem,
   ScheduleInput,
+  ScheduleServer,
   User,
 } from '../types/user'
 import type {
@@ -396,8 +398,18 @@ export async function deleteMailServer(id: string): Promise<void> {
 
 export async function fetchSchedules(
   slug: string,
-): Promise<{ schedules: ReportSchedule[]; servers: { id: string; title: string; isDefault: boolean }[] }> {
+): Promise<{ schedules: ReportSchedule[]; servers: ScheduleServer[] }> {
   return await request(`/reports/${slug}/schedules`)
+}
+
+/** Свод рассылок: свои по всем отчётам сразу — или все, если спросил админ.
+
+    Обойти отчёты по одному кабинет мог бы и сам, но это запрос на отчёт ради
+    обычно двух-трёх рассылок. */
+export async function fetchScheduleDigest(
+  scope: 'mine' | 'all' = 'mine',
+): Promise<{ schedules: ScheduleDigestItem[]; servers: ScheduleServer[] }> {
+  return await request(`/schedules?scope=${scope}`)
 }
 
 export async function createSchedule(slug: string, input: ScheduleInput): Promise<ReportSchedule> {

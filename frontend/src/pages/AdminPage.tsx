@@ -13,13 +13,13 @@ import { AccessPanel } from '../components/admin/AccessPanel'
 import { GroupsPanel } from '../components/admin/GroupsPanel'
 import { MailServersPanel } from '../components/admin/MailServersPanel'
 import { UsersPanel } from '../components/admin/UsersPanel'
-import { Segmented } from '../components/admin/Segmented'
 import {
   Alert,
   Button,
   EmptyState,
   Page,
   PageHeader,
+  Segmented,
   SkeletonRows,
 } from '../components/ui'
 

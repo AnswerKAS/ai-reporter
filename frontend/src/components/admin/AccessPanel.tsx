@@ -4,9 +4,8 @@ import type { ReportMeta } from '../../types/report'
 import type { AccessEntry, Group, User } from '../../types/user'
 import { adminGrantAccess, adminRevokeAccess } from '../../lib/api'
 import { cn } from '../../lib/cn'
-import { Badge, Button, EmptyState, Input, Select } from '../ui'
-import { AdminRow, AdminSection, Avatar } from './AdminSection'
-import { Segmented } from './Segmented'
+import { Badge, Button, EmptyState, Input, Panel, PanelRow, Segmented, Select } from '../ui'
+import { Avatar } from './Avatar'
 
 type Mode = 'reports' | 'subjects'
 /** Кому назначен доступ: `u:<id>` — пользователь, `g:<id>` — группа. */
@@ -85,7 +84,7 @@ export function AccessPanel({
   const match = (text: string) => text.toLowerCase().includes(query.trim().toLowerCase())
 
   return (
-    <AdminSection
+    <Panel
       title="Доступ к отчётам"
       count={granted}
       description="Пользователь видит отчёт, если он назначен ему напрямую или его группе. Администраторы видят все отчёты без назначений."
@@ -133,10 +132,10 @@ export function AccessPanel({
                         className="w-full cursor-pointer text-left"
                         onClick={() => setSelectedSlug(r.slug)}
                       >
-                        <AdminRow selected={selectedSlug === r.slug}>
+                        <PanelRow selected={selectedSlug === r.slug}>
                           <span className="min-w-0 flex-1 truncate font-medium">{r.title}</span>
                           <Badge tone={count === 0 ? 'warn' : 'accent'}>{count}</Badge>
-                        </AdminRow>
+                        </PanelRow>
                       </button>
                     </li>
                   )
@@ -153,7 +152,7 @@ export function AccessPanel({
                       className="w-full cursor-pointer text-left"
                       onClick={() => setSelectedSubject(s.key)}
                     >
-                      <AdminRow selected={selectedSubject === s.key}>
+                      <PanelRow selected={selectedSubject === s.key}>
                         <Avatar name={s.name} tone={s.kind === 'group' ? 'accent' : 'neutral'} />
                         <span className="min-w-0 flex-1 truncate font-medium">{s.name}</span>
                         {s.admin ? (
@@ -161,7 +160,7 @@ export function AccessPanel({
                         ) : (
                           <Badge>{subjectCount(s.key)}</Badge>
                         )}
-                      </AdminRow>
+                      </PanelRow>
                     </button>
                   </li>
                 ))}
@@ -205,7 +204,7 @@ export function AccessPanel({
           )}
         </div>
       </div>
-    </AdminSection>
+    </Panel>
   )
 }
 
@@ -312,7 +311,7 @@ function ReportAccess({
             const group = entry.groupId ? groups.find((g) => g.id === entry.groupId) : null
             return (
               <li key={`${entry.userId ?? ''}-${entry.groupId ?? ''}`}>
-                <AdminRow>
+                <PanelRow>
                   <Avatar name={entry.username ?? entry.groupName ?? '?'} tone={group ? 'accent' : 'neutral'} />
                   <span className="min-w-0 flex-1">
                     <strong>{entry.username ?? entry.groupName}</strong>
@@ -331,7 +330,7 @@ function ReportAccess({
                   >
                     Отозвать
                   </Button>
-                </AdminRow>
+                </PanelRow>
               </li>
             )
           })}
@@ -433,7 +432,7 @@ function SubjectAccess({
             <ul className="flex flex-col gap-1.5">
               {slugs.map((slug) => (
                 <li key={slug}>
-                  <AdminRow>
+                  <PanelRow>
                     <span className="min-w-0 flex-1 truncate font-medium">{titleOf(slug)}</span>
                     <Button
                       variant="danger"
@@ -445,15 +444,15 @@ function SubjectAccess({
                     >
                       Отозвать
                     </Button>
-                  </AdminRow>
+                  </PanelRow>
                 </li>
               ))}
               {inherited.map((row) => (
                 <li key={`${row.slug}-${row.via}`}>
-                  <AdminRow className={cn('border-dashed')}>
+                  <PanelRow className={cn('border-dashed')}>
                     <span className="min-w-0 flex-1 truncate">{titleOf(row.slug)}</span>
                     <Badge>через группу «{row.via}»</Badge>
-                  </AdminRow>
+                  </PanelRow>
                 </li>
               ))}
             </ul>
