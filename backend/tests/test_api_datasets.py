@@ -184,21 +184,59 @@ def test_dsn_не_того_типа_422(client, metabase, admin_headers, source,
     assert response.status_code == 422
 
 
-def test_пустой_dsn_у_postgres_это_сервер_приложения(client, metabase, sources, admin_headers):
+def test_датасет_без_dsn_отклоняется(client, metabase, sources, admin_headers):
+    """Пустой DSN у postgres раньше означал «метабаза приложения» — теперь это
+    просто незаполненное поле: отчёты не ходят в базу, где лежат права и сессии."""
     response = client.post('/api/datasets', headers=admin_headers, json={
         'slug': 'meta', 'title': 'Метабаза', 'source': 'postgres', 'tableName': 'reports'})
 
-    assert response.status_code == 201
+    assert response.status_code == 422
+    assert 'нужен DSN' in response.json()['detail']
 
 
-def test_ссылка_env_принимается_как_dsn(client, metabase, sources, admin_headers, monkeypatch):
-    monkeypatch.setenv('MY_DSN', 'clickhouse://user:pass@host:8443/db')
+@pytest.mark.parametrize('dsn, кусок_ответа', [
+    ('env:MY_DSN', 'переменную окружения'),
+    ('app:postgres', 'сервер приложения'),
+    ('', 'нужен DSN'),
+])
+def test_форматы_указатели_вместо_dsn_отклоняются(
+        client, metabase, sources, admin_headers, monkeypatch, dsn, кусок_ответа):
+    """Указатель вместо DSN больше не заводится: из него не видно, куда
+    смотрит датасет, а `app:postgres` делал метабазу источником отчётов."""
+    monkeypatch.setenv('MY_DSN', 'postgresql://user:pass@host:5432/db')
 
     response = client.post('/api/datasets', headers=admin_headers, json={
-        'slug': 'byenv', 'title': 'По переменной', 'source': 'clickhouse',
-        'dsn': 'env:MY_DSN', 'tableName': 't'})
+        'slug': 'byenv', 'title': 'По переменной', 'source': 'postgres',
+        'dsn': dsn, 'tableName': 't'})
 
-    assert response.status_code == 201
+    assert response.status_code == 422
+    assert кусок_ответа in response.json()['detail']
+
+
+def test_правка_dsn_на_указатель_отклоняется(client, metabase, sources, admin_headers):
+    client.post('/api/datasets', headers=admin_headers, json={
+        'slug': 'pg', 'title': 'PG', 'source': 'postgres',
+        'dsn': 'postgresql://user:pass@host:5432/db', 'tableName': 't'})
+
+    response = client.patch('/api/datasets/pg', headers=admin_headers,
+                            json={'dsn': 'env:MY_DSN'})
+
+    assert response.status_code == 422
+
+
+def test_пустой_dsn_в_правке_не_стирает_подключение(client, metabase, sources, admin_headers):
+    """Пустая строка — это не «не менять» (для этого есть null), а стирание:
+    без проверки она обнуляла бы DSN молча."""
+    client.post('/api/datasets', headers=admin_headers, json={
+        'slug': 'pg', 'title': 'PG', 'source': 'postgres',
+        'dsn': 'postgresql://user:pass@host:5432/db', 'tableName': 't'})
+
+    response = client.patch('/api/datasets/pg', headers=admin_headers, json={'dsn': ''})
+
+    from app.datasets import registry as ds
+
+    assert response.status_code == 422
+    assert ds.get('pg')['dsn'] == 'postgresql://user:pass@host:5432/db'
 
 
 def test_датасет_на_запросе(client, metabase, sources, admin_headers):

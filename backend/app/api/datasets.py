@@ -45,30 +45,43 @@ def _meta(d: dict, *, reveal_query: bool = False) -> dict:
     return DatasetMeta.model_validate(data).model_dump(by_alias=True)
 
 
-# Схемы DSN по типу источника: префиксы и текст ошибки для формы.
+# Схемы DSN по типу источника: префиксы, пример и текст ошибки для формы.
 DSN_SCHEMES = {
     'clickhouse': (('clickhouse://', 'clickhouses://'),
+                   'clickhouse://user:pass@host:8123/db',
                    'DSN для ClickHouse должен начинаться с clickhouse:// или clickhouses://'),
     'postgres': (('postgres://', 'postgresql://'),
+                 'postgresql://user:pass@host:5432/db',
                  'DSN для PostgreSQL должен начинаться с postgresql:// или postgres://'),
     'oracle': (('oracle://',),
+               'oracle://user:pass@host:1521/SERVICE',
                'DSN для Oracle должен начинаться с oracle:// '
                '(oracle://user:pass@host:1521/SERVICE)'),
 }
 
 
 def _validate_dsn(source: str, dsn: str) -> str:
-    """Проверяет формат DSN по типу источника; возвращает понятную ошибку или ''."""
+    """Проверяет формат DSN по типу источника; возвращает понятную ошибку или ''.
+
+    Форматы-указатели (`env:VAR`, `app:postgres`, пустой DSN для postgres)
+    больше не заводятся: из них не видно, куда смотрит датасет, — за адресом
+    приходилось идти в `.env` на сервере, а `app:postgres` делал метабазу
+    приложения источником отчётов. Записи, заведённые раньше, продолжают
+    работать: их резолвит `datasets/registry.py:resolve_dataset_dsn`.
+    """
     text = (dsn or '').strip()
     if source == 'csv':
         return ''
-    if text.lower().startswith('env:') or text.lower() == 'app:postgres':
-        return ''
-    if source == 'postgres' and not text:
-        return ''  # пусто — сервер приложения (PG* из .env)
-    prefixes, message = DSN_SCHEMES.get(source, ((), 'неизвестный тип источника'))
+    prefixes, example, message = DSN_SCHEMES.get(
+        source, ((), '', 'неизвестный тип источника'))
+    if text.lower().startswith('env:'):
+        return ('ссылка на переменную окружения больше не поддерживается — '
+                f'укажите DSN, например {example}')
+    if text.lower() == 'app:postgres':
+        return ('сервер приложения больше не назначается источником — '
+                f'укажите DSN, например {example}')
     if not text:
-        return f'для {source} нужен DSN или ссылка env:VAR'
+        return f'для {source} нужен DSN, например {example}'
     if prefixes and not text.lower().startswith(prefixes):
         return message
     return ''
@@ -153,7 +166,9 @@ def create_dataset(patch: DatasetCreate, user: dict = Depends(require_admin)) ->
 @router.patch('/{slug}')
 def patch_dataset(slug: str, patch: DatasetPatch, user: dict = Depends(require_admin)) -> dict:
     dataset = _get_or_404(slug)
-    if patch.dsn is not None and patch.dsn.strip():
+    # пустая строка — это не «не менять» (для этого есть None), а стирание
+    # DSN: без проверки она обнуляла бы подключение датасета молча
+    if patch.dsn is not None:
         dsn_error = _validate_dsn(dataset['source'], patch.dsn)
         if dsn_error:
             raise HTTPException(422, dsn_error)
