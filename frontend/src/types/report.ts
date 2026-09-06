@@ -125,4 +125,51 @@ export interface ReportMeta {
   error?: string
   filterValues?: Record<string, string>
   updatedAt: string
+  /** Автор отчёта: у заведённых до каталога его нет — восстановить неоткуда. */
+  createdBy?: string | null
+  author?: string | null
+  /** Темы — свободные метки, их ставит человек. */
+  tags?: string[]
+  /** Закреплён ли отчёт этим читателем. */
+  favorite?: boolean
+}
+
+/** «Ни одной»: отчёты без группы доступа, без автора, без темы. */
+export const NONE_BUCKET = '-'
+
+/** Разрезы каталога, по которым меню умеет группировать и фильтровать. */
+export type ReportDimension = 'group' | 'author' | 'tag'
+
+export interface FacetItem {
+  id: string
+  /** Имя варианта; null — ведро «ни одной». */
+  name: string | null
+  count: number
+}
+
+export interface ReportFacets {
+  total: number
+  favorites: number
+  groups: FacetItem[]
+  authors: FacetItem[]
+  tags: FacetItem[]
+  statuses: FacetItem[]
+}
+
+/** Запрос к каталогу: поиск, фильтры, порядок и страница. */
+export interface ReportQuery {
+  q?: string
+  group?: string
+  author?: string
+  tag?: string
+  status?: string
+  favorite?: boolean
+  sort?: 'title' | 'updated'
+  limit?: number
+  offset?: number
+}
+
+export interface ReportPage {
+  reports: ReportMeta[]
+  total: number
 }

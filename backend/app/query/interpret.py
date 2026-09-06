@@ -132,7 +132,10 @@ def _ask(prompt_text: str, model: str, key: str) -> str:
     try:
         answer = future.result(timeout=TIMEOUT)
     except _Timeout:
-        raise DatasetError(f'модель не ответила за {TIMEOUT} с')
+        raise DatasetError(
+            f'модель не ответила за {TIMEOUT} с — попробуйте ещё раз '
+            'или соберите отчёт мышью: поля слева, секции по центру'
+        )
     content = answer.content
     if isinstance(content, list):
         # некоторые модели отдают ответ частями
@@ -153,36 +156,85 @@ _INSTRUCTIONS = """Ты превращаешь описание отчёта н�
     "metrics": ["slug", ...], "by": ["slug"], "grain": "day|week|month|quarter|year|null",
     "orderBy": "slug|null", "orderDir": "desc|asc", "limit": число|null}
  ],
- "filters": [{"dimension": "slug", "kind": "select"}]}
+ "filters": [{"dimension": "slug", "kind": "select"}],
+ "computed": [{"key": "calc_1", "title": "A / B", "left": "slug_a", "op": "/",
+               "right": "slug_b", "format": "number"}]}
 
 Правила:
 - В metrics, by и filters допустимы ТОЛЬКО slug из списков ниже. Ничего не выдумывай.
-- Если нужного показателя в списке нет — не подбирай похожий. Верни
-  {"error": "чего не хватает"}.
+
+- АРИФМЕТИКА. Фраза вида «A разделить на B», «A делить на B», «A / B»,
+  «A минус B», «отношение A к B», «доля A от B» — это НЕ название показателя,
+  а действие над двумя показателями из списка. Разбери её на части и:
+  1) если в списке ПОКАЗАТЕЛИ уже есть готовая формула с тем же смыслом —
+     возьми её и дубль не создавай;
+  2) иначе верни формулу в computed:
+     "computed": [{"key": "calc_1", "title": "A / B", "left": "slug_a",
+                   "op": "/", "right": "slug_b", "format": "number"}]
+     и поставь calc_1 в metrics секции.
+  left и right — ТОЛЬКО slug из списка ПОКАЗАТЕЛИ, op — один из + - * /.
+  Ошибку про «нет такого показателя» на такую фразу возвращать НЕЛЬЗЯ, пока
+  оба операнда есть в списке. Других способов создать показатель нет.
+
+- Если запрос упирается не в словарь, а в предел формата — умножение или
+  деление на ЧИСЛО, три и более операнда, формула от формулы, скользящее
+  среднее и прочее, чего в формате нет, — верни
+  {"error": "<чего именно формат не умеет>", "unsupported": true}.
+  Поля тут ни при чём, и в missing ничего не пиши.
+
+- Ошибку возвращай, только когда поля действительно нет в списках И его
+  нельзя получить формулой из имеющихся:
+  {"error": "<одно предложение по-русски: чего именно не хватает>",
+   "missing": ["слово из описания пользователя", ...]}, где missing — те слова
+  пользователя, которым не нашлось пары. Не возвращай эту подсказку дословно —
+  напиши своими словами про конкретный запрос. Не пиши в missing слова,
+  которые есть в списках ниже, и не пиши туда фразу целиком, если она
+  раскладывается на арифметику.
+
 - type kpi — без разреза (by пустой). chart и table — с разрезом.
 - grain задаётся только когда разрез имеет тип date.
 - Одна мысль пользователя — одна секция.
 - «фильтр по X» — это не секция, а элемент filters.
-- Если пользователь просит поделить одно на другое и подходящая формула уже
-  есть в списке показателей — бери её, не создавай дубль.
 - Разрез бери из ТОГО ЖЕ датасета, что и показатели секции. Если подходящих
   разрезов с одинаковым названием несколько, выбирай из датасета показателя.
 - Если пользователь назвал разрез («по городам», «по неделям»), секция НЕ
   может быть kpi — это chart или table.
 - Перечисление через запятую («столбцы A, B, C») — это одна секция-таблица
   со всеми перечисленными показателями, ни один не теряй.
+
+ПРИМЕР арифметики. Пусть в списках есть m_pay: Сумма платежей,
+m_fee: Комиссия, m_rev: Выручка, d_city: Город. Описание:
+«график по городам, значения по выручке и сумма платежей разделить на комиссию».
+Правильный ответ:
+{"sections": [{"type": "chart", "kind": "bar", "metrics": ["m_rev", "calc_1"],
+               "by": ["d_city"], "grain": null, "orderBy": null,
+               "orderDir": "desc", "limit": null}],
+ "filters": [],
+ "computed": [{"key": "calc_1", "title": "Сумма платежей / Комиссия",
+               "left": "m_pay", "op": "/", "right": "m_fee", "format": "number"}]}
+Ответ {"error": ...} на такое описание — ошибка.
 """
 
 
-def vocabulary_of(catalog, fields=None, computed=None) -> tuple[dict, dict]:
+def vocabulary_of(catalog, fields=None, computed=None, datasets=None) -> tuple[dict, dict]:
     """Показатели и разрезы, доступные этому отчёту.
 
     Кроме общего словаря — поля, заведённые автором прямо в отчёте, и его
     формулы. Без них модель честно отвечает «такого показателя нет», хотя
     в палитре он есть: для отчёта они настоящие поля.
+
+    Если автор уже выбрал датасеты, словарь сужается до них. Это не
+    оптимизация, а условие работоспособности: на установке с тремя десятками
+    датасетов общий словарь — полторы сотни показателей, среди которых
+    «Выручка» встречается десяток раз, и модель выбирает не из того отчёта.
+    Заодно и перечень в тексте ошибки становится про те поля, которые автор
+    видит в палитре.
     """
-    metrics = dict(catalog.metrics)
-    dimensions = dict(catalog.dimensions)
+    picked = {str(slug) for slug in (datasets or []) if slug}
+    metrics = {k: v for k, v in catalog.metrics.items()
+               if not picked or v.get('dataset_slug') in picked}
+    dimensions = {k: v for k, v in catalog.dimensions.items()
+                  if not picked or v.get('dataset_slug') in picked}
     for item in fields or []:
         key = item.get('key')
         entry = {
@@ -224,6 +276,73 @@ def _vocabulary(metrics: dict, dimensions: dict) -> str:
             f'РАЗРЕЗЫ:\n{dimension_lines or "— нет —"}')
 
 
+def _known(items: dict, limit: int = 8) -> str:
+    """Перечень доступного словаря для текста ошибки — с обрезкой хвоста."""
+    titles = [item.get('title') or item.get('slug') or '?' for item in items.values()]
+    if not titles:
+        return 'ни одного'
+    head = ', '.join(titles[:limit])
+    return head + (f' и ещё {len(titles) - limit}' if len(titles) > limit else '')
+
+
+def _sentence(text: str) -> str:
+    """Точка в конце — но не второй знак подряд: модель нередко пишет вопросом."""
+    text = text.strip()
+    return text if text.endswith(('.', '!', '?', '…', ':')) else text + '.'
+
+
+def _where_to_add() -> str:
+    return ('Заведите нужное поле в «Модели данных» или добавьте своё '
+            'поле на шаге «Данные».')
+
+
+def _unsupported_message(said: str) -> str:
+    """Предел формата — это не «поля нет»: советовать завести поле бессмысленно.
+
+    Формула отчёта — ровно два показателя словаря и одно действие; ни числа,
+    ни формулы от формулы построитель не принимает. Раньше такой отказ
+    приезжал под заголовком «не нашёл в словаре: умножить на 10000», и человек
+    шёл искать несуществующее поле.
+    """
+    return _sentence(
+        (said or 'разбор такого пока не умеет').rstrip('.')
+    ) + (' Формула отчёта — это два показателя словаря и одно действие '
+         '(+ − × ÷); числа в ней не участвуют, а долю удобнее показать '
+         'форматом «процент». Соберите нужное руками на шаге «Данные» '
+         'или опишите отчёт проще.')
+
+
+def _missing_message(data: dict, metrics: dict, dimensions: dict) -> str:
+    """Ошибка «такого поля нет» словами, по которым понятно, что делать.
+
+    Модель раньше возвращала строку из промпта дословно, и человек видел
+    «чего не хватает» — сообщение, не сообщающее ничего. Теперь она называет
+    слова, которым не нашлось пары, а перечень доступного и совет
+    подставляет приложение: словарь у него под рукой, у модели — нет.
+    """
+    said = str(data.get('error') or '').strip()
+    named = [str(x).strip() for x in (data.get('missing') or []) if str(x).strip()]
+    # модель называет и то, что в словаре есть: слово из фразы целиком
+    # («сумма платежей разделить на комиссию») или поле, которое она
+    # проглядела. Говорить «не нашёл» про существующее поле — врать
+    known = {(item.get('title') or '').strip().lower()
+             for item in list(metrics.values()) + list(dimensions.values())}
+    known |= set(metrics) | set(dimensions)
+    known.discard('')
+    missing = [word for word in dict.fromkeys(named) if word.lower() not in known]
+    parts: list[str] = []
+    if missing:
+        parts.append('не нашёл в словаре: ' + ', '.join(missing))
+    if said and said.lower() not in ('чего не хватает', 'error'):
+        parts.append(said)
+    if not parts:
+        parts.append('в словаре нет полей, которыми можно собрать этот отчёт')
+    parts += [f'Доступные показатели: {_known(metrics)}',
+              f'Разрезы: {_known(dimensions)}',
+              _where_to_add()]
+    return ' '.join(_sentence(part) for part in parts)
+
+
 def _extract(raw: str) -> dict:
     """Достаёт декларацию из ответа: модель любит обрамить JSON текстом."""
     text = raw or ''
@@ -246,14 +365,67 @@ def _extract(raw: str) -> dict:
     # показать её слова полезнее, чем «вернула не JSON»
     plain = ' '.join(text.split())
     if plain:
-        raise DatasetError(plain[:300])
-    raise DatasetError('модель не ответила')
+        raise DatasetError(f'модель ответила текстом вместо отчёта: {plain[:300]}')
+    raise DatasetError('модель не ответила — попробуйте ещё раз или соберите '
+                       'отчёт мышью: поля слева, секции по центру')
 
 
-def _validate(data: dict, known_metrics: set, known_dims: set) -> dict:
+# Действия формулы отчёта и форматы её результата — те же, что у формулы,
+# собранной руками: модель не получает никаких дополнительных возможностей.
+_OPS = {'+', '-', '*', '/'}
+_FORMATS = {'number', 'money', 'percent'}
+
+
+def _computed(data: dict, metrics: dict, invented: list[str]) -> tuple[list[dict], dict]:
+    """Формулы, собранные моделью, и переименование их ключей при совпадении.
+
+    Формула — единственный способ, которым модель вправе создать показатель,
+    и способ безопасный: операнды берутся из словаря, действие — из четырёх
+    арифметических, а выражение собирает построитель. Без этого «сумма
+    платежей разделить на комиссию» упиралась в «такого показателя нет»,
+    хотя оба показателя в словаре есть, а руками такая формула заводится.
+    """
+    out: list[dict] = []
+    renamed: dict[str, str] = {}
+    for position, item in enumerate(data.get('computed') or [], 1):
+        if not isinstance(item, dict):
+            continue
+        left, right = item.get('left'), item.get('right')
+        for operand in (left, right):
+            if operand not in metrics:
+                invented.append(str(operand))
+        if left not in metrics or right not in metrics:
+            continue
+        op = item.get('op')
+        if op not in _OPS:
+            raise DatasetError(
+                f'в формуле «{item.get("title") or left}» непонятное действие: {op}. '
+                'Допустимы + - * /'
+            )
+        key = str(item.get('key') or '').strip() or f'calc_{position}'
+        if key in metrics:
+            # ключ формулы не должен затенять показатель словаря: иначе
+            # секция сослалась бы на формулу там, где имелся в виду показатель
+            renamed[key] = key = f'{key}_calc'
+        fmt = item.get('format')
+        out.append({
+            'key': key,
+            'title': str(item.get('title') or key),
+            'left': left,
+            'op': op,
+            'right': right,
+            'format': fmt if fmt in _FORMATS else 'number',
+        })
+    return out, renamed
+
+
+def _validate(data: dict, metrics: dict, dimensions: dict) -> dict:
     """Сверяет ответ модели со словарём: выдуманное сюда не проходит."""
-    if data.get('error'):
-        raise DatasetError(str(data['error']))
+    known_metrics, known_dims = set(metrics), set(dimensions)
+    if data.get('unsupported'):
+        raise DatasetError(_unsupported_message(str(data.get('error') or '')))
+    if data.get('error') or data.get('missing'):
+        raise DatasetError(_missing_message(data, metrics, dimensions))
     raw_sections = data.get('sections') or []
     # секция без типа или без показателей — брак ответа, а не запрос
     # пользователя: молча её пропускаем, а не роняем весь разбор
@@ -262,9 +434,19 @@ def _validate(data: dict, known_metrics: set, known_dims: set) -> dict:
                 and s.get('type') in ('kpi', 'chart', 'table')
                 and (s.get('metrics') or [])]
     if not sections:
-        raise DatasetError('модель не собрала ни одной пригодной секции')
+        raise DatasetError(
+            'из описания не вышло ни одной секции. Скажите, что считать и в каком '
+            'разрезе — например «выручка по городам столбцами». '
+            f'Доступные показатели: {_known(metrics)}. Разрезы: {_known(dimensions)}.'
+        )
 
     invented: list[str] = []
+    computed, renamed = _computed(data, metrics, invented)
+    known_metrics |= {item['key'] for item in computed}
+    if renamed:
+        for section in sections:
+            section['metrics'] = [renamed.get(m, m) for m in (section.get('metrics') or [])]
+
     for section in sections:
         for slug in list(section.get('metrics') or []):
             if slug not in known_metrics:
@@ -277,7 +459,11 @@ def _validate(data: dict, known_metrics: set, known_dims: set) -> dict:
             invented.append(str(item.get('dimension')))
     if invented:
         raise DatasetError(
-            'модель назвала то, чего нет в словаре: ' + ', '.join(sorted(set(invented)))
+            'модель назвала поля, которых нет в словаре: '
+            + ', '.join(sorted(set(invented)))
+            + f'. Доступные показатели: {_known(metrics)}.'
+            + f' Разрезы: {_known(dimensions)}.'
+            + f' {_where_to_add()}'
         )
     # модель охотно ставит null там, где имелось в виду «не указано»
     for section in sections:
@@ -288,7 +474,8 @@ def _validate(data: dict, known_metrics: set, known_dims: set) -> dict:
             section['kind'] = None
         if not section['by']:
             section['grain'] = None
-    return {'sections': sections, 'filters': data.get('filters') or []}
+    return {'sections': sections, 'filters': data.get('filters') or [],
+            'computed': computed}
 
 
 class _Vocabulary:
@@ -299,13 +486,19 @@ class _Vocabulary:
         self.dimensions = dimensions
 
 
-def parse(text: str, catalog, fields=None, computed=None) -> dict:
+def parse(text: str, catalog, fields=None, computed=None, datasets=None) -> dict:
     """Описание → декларация плюс объяснение, чем разобрано."""
     if not (text or '').strip():
-        raise DatasetError('пустое описание отчёта')
-    metrics, dimensions = vocabulary_of(catalog, fields, computed)
+        raise DatasetError(
+            'опишите отчёт словами — например «итого выручка и заказы, '
+            'отдельно выручка по городам столбцами»'
+        )
+    metrics, dimensions = vocabulary_of(catalog, fields, computed, datasets)
     if not metrics:
-        raise DatasetError('нет ни одного показателя — сначала заведите их')
+        raise DatasetError(
+            'ни одного показателя не выбрано: описывать нечего. Отметьте поля '
+            'на шаге «Данные» — или заведите их в «Модели данных»'
+        )
 
     prompt_text = (f'{_INSTRUCTIONS}\n\n{_vocabulary(metrics, dimensions)}\n\n'
                    f'ОПИСАНИЕ ОТЧЁТА:\n{text}')
@@ -325,10 +518,29 @@ def parse(text: str, catalog, fields=None, computed=None) -> dict:
             problems.append(f'{_model_id(model)}: {exc}')
             continue
         # ответ модели разбирается и сверяется со словарём; выдумки не проходят
-        definition = _validate(_extract(raw), set(metrics), set(dimensions))
+        definition = _validate(_extract(raw), metrics, dimensions)
+        # что модель в итоге взяла — теми же названиями, что показывает разбор
+        # по словарю. Без этого строка отчёта о разборе писала «показатели: —»
+        # у отчёта, который модель собрала правильно
+        def titles(source: dict, slugs) -> list[str]:
+            # формулы модели в словаре не значатся — их названия берём у них самих
+            return [(source[s].get('title') if s in source else formulas.get(s)) or s
+                    for s in slugs if s in source or s in formulas]
+
+        formulas = {item['key']: item['title'] for item in definition.get('computed') or []}
+        used_metrics, used_dimensions = [], []
+        for section in definition['sections']:
+            used_metrics += [m for m in section['metrics'] if m not in used_metrics]
+            used_dimensions += [d for d in section['by'] if d not in used_dimensions]
         return {
             'definition': definition,
-            'notes': [{'text': text, 'problem': None, 'source': _model_id(model)}],
+            'notes': [{
+                'text': text,
+                'problem': None,
+                'source': _model_id(model),
+                'matchedMetrics': titles(metrics, used_metrics),
+                'matchedDimensions': titles(dimensions, used_dimensions),
+            }],
             'source': 'llm',
         }
 

@@ -208,6 +208,25 @@ def init_db() -> None:
         )
         conn.execute(
             '''
+            CREATE TABLE IF NOT EXISTS report_favorites (
+                user_id TEXT NOT NULL,
+                report_slug TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, report_slug)
+            )
+            '''
+        )
+        conn.execute(
+            '''
+            CREATE TABLE IF NOT EXISTS report_tags (
+                report_slug TEXT NOT NULL,
+                tag TEXT NOT NULL,
+                PRIMARY KEY (report_slug, tag)
+            )
+            '''
+        )
+        conn.execute(
+            '''
             CREATE TABLE IF NOT EXISTS sessions (
                 token TEXT PRIMARY KEY,
                 user_id TEXT NOT NULL,
@@ -336,6 +355,15 @@ def init_db() -> None:
         )
         # миграции существующих таблиц
         conn.execute('ALTER TABLE reports ADD COLUMN IF NOT EXISTS definition TEXT')
+        # автор отчёта: у записей, заведённых до каталога, остаётся NULL —
+        # восстановить его неоткуда, и разрез показывает их как «без автора»
+        conn.execute('ALTER TABLE reports ADD COLUMN IF NOT EXISTS created_by TEXT')
+        # свёрнутый регистром текст для поиска каталога: LOWER() и ILIKE в
+        # PostgreSQL зависят от локали базы, и в SQL_ASCII/C они кириллицу не
+        # трогают вовсе — «Маржа» не находится по «марж». Регистр складывает
+        # Python, а SQL сравнивает уже свёрнутое.
+        conn.execute('ALTER TABLE reports ADD COLUMN IF NOT EXISTS search_text TEXT')
+        _backfill_search_text(conn)
         # источник датасета: имя таблицы ИЛИ SQL-запрос (у старых записей NULL)
         conn.execute('ALTER TABLE datasets ADD COLUMN IF NOT EXISTS query TEXT')
         drop_skill_stack(conn)
@@ -446,6 +474,83 @@ def migrate_from_sqlite() -> None:
 
 # --- отчёты ----------------------------------------------------------------
 
+def _search_text(*, title: str, slug: str, description: str | None, tags: list[str]) -> str:
+    """Текст, по которому отчёт находится: название, slug, описание и темы.
+
+    Складывается регистром здесь, а не в SQL: `LOWER()` в PostgreSQL следует
+    локали базы, и в SQL_ASCII/C он кириллицу не меняет — поиск по «марж» не
+    нашёл бы «Маржа». Одна колонка вместо четырёх сравнений ещё и дешевле.
+    """
+    return ' '.join([title, slug, description or '', *tags]).lower()
+
+
+def _refresh_search_text(conn, slug: str) -> None:
+    """Пересобирает текст поиска отчёта — после правки названия, описания и тем."""
+    row = conn.execute(
+        'SELECT title, slug, description FROM reports WHERE slug = %s', (slug,)
+    ).fetchone()
+    if row is None:
+        return
+    tags = [
+        r['tag']
+        for r in conn.execute(
+            'SELECT tag FROM report_tags WHERE report_slug = %s ORDER BY tag', (slug,)
+        ).fetchall()
+    ]
+    conn.execute(
+        'UPDATE reports SET search_text = %s WHERE slug = %s',
+        (_search_text(title=row['title'], slug=row['slug'],
+                      description=row['description'], tags=tags), slug),
+    )
+
+
+# Сколько отчётов чинить одним запросом. Пачка подобрана так, чтобы не
+# упереться ни в число параметров, ни в длину запроса: 200 строк — 400
+# параметров.
+_BACKFILL_CHUNK = 200
+
+
+def _backfill_search_text(conn) -> None:
+    """Заполняет текст поиска у отчётов, заведённых до каталога.
+
+    Разом и один раз: свернуть регистр может только Python, а гонять по строке
+    на каждый старт приложения незачем.
+
+    Пачками, а не по строке: запрос на отчёт — это круговая задержка на
+    отчёт, и на десяти тысячах записей через удалённую метабазу миграция
+    превращается в минуты молчания на старте приложения.
+    """
+    rows = conn.execute(
+        'SELECT slug, title, description FROM reports WHERE search_text IS NULL'
+    ).fetchall()
+    if not rows:
+        return
+    tagged: dict[str, list[str]] = {}
+    for row in conn.execute('SELECT report_slug, tag FROM report_tags ORDER BY tag').fetchall():
+        tagged.setdefault(row['report_slug'], []).append(row['tag'])
+
+    for start in range(0, len(rows), _BACKFILL_CHUNK):
+        chunk = rows[start:start + _BACKFILL_CHUNK]
+        params: list = []
+        for row in chunk:
+            params += [
+                row['slug'],
+                _search_text(title=row['title'], slug=row['slug'],
+                             description=row['description'],
+                             tags=tagged.get(row['slug'], [])),
+            ]
+        # `UPDATE ... FROM (SELECT … UNION ALL …)` вместо `VALUES`: так запрос
+        # понимают и PostgreSQL, и SQLite, на которой стоит набор тестов
+        values = ' UNION ALL '.join(
+            ['SELECT %s AS slug, %s AS txt'] + ['SELECT %s, %s'] * (len(chunk) - 1)
+        )
+        conn.execute(
+            f'UPDATE reports SET search_text = v.txt FROM ({values}) AS v '
+            'WHERE reports.slug = v.slug',
+            tuple(params),
+        )
+
+
 def create_report(
     *,
     id: str,
@@ -453,16 +558,19 @@ def create_report(
     title: str,
     description: str | None,
     definition: dict,
+    created_by: str | None = None,
 ) -> dict:
     """Отчёт в реестре: логика лежит в определении, сборка не нужна."""
     now = utcnow()
     with _conn() as conn:
         conn.execute(
             'INSERT INTO reports (id, slug, title, description, status, definition, '
-            'created_at, updated_at) '
-            "VALUES (%s, %s, %s, %s, 'ready', %s, %s, %s)",
+            'created_by, search_text, created_at, updated_at) '
+            "VALUES (%s, %s, %s, %s, 'ready', %s, %s, %s, %s, %s)",
             (id, slug, title, description,
-             json.dumps(definition, ensure_ascii=False), now, now),
+             json.dumps(definition, ensure_ascii=False), created_by,
+             _search_text(title=title, slug=slug, description=description, tags=[]),
+             now, now),
         )
     return get_report(slug)
 
@@ -495,6 +603,306 @@ def list_reports() -> list[dict]:
     return [_row_to_dict(row) for row in rows]
 
 
+# --- каталог отчётов ------------------------------------------------------
+
+# Порядок выдачи. Больше двух вариантов не нужно: остальное человек делает
+# фильтром, а не сортировкой.
+# По названию сортируем свёрнутым текстом: он начинается названием и уже
+# приведён к нижнему регистру, поэтому порядок не зависит от локали базы.
+CATALOG_SORTS = {'title': 'r.search_text ASC', 'updated': 'r.updated_at DESC'}
+
+# Страница каталога: на десяти тысячах отчётов список едет по частям.
+CATALOG_LIMIT = 100
+CATALOG_MAX_LIMIT = 500
+
+# «Ни одной»: отчёты без группы доступа, без автора, без темы. Без этого ведра
+# сумма счётчиков по разрезу меньше общего числа — и разрез врёт.
+NONE_BUCKET = '-'
+
+
+def _access_sql(user: dict) -> tuple[str, list]:
+    """Условие «отчёт доступен пользователю» для WHERE каталога.
+
+    Тот же вопрос, что у accessible_slugs(), но подзапросом: постраничная
+    выдача не может сперва прочитать все доступные slug'и в память.
+    """
+    if user.get('role') == 'admin':
+        return '', []
+    uid = user['id']
+    return (
+        'r.slug IN (SELECT ra.report_slug FROM report_access ra '
+        'LEFT JOIN group_members gm ON gm.group_id = ra.group_id '
+        'WHERE ra.user_id = %s OR gm.user_id = %s)',
+        [uid, uid],
+    )
+
+
+def _catalog_filters(
+    user: dict,
+    *,
+    q: str | None = None,
+    group: str | None = None,
+    author: str | None = None,
+    tag: str | None = None,
+    status: str | None = None,
+    favorite: bool = False,
+) -> tuple[list[str], list]:
+    """Условия каталога и их параметры — общие у выдачи и у фасетов."""
+    where: list[str] = []
+    params: list = []
+
+    access, args = _access_sql(user)
+    if access:
+        where.append(access)
+        params += args
+
+    if q and q.strip():
+        where.append("COALESCE(r.search_text, '') LIKE %s")
+        params.append(f'%{q.strip().lower()}%')
+
+    if group:
+        if group == NONE_BUCKET:
+            where.append('r.slug NOT IN (SELECT report_slug FROM report_access '
+                         'WHERE group_id IS NOT NULL)')
+        else:
+            where.append('r.slug IN (SELECT report_slug FROM report_access WHERE group_id = %s)')
+            params.append(group)
+
+    if author:
+        if author == NONE_BUCKET:
+            where.append("(r.created_by IS NULL OR r.created_by = '')")
+        else:
+            where.append('r.created_by = %s')
+            params.append(author)
+
+    if tag:
+        if tag == NONE_BUCKET:
+            where.append('r.slug NOT IN (SELECT report_slug FROM report_tags)')
+        else:
+            where.append('r.slug IN (SELECT report_slug FROM report_tags WHERE tag = %s)')
+            params.append(tag)
+
+    if status:
+        where.append('r.status = %s')
+        params.append(status)
+
+    if favorite:
+        where.append('r.slug IN (SELECT report_slug FROM report_favorites WHERE user_id = %s)')
+        params.append(user['id'])
+
+    return where, params
+
+
+def _clause(where: list[str]) -> str:
+    return (' WHERE ' + ' AND '.join(where)) if where else ''
+
+
+def _decorate(conn, reports: list[dict], user: dict) -> None:
+    """Дописывает отчётам страницы автора, темы и закрепление.
+
+    Три запроса на страницу целиком, а не по одному на отчёт: строк сотня, и
+    на каждую ходить в базу за темами — это сотня запросов на прокрутку меню.
+    """
+    if not reports:
+        return
+    slugs = [r['slug'] for r in reports]
+
+    tags: dict[str, list[str]] = {}
+    for row in conn.execute(
+        'SELECT report_slug, tag FROM report_tags WHERE report_slug = ANY(%s) ORDER BY tag',
+        (slugs,),
+    ).fetchall():
+        tags.setdefault(row['report_slug'], []).append(row['tag'])
+
+    favorites = {
+        row['report_slug']
+        for row in conn.execute(
+            'SELECT report_slug FROM report_favorites '
+            'WHERE user_id = %s AND report_slug = ANY(%s)',
+            (user['id'], slugs),
+        ).fetchall()
+    }
+
+    ids = sorted({r['created_by'] for r in reports if r.get('created_by')})
+    names: dict[str, str] = {}
+    if ids:
+        names = {
+            row['id']: row['username']
+            for row in conn.execute('SELECT id, username FROM users WHERE id = ANY(%s)', (ids,)).fetchall()
+        }
+
+    for report in reports:
+        report['tags'] = tags.get(report['slug'], [])
+        report['favorite'] = report['slug'] in favorites
+        report['author'] = names.get(report.get('created_by') or '')
+
+
+def decorate_report(report: dict, user: dict) -> dict:
+    """То же для одного отчёта: ответы PATCH и POST несут те же поля, что список."""
+    with _conn() as conn:
+        _decorate(conn, [report], user)
+    return report
+
+
+def search_reports(user: dict, **filters) -> tuple[list[dict], int]:
+    """Страница каталога и общее число подходящих отчётов.
+
+    Права, поиск и фильтры считаются в SQL: список из десяти тысяч отчётов не
+    должен приезжать в память ради того, чтобы отдать из него сотню.
+    """
+    sort = filters.pop('sort', 'updated')
+    raw_limit = filters.pop('limit', None)
+    limit = None if raw_limit is None else max(1, min(int(raw_limit), CATALOG_MAX_LIMIT))
+    offset = max(0, int(filters.pop('offset', 0) or 0))
+    where, params = _catalog_filters(user, **filters)
+    clause = _clause(where)
+    order = CATALOG_SORTS.get(sort, CATALOG_SORTS['updated'])
+    # без limit отдаём выдачу целиком: так метод отвечал до каталога, и на этом
+    # держатся экраны, которым страницы не нужны
+    page = ' LIMIT %s OFFSET %s' if limit is not None else ''
+    page_params: tuple = (limit, offset) if limit is not None else ()
+
+    with _conn() as conn:
+        total = conn.execute(
+            f'SELECT COUNT(*) AS n FROM reports r{clause}', tuple(params)
+        ).fetchone()['n']
+        rows = conn.execute(
+            # slug'ом добиваем порядок до строгого: у двух отчётов с одинаковым
+            # названием иначе нет стабильного места, и они прыгают между страницами
+            f'SELECT r.* FROM reports r{clause} ORDER BY {order}, r.slug{page}',
+            (*params, *page_params),
+        ).fetchall()
+        reports = [_row_to_dict(row) for row in rows]
+        _decorate(conn, reports, user)
+    return reports, total
+
+
+def report_facets(user: dict, *, q: str | None = None) -> dict:
+    """Разрезы каталога со счётчиками: сколько отчётов даст нажатие варианта.
+
+    Счётчики считаются по тем же условиям, что и выдача, включая поиск, —
+    иначе число у варианта не совпадает с тем, что человек увидит после клика.
+    """
+    where, params = _catalog_filters(user, q=q)
+    clause = _clause(where)
+    args = tuple(params)
+    inner = f'SELECT r.slug FROM reports r{clause}'
+
+    def count(extra: str, extra_params: tuple = ()) -> int:
+        joined = ' AND '.join([*where, extra]) if where else extra
+        return conn.execute(
+            f'SELECT COUNT(*) AS n FROM reports r WHERE {joined}', (*params, *extra_params)
+        ).fetchone()['n']
+
+    with _conn() as conn:
+        total = conn.execute(f'SELECT COUNT(*) AS n FROM reports r{clause}', args).fetchone()['n']
+
+        groups = [
+            {'id': row['id'], 'name': row['name'], 'count': row['count']}
+            for row in conn.execute(
+                'SELECT g.id, g.name, COUNT(DISTINCT ra.report_slug) AS count FROM groups g '
+                f'JOIN report_access ra ON ra.group_id = g.id AND ra.report_slug IN ({inner}) '
+                'GROUP BY g.id, g.name ORDER BY g.name',
+                args,
+            ).fetchall()
+        ]
+        no_group = count('r.slug NOT IN (SELECT report_slug FROM report_access '
+                         'WHERE group_id IS NOT NULL)')
+        if no_group:
+            groups.append({'id': NONE_BUCKET, 'name': None, 'count': no_group})
+
+        authors = [
+            {'id': row['id'], 'name': row['name'], 'count': row['count']}
+            for row in conn.execute(
+                'SELECT r.created_by AS id, u.username AS name, COUNT(*) AS count '
+                'FROM reports r LEFT JOIN users u ON u.id = r.created_by'
+                f'{_clause([*where, "r.created_by IS NOT NULL", "r.created_by <> \'\'"])} '
+                'GROUP BY r.created_by, u.username ORDER BY u.username',
+                args,
+            ).fetchall()
+        ]
+        no_author = count("(r.created_by IS NULL OR r.created_by = '')")
+        if no_author:
+            authors.append({'id': NONE_BUCKET, 'name': None, 'count': no_author})
+
+        tags = [
+            {'id': row['id'], 'name': row['id'], 'count': row['count']}
+            for row in conn.execute(
+                f'SELECT rt.tag AS id, COUNT(*) AS count FROM report_tags rt '
+                f'WHERE rt.report_slug IN ({inner}) GROUP BY rt.tag ORDER BY rt.tag',
+                args,
+            ).fetchall()
+        ]
+        no_tag = count('r.slug NOT IN (SELECT report_slug FROM report_tags)')
+        if no_tag:
+            tags.append({'id': NONE_BUCKET, 'name': None, 'count': no_tag})
+
+        statuses = [
+            {'id': row['id'], 'name': row['id'], 'count': row['count']}
+            for row in conn.execute(
+                f'SELECT r.status AS id, COUNT(*) AS count FROM reports r{clause} '
+                'GROUP BY r.status ORDER BY r.status',
+                args,
+            ).fetchall()
+        ]
+
+        favorites = count(
+            'r.slug IN (SELECT report_slug FROM report_favorites WHERE user_id = %s)',
+            (user['id'],),
+        )
+
+    return {'total': total, 'favorites': favorites, 'groups': groups,
+            'authors': authors, 'tags': tags, 'statuses': statuses}
+
+
+# --- избранное и темы -----------------------------------------------------
+
+def add_favorite(user_id: str, slug: str) -> None:
+    with _conn() as conn:
+        conn.execute(
+            'INSERT INTO report_favorites (user_id, report_slug, created_at) '
+            'VALUES (%s, %s, %s) ON CONFLICT DO NOTHING',
+            (user_id, slug, utcnow()),
+        )
+
+
+def remove_favorite(user_id: str, slug: str) -> None:
+    with _conn() as conn:
+        conn.execute(
+            'DELETE FROM report_favorites WHERE user_id = %s AND report_slug = %s',
+            (user_id, slug),
+        )
+
+
+def favorite_slugs(user_id: str) -> list[str]:
+    """Закреплённые отчёты по порядку закрепления — свежий сверху."""
+    with _conn() as conn:
+        rows = conn.execute(
+            'SELECT report_slug FROM report_favorites WHERE user_id = %s '
+            'ORDER BY created_at DESC',
+            (user_id,),
+        ).fetchall()
+    return [row['report_slug'] for row in rows]
+
+
+def set_report_tags(slug: str, tags: list[str]) -> None:
+    """Заменяет темы отчёта целиком: пустой список очищает их."""
+    clean: list[str] = []
+    for tag in tags:
+        value = str(tag).strip()
+        if value and value not in clean:
+            clean.append(value)
+    with _conn() as conn:
+        conn.execute('DELETE FROM report_tags WHERE report_slug = %s', (slug,))
+        for tag in clean:
+            conn.execute(
+                'INSERT INTO report_tags (report_slug, tag) VALUES (%s, %s) '
+                'ON CONFLICT DO NOTHING',
+                (slug, tag),
+            )
+        _refresh_search_text(conn, slug)  # по теме отчёт тоже ищут
+
+
 def set_filters(slug: str, values: dict[str, str]) -> None:
     with _conn() as conn:
         conn.execute(
@@ -524,14 +932,21 @@ def update_report(slug: str, *, title: str | None = None,
             values.append(value)
     with _conn() as conn:
         conn.execute(f'UPDATE reports SET {", ".join(fields)} WHERE slug = %s', (*values, slug))
+        _refresh_search_text(conn, slug)
     return get_report(slug)
 
 
 def delete_report(slug: str) -> None:
-    """Удаляет отчёт и его назначения."""
+    """Удаляет отчёт вместе со всем, что на него ссылается.
+
+    Закрепления и темы уходят здесь же: строка каталога, у которой нет отчёта,
+    не показывается нигде, но продолжает считаться в фасетах.
+    """
     with _conn() as conn:
         conn.execute('DELETE FROM reports WHERE slug = %s', (slug,))
         conn.execute('DELETE FROM report_access WHERE report_slug = %s', (slug,))
+        conn.execute('DELETE FROM report_favorites WHERE report_slug = %s', (slug,))
+        conn.execute('DELETE FROM report_tags WHERE report_slug = %s', (slug,))
 
 
 # --- пользователи / группы / права -------------------------------------

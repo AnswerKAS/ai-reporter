@@ -1,169 +1,94 @@
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
-import type { ReportMeta } from '../types/report'
-import { deleteReport, updateReport } from '../lib/api'
+import type { ReportDimension, ReportMeta } from '../types/report'
+import { deleteReport } from '../lib/api'
 import { useAuth } from '../lib/auth'
-import { useReports } from '../lib/reports'
+import { useReportFacets, useReports } from '../lib/reports'
+import { useDebounced } from '../lib/useDebounced'
 import { cn } from '../lib/cn'
-import { Alert, Button, Field, Input, Modal, Skeleton, useConfirm } from './ui'
+import { Alert, useConfirm } from './ui'
+import { CatalogControls } from './reports/CatalogControls'
+import { ReportEditDialog } from './reports/ReportEditDialog'
+import { ReportGroups } from './reports/ReportGroups'
+import { ReportList } from './reports/ReportList'
+import { ReportRow } from './reports/ReportRow'
+import { activeFilters, readCatalog, toQuery, writeCatalog, type CatalogState } from './reports/catalog'
 
-/** Точка статуса: готовый отчёт молчит, сборка и ошибка — видны прямо в меню. */
-function StatusDot({ status }: { status?: string }) {
-  if (!status || status === 'ready') return null
-  const failed = status === 'error'
-  return (
-    <span
-      aria-label={failed ? 'ошибка сборки' : 'собирается'}
-      title={failed ? 'ошибка сборки' : `собирается (${status})`}
-      className={cn('size-1.5 shrink-0 rounded-full', failed ? 'bg-bad' : 'animate-pulse bg-warn')}
-    />
-  )
-}
-
-function RenameDialog({ report, onClose }: { report: ReportMeta; onClose: () => void }) {
-  const { reload } = useReports()
-  const [title, setTitle] = useState(report.title)
-  const [description, setDescription] = useState(report.description ?? '')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  const save = async () => {
-    setBusy(true)
-    setError(null)
-    try {
-      await updateReport(report.slug, {
-        title: title.trim(),
-        description: description.trim() || undefined,
-      })
-      await reload()
-      onClose()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'не удалось сохранить')
-      setBusy(false)
-    }
-  }
-
-  return (
-    <Modal
-      title="Переименовать отчёт"
-      onClose={onClose}
-      footer={
-        <>
-          <Button variant="primary" disabled={busy || !title.trim()} onClick={save}>
-            {busy ? 'Сохраняем…' : 'Сохранить'}
-          </Button>
-          <Button variant="ghost" disabled={busy} onClick={onClose}>
-            Отмена
-          </Button>
-        </>
-      }
-    >
-      <div className="flex flex-col gap-2.5">
-        <Field label="Название">
-          <Input value={title} onChange={(e) => setTitle(e.target.value)} />
-        </Field>
-        <Field label="Описание">
-          <Input value={description} onChange={(e) => setDescription(e.target.value)} />
-        </Field>
-        <p className="font-mono text-xs text-fg-muted">{report.slug}</p>
-        {error && <Alert>{error}</Alert>}
-      </div>
-    </Modal>
-  )
-}
-
-function ReportRow({
-  report,
-  onNavigate,
-  onRename,
-  onDelete,
+/** Свёрнутый блок меню: заголовок со счётчиком и содержимое. */
+function Section({
+  title,
+  count,
+  open,
+  onToggle,
+  children,
 }: {
-  report: ReportMeta
-  onNavigate?: () => void
-  onRename: () => void
-  onDelete: () => void
+  title: string
+  count: number
+  open: boolean
+  onToggle: () => void
+  children: React.ReactNode
 }) {
-  const { isAdmin } = useAuth()
-
   return (
-    <div className="group/row flex items-center gap-0.5">
-      <NavLink
-        to={`/reports/${report.slug}`}
-        onClick={onNavigate}
-        title={report.title}
-        className={({ isActive }) =>
-          cn(
-            'flex min-w-0 flex-1 items-center gap-2 rounded-control px-2.5 py-1.5 text-sm transition-colors',
-            isActive ? 'bg-accent-soft font-semibold text-accent' : 'text-fg hover:bg-bg',
-          )
-        }
+    <div className="mb-1">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={onToggle}
+        className="flex w-full cursor-pointer items-center gap-1.5 px-2 py-1 text-left text-xs font-bold tracking-wider text-fg-muted uppercase hover:text-fg"
       >
-        <StatusDot status={report.status} />
-        <span className="truncate">{report.title}</span>
-      </NavLink>
-
-      <span className="flex shrink-0 items-center opacity-0 transition-opacity group-hover/row:opacity-100 focus-within:opacity-100">
-        <NavLink
-          to={`/builder/${report.slug}`}
-          onClick={onNavigate}
-          aria-label={`Открыть «${report.title}» в конструкторе`}
-          title="Открыть в конструкторе"
-          className="rounded-control px-1.5 py-1 text-xs text-fg-muted hover:bg-bg hover:text-fg"
-        >
-          <span aria-hidden="true">⚙</span>
-        </NavLink>
-        <button
-          type="button"
-          aria-label={`Переименовать «${report.title}»`}
-          title="Переименовать"
-          onClick={onRename}
-          className="cursor-pointer rounded-control px-1.5 py-1 text-xs text-fg-muted hover:bg-bg hover:text-fg"
-        >
-          <span aria-hidden="true">✎</span>
-        </button>
-        {isAdmin && (
-          <button
-            type="button"
-            aria-label={`Удалить «${report.title}»`}
-            title="Удалить"
-            onClick={onDelete}
-            className="cursor-pointer rounded-control px-1.5 py-1 text-xs text-fg-muted hover:bg-bad-soft hover:text-bad"
-          >
-            <span aria-hidden="true">✕</span>
-          </button>
-        )}
-      </span>
+        <span aria-hidden="true" className="w-2 shrink-0">
+          {open ? '▾' : '▸'}
+        </span>
+        <span className="min-w-0 flex-1 truncate">{title}</span>
+        <span className="shrink-0 font-mono">{count}</span>
+      </button>
+      {open && children}
     </div>
   )
 }
 
 /**
- * Меню отчётов: активный отчёт подсвечен, а создание, переименование и
- * удаление живут здесь же — раньше отчётами управляли с трёх разных экранов.
+ * Меню отчётов: навигатор по каталогу.
+ *
+ * Список отчётов сюда не выгружается — сервер отдаёт страницу под текущий
+ * поиск и фильтры, а меню догружает следующую по мере прокрутки. Наверху то,
+ * ради чего человек обычно и открывает меню: закреплённое и недавнее; они
+ * прячутся, как только он начинает искать — иначе повторяли бы выдачу.
+ *
+ * Создание, переименование и удаление живут здесь же: раньше отчётами
+ * управляли с трёх разных экранов.
  */
 export function ReportTree({ className, onNavigate }: { className?: string; onNavigate?: () => void }) {
-  const { reports, loading, error, reload } = useReports()
+  const { facets, favorites, recent, error, reload, isFavorite, toggleFavorite } = useReports()
   const { isAdmin } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
   const { confirm, dialog } = useConfirm()
+
+  const [state, setState] = useState<CatalogState>(readCatalog)
+  const [filtersOpen, setFiltersOpen] = useState(false)
   const [query, setQuery] = useState('')
-  const [renaming, setRenaming] = useState<ReportMeta | null>(null)
+  const [pinnedOpen, setPinnedOpen] = useState(true)
+  const [recentOpen, setRecentOpen] = useState(true)
+  const [editing, setEditing] = useState<ReportMeta | null>(null)
 
-  const activeSlug = useMemo(() => {
-    const m = decodeURIComponent(location.pathname).match(/^\/(?:reports|builder)\/(.+)$/)
-    return m ? m[1] : null
-  }, [location.pathname])
+  const search = useDebounced(query)
+  const scoped = useReportFacets(search)
+  const total = facets?.total ?? 0
+  // пока человек ищет или сузил выдачу фильтрами, блоки сверху молчат:
+  // закреплённое и недавнее к его вопросу отношения не имеют
+  const narrowed = search.trim() !== '' || activeFilters(state) > 0
+  // заголовки групп берутся из фасетов, и без них группировать нечем. Но сам
+  // список живёт своим запросом и работает — показываем его плоским, а не
+  // пустое меню: упавший вспомогательный запрос не должен прятать отчёты
+  const grouped = state.groupBy !== 'none' && !error
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    const found = q
-      ? reports.filter((r) =>
-          [r.title, r.slug, r.description ?? ''].some((v) => v.toLowerCase().includes(q)),
-        )
-      : reports
-    return [...found].sort((a, b) => a.title.localeCompare(b.title))
-  }, [reports, query])
+  const update = (next: CatalogState) => {
+    setState(next)
+    writeCatalog(next)
+  }
+
+  const activeSlug = decodeURIComponent(location.pathname).match(/^\/(?:reports|builder)\/(.+)$/)?.[1]
 
   const askDelete = (report: ReportMeta) =>
     confirm({
@@ -184,7 +109,7 @@ export function ReportTree({ className, onNavigate }: { className?: string; onNa
           onClick={onNavigate}
           className="text-xs font-bold tracking-wider text-fg-muted uppercase hover:text-fg"
         >
-          Отчёты {reports.length > 0 && <span className="font-mono">({reports.length})</span>}
+          Отчёты {total > 0 && <span className="font-mono">({total})</span>}
         </NavLink>
         {isAdmin && (
           <NavLink
@@ -199,51 +124,103 @@ export function ReportTree({ className, onNavigate }: { className?: string; onNa
         )}
       </div>
 
-      {reports.length > 4 && (
-        <Input
-          type="search"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Поиск отчёта"
-          aria-label="Поиск отчёта"
-          className="mb-2"
-        />
-      )}
+      <CatalogControls
+        state={state}
+        onChange={update}
+        query={query}
+        onQuery={setQuery}
+        facets={scoped ?? facets}
+        open={filtersOpen}
+        onOpen={setFiltersOpen}
+      />
 
       {error && <Alert className="mb-2 text-xs">{error}</Alert>}
 
-      {loading && reports.length === 0 ? (
-        <div className="flex flex-col gap-1.5 px-2">
-          <Skeleton className="h-5 w-3/4" />
-          <Skeleton className="h-5 w-2/3" />
-          <Skeleton className="h-5 w-1/2" />
-        </div>
-      ) : reports.length === 0 ? (
-        <p className="px-2 text-sm text-fg-muted">
-          Отчётов пока нет.{' '}
-          {isAdmin && (
-            <NavLink to="/builder" onClick={onNavigate} className="text-accent hover:underline">
-              Собрать первый
-            </NavLink>
-          )}
-        </p>
-      ) : filtered.length === 0 ? (
-        <p className="px-2 text-sm text-fg-muted">Ничего не найдено</p>
-      ) : (
-        <div className="flex flex-col">
-          {filtered.map((r) => (
+      {!narrowed && favorites.length > 0 && (
+        <Section
+          title="Закреплённые"
+          count={favorites.length}
+          open={pinnedOpen}
+          onToggle={() => setPinnedOpen((v) => !v)}
+        >
+          {favorites.map((report) => (
             <ReportRow
-              key={r.slug}
-              report={r}
+              key={report.slug}
+              report={report}
+              favorite
+              isAdmin={isAdmin}
               onNavigate={onNavigate}
-              onRename={() => setRenaming(r)}
-              onDelete={() => askDelete(r)}
+              onRename={() => setEditing(report)}
+              onDelete={() => askDelete(report)}
+              onToggleFavorite={() => void toggleFavorite(report)}
             />
           ))}
-        </div>
+        </Section>
       )}
 
-      {renaming && <RenameDialog report={renaming} onClose={() => setRenaming(null)} />}
+      {!narrowed && recent.length > 0 && (
+        <Section
+          title="Недавние"
+          count={recent.length}
+          open={recentOpen}
+          onToggle={() => setRecentOpen((v) => !v)}
+        >
+          {recent.map((item) => (
+            <NavLink
+              key={item.slug}
+              to={`/reports/${item.slug}`}
+              onClick={onNavigate}
+              title={item.title}
+              className={({ isActive }) =>
+                cn(
+                  'flex items-center gap-2 rounded-control px-2 py-1.5 text-sm transition-colors',
+                  isActive ? 'bg-accent-soft font-semibold text-accent' : 'text-fg hover:bg-bg',
+                )
+              }
+            >
+              <span className="truncate">{item.title}</span>
+              {isFavorite(item.slug) && (
+                <span aria-hidden="true" className="shrink-0 text-xs text-warn">
+                  ★
+                </span>
+              )}
+            </NavLink>
+          ))}
+        </Section>
+      )}
+
+      {grouped ? (
+        <ReportGroups
+          dimension={state.groupBy as ReportDimension}
+          base={toQuery(state, search)}
+          onNavigate={onNavigate}
+          onEdit={setEditing}
+          onDelete={askDelete}
+        />
+      ) : (
+        <ReportList
+          query={toQuery(state, search)}
+          onNavigate={onNavigate}
+          onEdit={setEditing}
+          onDelete={askDelete}
+          empty={
+            narrowed ? (
+              'Ничего не найдено'
+            ) : (
+              <>
+                Отчётов пока нет.{' '}
+                {isAdmin && (
+                  <NavLink to="/builder" onClick={onNavigate} className="text-accent hover:underline">
+                    Собрать первый
+                  </NavLink>
+                )}
+              </>
+            )
+          }
+        />
+      )}
+
+      {editing && <ReportEditDialog report={editing} onClose={() => setEditing(null)} />}
       {dialog}
     </nav>
   )

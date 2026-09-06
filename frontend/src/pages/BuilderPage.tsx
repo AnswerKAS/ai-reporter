@@ -34,6 +34,7 @@ import { Alert, Button, Field, Input, Modal, Page, PageHeader, Select, SkeletonR
 import { cn } from '../lib/cn'
 import { useAuth } from '../lib/auth'
 import { useReports } from '../lib/reports'
+import { VocabularyDialog } from '../components/builder/VocabularyDialog'
 
 const GRAINS: { value: Grain; label: string }[] = [
   { value: 'day', label: 'по дням' },
@@ -164,6 +165,46 @@ function OwnChip({
 }
 
 /** Шаг конструктора: состояние читается и глазами, и скринридером. */
+/**
+ * Подпись ряда палитры: какого вида поля идут ниже и сколько их.
+ *
+ * Отдельно называет то, что не отмечено на шаге «Данные»: раскладка берёт
+ * поля только оттуда, и датасет с четырьмя разрезами в словаре, но без
+ * единого отмеченного, выглядел как датасет вовсе без разрезов.
+ */
+function PaletteLabel({
+  title,
+  shown,
+  unpicked,
+  onPick,
+}: {
+  title: string
+  shown: number
+  unpicked: number
+  onPick: () => void
+}) {
+  return (
+    <div className="mt-0.5 flex flex-wrap items-baseline gap-x-1.5">
+      <span className="text-[11px] font-semibold tracking-wide text-fg-muted uppercase">{title}</span>
+      <span className="font-mono text-[10px] text-fg-muted">{shown}</span>
+      {unpicked > 0 && (
+        <button
+          type="button"
+          onClick={onPick}
+          title={`Вернуться на шаг «Данные» и отметить их`}
+          className="cursor-pointer text-[11px] text-accent hover:underline"
+        >
+          + ещё {unpicked} на шаге «Данные»
+        </button>
+      )}
+      {shown === 0 && unpicked === 0 && (
+        <span className="text-[11px] text-fg-muted">в словаре датасета нет</span>
+      )}
+    </div>
+  )
+}
+
+
 function StepLink({
   n,
   label,
@@ -261,6 +302,8 @@ function Builder() {
   const [phrase, setPhrase] = useState('')
   const [phraseNotes, setPhraseNotes] = useState<ParseNote[]>([])
   const [phraseSource, setPhraseSource] = useState<'llm' | 'parser' | null>(null)
+  const [phraseFallback, setPhraseFallback] = useState<string | null>(null)
+  const [vocabularyOpen, setVocabularyOpen] = useState(false)
   const [phraseError, setPhraseError] = useState<string | null>(null)
   const [parsing, setParsing] = useState(false)
 
@@ -393,6 +436,15 @@ function Builder() {
     return order.map((slug) => ({
       slug,
       title: datasetTitle(slug),
+      // сколько полей этого датасета есть в словаре, но не отмечено на шаге
+      // «Данные»: без этого числа раскладка молчит о том, что разрезы вообще
+      // существуют, и выглядит так, будто у датасета одни показатели
+      unpickedMetrics: metrics.filter(
+        (m) => m.datasetSlug === slug && !pickedMetrics.includes(m.slug),
+      ).length,
+      unpickedDimensions: dimensions.filter(
+        (d) => d.datasetSlug === slug && !pickedDimensions.includes(d.slug),
+      ).length,
       metrics: [
         ...availableMetrics
           .filter((m) => m.datasetSlug === slug)
@@ -422,7 +474,8 @@ function Builder() {
           .map((f) => ({ key: f.key, title: f.title, own: true, type: f.type, hint: `${slug}.${f.field}` })),
       ],
     }))
-  }, [availableMetrics, ownMetrics, availableDimensions, ownDimensions, datasetTitle])
+  }, [availableMetrics, ownMetrics, availableDimensions, ownDimensions, datasetTitle,
+      metrics, dimensions, pickedMetrics, pickedDimensions])
 
   const definition = useMemo<ReportDefinition>(
     () => ({
@@ -641,11 +694,13 @@ function Builder() {
     setParsing(true)
     setPhraseError(null)
     try {
-      const { definition: parsed, notes, source } = await parsePhrase(phrase, {
+      const { definition: parsed, notes, source, fallbackReason } = await parsePhrase(phrase, {
         fields: ownFields,
         computed,
+        datasets: pickedDatasets,
       })
       setPhraseSource(source ?? null)
+      setPhraseFallback(fallbackReason ?? null)
       const usedM = new Set<string>()
       const usedD = new Set<string>()
       for (const s of parsed.sections) {
@@ -672,6 +727,15 @@ function Builder() {
         })
         return [...next]
       })
+      // формулы разбора — те же, что собираются руками на шаге «Данные»:
+      // «сумма платежей разделить на комиссию» иначе разбору недоступна,
+      // хотя конструктор такую формулу заводит
+      if (parsed.computed?.length) {
+        setComputed((prev) => [
+          ...prev,
+          ...parsed.computed!.filter((c) => !prev.some((x) => x.key === c.key)),
+        ])
+      }
       setSections(parsed.sections.length ? parsed.sections : [emptySection()])
       setFilters(parsed.filters ?? [])
       setPhraseNotes(notes)
@@ -679,6 +743,7 @@ function Builder() {
     } catch (err) {
       setPhraseNotes([])
       setPhraseSource(null)
+      setPhraseFallback(null)
       setPhraseError(err instanceof Error ? err.message : 'не удалось разобрать описание')
     } finally {
       setParsing(false)
@@ -778,7 +843,20 @@ function Builder() {
       ) : (
         <>
           <section className="mt-3 flex flex-col gap-2 rounded-card border border-line bg-surface p-3.5">
-            <span className="text-xs font-medium tracking-wide text-fg-muted uppercase">Или опишите отчёт словами</span>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-medium tracking-wide text-fg-muted uppercase">Или опишите отчёт словами</span>
+              {/* словами можно назвать только то, что есть в словаре, — и он
+                  должен быть под рукой, а не угадываться по тексту ошибки */}
+              <button
+                type="button"
+                aria-label="Показать словарь отчёта"
+                title="Какие показатели и разрезы можно назвать"
+                onClick={() => setVocabularyOpen(true)}
+                className="flex size-5 cursor-pointer items-center justify-center rounded-full border border-line text-xs font-semibold text-fg-muted transition-colors hover:border-accent hover:text-accent"
+              >
+                ?
+              </button>
+            </div>
             <Textarea
               value={phrase}
               onChange={(e) => setPhrase(e.target.value)}
@@ -791,7 +869,7 @@ function Builder() {
               </Button>
               <span className="text-xs text-fg-muted">
                 {phraseSource === 'parser'
-                  ? 'разобрано по словарю — модель была недоступна'
+                  ? `разобрано по словарю, без модели${phraseFallback ? `: ${phraseFallback}` : ''}`
                   : phraseSource === 'llm'
                     ? 'разобрала модель; выбирать ей можно только из словаря, поэтому выдуманных показателей в отчёте не будет'
                     : 'описание разбирает модель, но выбирает она только из вашего словаря — результат виден и правится руками'}
@@ -846,10 +924,26 @@ function Builder() {
 
           <div className="mt-4 grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(190px,230px)_minmax(0,1fr)] xl:grid-cols-[minmax(190px,230px)_minmax(300px,380px)_minmax(0,1fr)]">
             <aside className="sticky top-4 flex flex-col gap-2.5 rounded-card border border-line bg-surface p-3.5">
+              {/* поля датасета делятся на два вида, и раскладка обязана это
+                  проговаривать: без подписей чипы читаются одинаково, а
+                  разрезы, не отмеченные на шаге «Данные», выглядели так, будто
+                  их у датасета нет вовсе */}
+              <p className="text-[11px] leading-snug text-fg-muted">
+                <span className="font-semibold text-fg">Показатель</span> — что считаем;{' '}
+                <span className="font-semibold text-fg">разрез</span> — по чему разбиваем
+                (пунктирная рамка). Разрезы задают группировку секции и фильтры отчёта.
+              </p>
+
               {palette.map((group) => (
                 <div key={group.slug} className="mb-3 flex flex-col gap-1.5">
                   <span className="mb-0.5 border-b border-line pb-1 text-xs font-semibold text-fg-muted">{group.title}</span>
 
+                  <PaletteLabel
+                    title="Показатели"
+                    shown={group.metrics.length}
+                    unpicked={group.unpickedMetrics}
+                    onPick={() => setStep(1)}
+                  />
                   {group.metrics.length > 0 && (
                     <div className="flex flex-wrap gap-1.5">
                       {group.metrics.map((m) => (
@@ -877,6 +971,12 @@ function Builder() {
                     </div>
                   )}
 
+                  <PaletteLabel
+                    title="Разрезы"
+                    shown={group.dimensions.length}
+                    unpicked={group.unpickedDimensions}
+                    onPick={() => setStep(1)}
+                  />
                   {group.dimensions.length > 0 && (
                     <div className="flex flex-wrap gap-1.5">
                       {group.dimensions.map((d) => (
@@ -930,6 +1030,12 @@ function Builder() {
               )}
 
               <span className="text-xs font-medium tracking-wide text-fg-muted uppercase">Фильтры отчёта</span>
+              {palette.every((group) => group.dimensions.length === 0) && (
+                <p className="text-[11px] leading-snug text-fg-muted">
+                  Фильтр строится по разрезу: пока ни одного разреза не выбрано, фильтровать
+                  отчёт не по чему.
+                </p>
+              )}
               <div className="flex flex-wrap gap-1.5">
                 {palette.flatMap((group) =>
                   group.dimensions.map((d) => {
@@ -1133,16 +1239,31 @@ function Builder() {
                       <p className="text-xs text-warn">{dropNote.text}</p>
                     )}
 
+                    {/* карточка показывает одно число: разрез ей показать негде.
+                        Раньше блок просто исчезал, и это читалось как «разрезов
+                        у отчёта нет», а не как свойство самого вида секции */}
+                    {section.type === 'kpi' && (
+                      <div className="flex flex-col gap-1.5 rounded-control border border-dashed border-line px-2.5 py-2">
+                        <span className="text-xs font-medium tracking-wide text-fg-muted uppercase">Разрезы</span>
+                        <p className="text-xs text-fg-muted">
+                          Карточка показывает одно число — разрез к ней не применяется. Чтобы
+                          разбить показатель по разрезу, смените вид секции на график или таблицу.
+                        </p>
+                      </div>
+                    )}
+
                     {section.type !== 'kpi' && (
                       <div className="flex flex-col gap-1.5 rounded-control border border-dashed border-line px-2.5 py-2">
                         <span className="text-xs font-medium tracking-wide text-fg-muted uppercase">
-                          Группировка{' '}
+                          Разрезы{' '}
                           <span className="normal-case">
-                            ({section.by.length} из {byLimit(section.type)})
+                            (группировка, {section.by.length} из {byLimit(section.type)})
                           </span>
                         </span>
                         {section.by.length === 0 ? (
-                          <p className="text-xs text-fg-muted">перетащите разрез сюда</p>
+                          <p className="text-xs text-fg-muted">
+                            перетащите разрез сюда — секция посчитается в разбивке по нему
+                          </p>
                         ) : (
                           <div className="flex flex-wrap items-center gap-1.5">
                             {section.by.map((slug, position) => {
@@ -1260,6 +1381,18 @@ function Builder() {
               {preview && <SectionsGrid sections={preview.sections} />}
             </div>
           </div>
+
+          {vocabularyOpen && (
+            <VocabularyDialog
+              datasets={datasets}
+              pickedDatasets={pickedDatasets}
+              metrics={metrics}
+              dimensions={dimensions}
+              ownFields={ownFields}
+              computed={computed}
+              onClose={() => setVocabularyOpen(false)}
+            />
+          )}
 
           {!isAdmin && (
             <p className="max-w-[60ch] text-sm text-fg-muted">

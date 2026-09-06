@@ -1,4 +1,4 @@
-import type { Report, ReportMeta } from '../types/report'
+import type { Report, ReportFacets, ReportMeta, ReportPage, ReportQuery } from '../types/report'
 import type {
   AccessEntry,
   Group,
@@ -159,6 +159,46 @@ export async function fetchReports(): Promise<ReportMeta[]> {
   return json.reports
 }
 
+/** Параметры каталога в строку запроса: пустые и выключенные не идут. */
+function catalogParams(query: ReportQuery): string {
+  const params = new URLSearchParams()
+  if (query.q?.trim()) params.set('q', query.q.trim())
+  for (const key of ['group', 'author', 'tag', 'status'] as const) {
+    const value = query[key]
+    if (value) params.set(key, value)
+  }
+  if (query.favorite) params.set('favorite', 'true')
+  if (query.sort) params.set('sort', query.sort)
+  if (query.limit !== undefined) params.set('limit', String(query.limit))
+  if (query.offset) params.set('offset', String(query.offset))
+  const text = params.toString()
+  return text ? `?${text}` : ''
+}
+
+/** Страница каталога: поиск и фильтры считает сервер, клиент их не повторяет. */
+export async function searchReports(
+  query: ReportQuery,
+  signal?: AbortSignal,
+): Promise<ReportPage> {
+  const json = await request<{ reports: ReportMeta[]; total: number }>(
+    `/reports${catalogParams(query)}`,
+    { signal },
+  )
+  return { reports: json.reports, total: json.total ?? json.reports.length }
+}
+
+export async function fetchReportFacets(q?: string, signal?: AbortSignal): Promise<ReportFacets> {
+  const suffix = q?.trim() ? `?q=${encodeURIComponent(q.trim())}` : ''
+  return request<ReportFacets>(`/reports/facets${suffix}`, { signal })
+}
+
+/** Закрепление отчёта — личное: чужое не видно и не мешает. */
+export async function setReportFavorite(slug: string, on: boolean): Promise<void> {
+  await request(`/reports/${encodeURIComponent(slug)}/favorite`, {
+    method: on ? 'PUT' : 'DELETE',
+  })
+}
+
 export async function fetchReport(slug: string): Promise<Report | null> {
   try {
     const json = await request<{ report: Report }>(`/reports/${slug}`)
@@ -187,7 +227,7 @@ export async function applyFilters(
 
 export async function updateReport(
   slug: string,
-  patch: { title?: string; description?: string },
+  patch: { title?: string; description?: string; tags?: string[] },
 ): Promise<ReportMeta> {
   const json = await request<{ report: ReportMeta }>(`/reports/${slug}`, {
     method: 'PATCH',
@@ -655,15 +695,31 @@ export interface ParseNote {
   source?: string
 }
 
+export interface ParseResult {
+  definition: ReportDefinition
+  notes: ParseNote[]
+  source?: 'llm' | 'parser'
+  /** Почему разбирала не модель, а словарь: без этого разница в качестве
+      разбора выглядит для человека необъяснимой. */
+  fallbackReason?: string
+}
+
 /** Разбор описания. Поля и формулы отчёта передаются вместе с текстом:
  *  в общем словаре их нет, но для этого отчёта это полноценные показатели. */
 export async function parsePhrase(
   text: string,
-  own: { fields?: ReportField[]; computed?: ComputedField[] } = {},
-): Promise<{ definition: ReportDefinition; notes: ParseNote[]; source?: 'llm' | 'parser' }> {
-  return request<{ definition: ReportDefinition; notes: ParseNote[]; source?: 'llm' | 'parser' }>('/reports/parse', {
+  own: { fields?: ReportField[]; computed?: ComputedField[]; datasets?: string[] } = {},
+): Promise<ParseResult> {
+  return request<ParseResult>('/reports/parse', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, fields: own.fields ?? [], computed: own.computed ?? [] }),
+    // датасеты, выбранные на шаге «Данные»: без них словарь для модели — все
+    // показатели установки, среди которых «Выручка» встречается десяток раз
+    body: JSON.stringify({
+      text,
+      fields: own.fields ?? [],
+      computed: own.computed ?? [],
+      datasets: own.datasets ?? [],
+    }),
   })
 }

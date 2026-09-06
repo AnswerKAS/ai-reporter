@@ -33,6 +33,15 @@ def _report_meta(report: dict) -> ReportMeta:
     return ReportMeta.model_validate(data).model_dump(by_alias=True)
 
 
+def _meta_for(report: dict, user: dict) -> ReportMeta:
+    """Ответ одиночного метода теми же полями, что строка каталога.
+
+    Иначе после переименования отчёт в меню терял бы темы и закрепление: фронт
+    кладёт ответ на место прежней строки.
+    """
+    return _report_meta(db.decorate_report(report, user))
+
+
 def _check_access(user: dict, slug: str) -> None:
     slugs = db.accessible_slugs(user)
     if slugs is not None and slug not in slugs:
@@ -49,12 +58,43 @@ async def _db(fn, *args, **kwargs):
 
 
 @router.get('/reports')
-def list_reports(user: dict = Depends(get_current_user)) -> dict:
-    reports = db.list_reports()
-    slugs = db.accessible_slugs(user)
-    if slugs is not None:
-        reports = [r for r in reports if r['slug'] in slugs]
-    return {'reports': [_report_meta(r) for r in reports]}
+def list_reports(
+    q: str | None = None,
+    group: str | None = None,
+    author: str | None = None,
+    tag: str | None = None,
+    status: str | None = None,
+    favorite: bool = False,
+    sort: str = 'updated',
+    limit: int | None = None,
+    offset: int = 0,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """Каталог отчётов: поиск, фильтры и страница выдачи.
+
+    Права, поиск и фильтры считаются в SQL: на десяти тысячах отчётов список
+    нельзя ни прочитать в память целиком, ни отдать наружу одним куском.
+    Без `limit` метод отвечает как до каталога — всей доступной выдачей.
+
+    Значение `-` у `group`, `author` и `tag` означает «ни одной»: отчёты без
+    группы доступа, без автора, без темы.
+    """
+    reports, total = db.search_reports(
+        user, q=q, group=group, author=author, tag=tag, status=status,
+        favorite=favorite, sort=sort, limit=limit, offset=offset,
+    )
+    return {'reports': [_report_meta(r) for r in reports], 'total': total,
+            'limit': limit, 'offset': offset}
+
+
+@router.get('/reports/facets')
+def report_facets(q: str | None = None, user: dict = Depends(get_current_user)) -> dict:
+    """Разрезы каталога со счётчиками: группы доступа, авторы, темы, статусы.
+
+    Счётчики считаются по тем же условиям, что выдача, включая поиск, — иначе
+    число у варианта не равно тому, что человек увидит после нажатия.
+    """
+    return db.report_facets(user, q=q)
 
 
 @router.post('/reports/parse')
@@ -73,9 +113,12 @@ def parse_phrase(payload: dict, user: dict = Depends(get_current_user)) -> dict:
     # хоть их и нет в общем словаре
     fields = payload.get('fields') or []
     computed = payload.get('computed') or []
+    # датасеты, выбранные автором на шаге «Данные»: словарь сужается до них,
+    # иначе модель выбирает из полутора сотен показателей всей установки
+    datasets = payload.get('datasets') or []
     catalog = query_builder.Catalog()
     try:
-        return interpret.parse(text, catalog, fields, computed)
+        return interpret.parse(text, catalog, fields, computed, datasets)
     except DatasetError as exc:
         raise HTTPException(422, str(exc))
     finally:
@@ -124,8 +167,9 @@ def create_builder_report(payload: dict, user: dict = Depends(require_admin)) ->
         id=uuid.uuid4().hex, slug=slug, title=title,
         description=payload.get('description'),
         definition=definition.model_dump(by_alias=True),
+        created_by=user['id'],
     )
-    return {'report': _report_meta(db.get_report(slug))}
+    return {'report': _meta_for(db.get_report(slug), user)}
 
 
 @router.get('/reports/{slug}/definition')
@@ -210,7 +254,9 @@ def update_report(slug: str, patch: ReportUpdate, user: dict = Depends(get_curre
         title=patch.title.strip() if patch.title is not None else None,
         description=patch.description,
     )
-    return {'report': _report_meta(db.get_report(slug))}
+    if patch.tags is not None:
+        db.set_report_tags(slug, patch.tags)
+    return {'report': _meta_for(db.get_report(slug), user)}
 
 
 @router.delete('/reports/{slug}')
@@ -223,6 +269,26 @@ def delete_report(slug: str, user: dict = Depends(require_admin)) -> dict:
     # рассылки удалённого отчёта отправлять нечем
     mail_registry.delete_report_schedules(slug)
     return {'ok': True}
+
+
+@router.put('/reports/{slug}/favorite')
+def add_favorite(slug: str, user: dict = Depends(get_current_user)) -> dict:
+    """Закрепляет отчёт за читателем: закреплённые всегда наверху меню.
+
+    Закрепление личное — чужое не видно и не мешает.
+    """
+    _check_access(user, slug)
+    if db.get_report(slug) is None:
+        raise HTTPException(404, 'отчёт не найден')
+    db.add_favorite(user['id'], slug)
+    return {'ok': True, 'favorite': True}
+
+
+@router.delete('/reports/{slug}/favorite')
+def remove_favorite(slug: str, user: dict = Depends(get_current_user)) -> dict:
+    _check_access(user, slug)
+    db.remove_favorite(user['id'], slug)
+    return {'ok': True, 'favorite': False}
 
 
 def _drilldown_args(payload: dict) -> dict:

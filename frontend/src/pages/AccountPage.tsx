@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import type { ScheduleDigestItem, ScheduleServer } from '../types/user'
 import { ApiError, fetchScheduleDigest } from '../lib/api'
 import { useAuth } from '../lib/auth'
-import { useReports } from '../lib/reports'
+import { useReports, useReportSearch } from '../lib/reports'
 import { ReportsPanel } from '../components/account/ReportsPanel'
 import { SchedulesPanel } from '../components/account/SchedulesPanel'
 import { SecurityPanel } from '../components/account/SecurityPanel'
@@ -25,7 +25,11 @@ type Scope = 'mine' | 'all'
  */
 export function AccountPage() {
   const { user, isAdmin } = useAuth()
-  const { reports } = useReports()
+  const { facets } = useReports()
+  // список отчётов нужен только вкладке рассылок — там из него собран выбор
+  // отчёта. Полтысячи строк в селекте это уже потолок читаемости, и потолок
+  // страницы каталога тот же: выбор отчёта в рассылке пора делать поиском.
+  const { reports } = useReportSearch({ sort: 'title', limit: 500 })
   const [params, setParams] = useSearchParams()
   const tab = (TABS as string[]).includes(params.get('tab') ?? '')
     ? (params.get('tab') as Tab)
@@ -87,7 +91,7 @@ export function AccountPage() {
           value={tab}
           onChange={(next) => setParams(next === 'reports' ? {} : { tab: next }, { replace: true })}
           options={[
-            { value: 'reports', label: 'Мои отчёты', count: reports.length },
+            { value: 'reports', label: 'Мои отчёты', count: facets?.total },
             {
               value: 'schedules',
               label: 'Мои рассылки',
@@ -102,7 +106,6 @@ export function AccountPage() {
 
       {tab === 'reports' ? (
         <ReportsPanel
-          reports={reports}
           scheduleCounts={counts}
           isAdmin={isAdmin}
           onSchedule={setScheduling}

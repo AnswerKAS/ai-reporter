@@ -32,6 +32,11 @@ def _cell(value):
         return float(value)
     if value is None or isinstance(value, (int, float, str, bool)):
         return value
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        # PostgreSQL в кодировке SQL_ASCII отдаёт текстовые колонки байтами:
+        # сервер не знает их кодировки и потому не декодирует. str() от них
+        # даёт «b'\\xd0\\x9a...'» прямо в ячейке отчёта.
+        return bytes(value).decode('utf-8', 'replace')
     return str(value)
 
 

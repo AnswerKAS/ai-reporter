@@ -30,7 +30,11 @@ def rows(sources):
     (Decimal('10.5'), 10.5),
     (None, None),
     (5, 5), (5.5, 5.5), ('текст', 'текст'), (True, True),
-    (b'\x01', "b'\\x01'"),
+    # SQL_ASCII-база отдаёт текст байтами — в отчёт должно попасть слово,
+    # а не «b'\\xd0\\x9a…'»
+    ('Казань'.encode(), 'Казань'),
+    (memoryview('Казань'.encode()), 'Казань'),
+    (b'\xff\xfe', '\ufffd\ufffd'),  # не UTF-8 — заменяем, но не падаем
 ])
 def test_значение_приводится_к_json(value, expected):
     assert executor._cell(value) == expected

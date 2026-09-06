@@ -63,7 +63,7 @@ export function ReportViewPage() {
   const { slug } = useParams<{ slug: string }>()
   const navigate = useNavigate()
   const { isAdmin } = useAuth()
-  const { reload: reloadReports } = useReports()
+  const { reload: reloadReports, markVisited } = useReports()
   const [report, setReport] = useState<Report | null>(null)
   const [status, setStatus] = useState<string>('loading')
   const [failure, setFailure] = useState<string | null>(null)
@@ -85,6 +85,9 @@ export function ReportViewPage() {
         if (data?.sections) {
           setReport(data)
           setStatus('ready')
+          // «Недавние» в меню слева ведут отсюда: каталог не знает, куда
+          // человек ходил, и знать не должен — это его браузер
+          markVisited(data)
           return
         }
         setStatus('error')
@@ -103,7 +106,7 @@ export function ReportViewPage() {
     return () => {
       alive = false
     }
-  }, [slug])
+  }, [slug, markVisited])
 
   useEffect(() => {
     if (!slug || !report) return

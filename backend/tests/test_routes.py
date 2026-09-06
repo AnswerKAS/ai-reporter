@@ -57,6 +57,9 @@ COVERED = {
     ('GET', '/api/semantic/usage'): 'test_api_semantic.py',
 
     ('GET', '/api/reports'): 'test_api_reports.py',
+    ('GET', '/api/reports/facets'): 'test_api_reports.py',
+    ('PUT', '/api/reports/{slug}/favorite'): 'test_api_reports.py',
+    ('DELETE', '/api/reports/{slug}/favorite'): 'test_api_reports.py',
     ('POST', '/api/reports/parse'): 'test_api_reports.py',
     ('POST', '/api/reports/preview'): 'test_api_reports.py',
     ('POST', '/api/reports/builder'): 'test_api_reports.py',

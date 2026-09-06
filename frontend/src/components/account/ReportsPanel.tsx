@@ -1,54 +1,47 @@
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import type { ReportMeta } from '../../types/report'
-import { Badge, Button, EmptyState, Input, Panel, PanelRow, Segmented } from '../ui'
+import { useReports, useReportSearch } from '../../lib/reports'
+import { useDebounced } from '../../lib/useDebounced'
+import { Alert, Badge, Button, EmptyState, Input, Panel, PanelRow, Segmented } from '../ui'
 
 type Order = 'updated' | 'title'
 
-/** Совпадение по названию, описанию и slug'у: человек ищет и по «продаж», и по
-    «sales-report» — второе он видит в адресе отчёта. */
-function matches(report: ReportMeta, query: string): boolean {
-  const text = `${report.title} ${report.description ?? ''} ${report.slug}`.toLowerCase()
-  return text.includes(query)
-}
+/** Страница списка в кабинете: строки компактные, полсотни хватает на экран
+    с запасом, дальше — «показать ещё». */
+const PAGE = 50
 
 /**
  * Отчёты, доступные человеку: поиск, порядок и что с отчётом можно сделать
  * прямо отсюда. Раньше здесь был список ссылок без порядка — на трёх десятках
  * отчётов найти нужный было быстрее в дереве слева, и кабинет не нужен.
  *
- * Список берётся из общего контекста (`useReports`), а не своим запросом:
- * удаление отчёта в дереве иначе оставляло бы кабинет с мёртвой строкой.
+ * Поиск и порядок считает сервер, тем же каталогом, что и меню слева: держать
+ * весь список отчётов в памяти ради кабинета больше нельзя.
  */
 export function ReportsPanel({
-  reports,
   scheduleCounts,
   isAdmin,
   onSchedule,
 }: {
-  reports: ReportMeta[]
   /** Сколько рассылок человек настроил на отчёте; null — свод ещё едет. */
   scheduleCounts: Record<string, number> | null
   isAdmin: boolean
   onSchedule: (slug: string) => void
 }) {
+  const { facets } = useReports()
   const [query, setQuery] = useState('')
   const [order, setOrder] = useState<Order>('updated')
-
-  const shown = useMemo(() => {
-    const needle = query.trim().toLowerCase()
-    const list = needle ? reports.filter((r) => matches(r, needle)) : [...reports]
-    return list.sort((a, b) =>
-      order === 'title'
-        ? a.title.localeCompare(b.title, 'ru')
-        : (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''),
-    )
-  }, [reports, query, order])
+  const search = useDebounced(query)
+  const { reports: shown, total, loading, error, hasMore, loadMore } = useReportSearch({
+    q: search,
+    sort: order,
+    limit: PAGE,
+  })
 
   return (
     <Panel
       title="Мои отчёты"
-      count={reports.length}
+      count={facets?.total ?? total}
       description="Всё, что вам назначено — лично или через группу."
       toolbar={
         <>
@@ -72,13 +65,17 @@ export function ReportsPanel({
         </>
       }
     >
-      {reports.length === 0 ? (
-        <EmptyState
-          title="Отчёты не назначены"
-          description="Доступ к отчёту даёт администратор — или соберите свой в конструкторе."
-        />
+      {error ? (
+        <Alert>{error}</Alert>
       ) : shown.length === 0 ? (
-        <EmptyState title="Ничего не нашлось" description={`По запросу «${query}» отчётов нет.`} />
+        search.trim() ? (
+          <EmptyState title="Ничего не нашлось" description={`По запросу «${search}» отчётов нет.`} />
+        ) : (
+          <EmptyState
+            title="Отчёты не назначены"
+            description="Доступ к отчёту даёт администратор — или соберите свой в конструкторе."
+          />
+        )
       ) : (
         <ul className="flex flex-col gap-2">
           {shown.map((r) => {
@@ -124,6 +121,14 @@ export function ReportsPanel({
             )
           })}
         </ul>
+      )}
+
+      {hasMore && (
+        <div className="mt-3 flex justify-center">
+          <Button onClick={loadMore} disabled={loading}>
+            {loading ? 'Загружаем…' : `Показать ещё (${total - shown.length})`}
+          </Button>
+        </div>
       )}
     </Panel>
   )

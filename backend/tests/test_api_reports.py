@@ -283,7 +283,9 @@ def test_разбор_пустого_текста_422(client, model, admin_heade
     response = client.post('/api/reports/parse', headers=admin_headers, json={'text': '  '})
 
     assert response.status_code == 422
-    assert 'пустое описание' in response.json()['detail']
+    # ошибка не только называет причину, но и показывает, как описание выглядит
+    detail = response.json()['detail']
+    assert 'опишите отчёт словами' in detail and 'например' in detail
 
 
 def test_разбор_без_словаря_422(client, dataset, admin_headers):
@@ -515,3 +517,265 @@ def test_выгрузка_при_выключенной_детализации_4
 def test_выгрузка_без_доступа_403(client, report, user_headers):
     assert client.post('/api/reports/sales-report/drilldown.xlsx', headers=user_headers,
                        json={}).status_code == 403
+
+
+# --- каталог: страница, поиск, фильтры ---------------------------------------
+
+def make_report(slug: str, title: str, *, author: str | None = None,
+                tags: list[str] | None = None, status: str = 'ready') -> dict:
+    """Запись отчёта в каталоге: определение каталогу не нужно."""
+    from app.core import database as db
+
+    created = db.create_report(id=uuid.uuid4().hex, slug=slug, title=title,
+                               description=None, definition={'sections': []},
+                               created_by=author)
+    if tags:
+        db.set_report_tags(slug, tags)
+    if status != 'ready':
+        db.update_status(slug, status=status)
+    return created
+
+
+@pytest.fixture
+def catalog(metabase, admin, plain_user):
+    """Пять отчётов с разными авторами и темами."""
+    make_report('a-sales', 'Продажи', author=admin['id'], tags=['финансы'])
+    make_report('b-margin', 'Маржа', author=admin['id'], tags=['финансы', 'юг'])
+    make_report('c-stock', 'Склад', author=plain_user['id'], tags=['логистика'])
+    make_report('d-old', 'Старьё')
+    make_report('e-broken', 'Сломанный', author=admin['id'], status='error')
+
+
+def test_каталог_отдаёт_страницу_и_общее_число(client, catalog, admin_headers):
+    body = client.get('/api/reports?sort=title&limit=2', headers=admin_headers).json()
+
+    assert len(body['reports']) == 2
+    assert body['total'] == 5
+
+
+def test_каталог_без_limit_отдаёт_всё(client, catalog, admin_headers):
+    body = client.get('/api/reports', headers=admin_headers).json()
+
+    assert len(body['reports']) == 5
+
+
+def test_страницы_каталога_не_пересекаются(client, catalog, admin_headers):
+    first = client.get('/api/reports?sort=title&limit=2&offset=0', headers=admin_headers).json()
+    second = client.get('/api/reports?sort=title&limit=2&offset=2', headers=admin_headers).json()
+
+    slugs = [r['slug'] for r in first['reports'] + second['reports']]
+    assert len(set(slugs)) == 4
+
+
+def test_порядок_по_названию(client, catalog, admin_headers):
+    body = client.get('/api/reports?sort=title', headers=admin_headers).json()
+
+    assert [r['title'] for r in body['reports']] == [
+        'Маржа', 'Продажи', 'Склад', 'Сломанный', 'Старьё',
+    ]
+
+
+def test_поиск_по_названию_не_различает_регистра(client, catalog, admin_headers):
+    body = client.get('/api/reports?q=ПРОДАЖ', headers=admin_headers).json()
+
+    assert [r['slug'] for r in body['reports']] == ['a-sales']
+    assert body['total'] == 1
+
+
+def test_поиск_по_slug_и_по_теме(client, catalog, admin_headers):
+    by_slug = client.get('/api/reports?q=b-marg', headers=admin_headers).json()
+    by_tag = client.get('/api/reports?q=логистик', headers=admin_headers).json()
+
+    assert [r['slug'] for r in by_slug['reports']] == ['b-margin']
+    assert [r['slug'] for r in by_tag['reports']] == ['c-stock']
+
+
+def test_фильтр_по_автору(client, catalog, admin, admin_headers):
+    body = client.get(f'/api/reports?author={admin["id"]}&sort=title', headers=admin_headers).json()
+
+    assert [r['slug'] for r in body['reports']] == ['b-margin', 'a-sales', 'e-broken']
+
+
+def test_отчёты_без_автора(client, catalog, admin_headers):
+    body = client.get('/api/reports?author=-', headers=admin_headers).json()
+
+    assert [r['slug'] for r in body['reports']] == ['d-old']
+
+
+def test_фильтр_по_теме_и_отчёты_без_темы(client, catalog, admin_headers):
+    tagged = client.get('/api/reports?tag=финансы&sort=title', headers=admin_headers).json()
+    untagged = client.get('/api/reports?tag=-&sort=title', headers=admin_headers).json()
+
+    assert [r['slug'] for r in tagged['reports']] == ['b-margin', 'a-sales']
+    assert [r['slug'] for r in untagged['reports']] == ['e-broken', 'd-old']
+
+
+def test_фильтр_по_группе_доступа(client, catalog, admin_headers):
+    from app.core import database as db
+
+    group = db.create_group(id=uuid.uuid4().hex, name='Финансы')
+    db.grant_access('a-sales', group_id=group['id'])
+
+    in_group = client.get(f'/api/reports?group={group["id"]}', headers=admin_headers).json()
+    no_group = client.get('/api/reports?group=-', headers=admin_headers).json()
+
+    assert [r['slug'] for r in in_group['reports']] == ['a-sales']
+    assert 'a-sales' not in [r['slug'] for r in no_group['reports']]
+    assert no_group['total'] == 4
+
+
+def test_фильтр_по_статусу(client, catalog, admin_headers):
+    body = client.get('/api/reports?status=error', headers=admin_headers).json()
+
+    assert [r['slug'] for r in body['reports']] == ['e-broken']
+
+
+def test_каталог_не_выходит_за_права(client, catalog, plain_user):
+    from app.core import database as db
+
+    db.grant_access('c-stock', user_id=plain_user['id'])
+
+    body = client.get('/api/reports?limit=100', headers=auth(plain_user)).json()
+
+    assert [r['slug'] for r in body['reports']] == ['c-stock']
+    assert body['total'] == 1
+
+
+def test_строка_каталога_несёт_автора_и_темы(client, catalog, admin, admin_headers):
+    body = client.get('/api/reports?q=маржа', headers=admin_headers).json()
+
+    row = body['reports'][0]
+    assert row['author'] == admin['username']
+    assert row['tags'] == ['финансы', 'юг']
+    assert row['favorite'] is False
+
+
+# --- GET /api/reports/facets -------------------------------------------------
+
+def test_фасеты_считают_разрезы(client, catalog, admin, admin_headers):
+    body = client.get('/api/reports/facets', headers=admin_headers).json()
+
+    assert body['total'] == 5
+    assert {t['id']: t['count'] for t in body['tags']} == {
+        'финансы': 2, 'юг': 1, 'логистика': 1, '-': 2,
+    }
+    assert {a['id']: a['count'] for a in body['authors']}[admin['id']] == 3
+    assert {s['id']: s['count'] for s in body['statuses']} == {'ready': 4, 'error': 1}
+
+
+def test_счётчик_фасета_равен_выдаче_после_нажатия(client, catalog, admin_headers):
+    facets = client.get('/api/reports/facets?q=а', headers=admin_headers).json()
+    count = {t['id']: t['count'] for t in facets['tags']}['финансы']
+
+    body = client.get('/api/reports?q=а&tag=финансы', headers=admin_headers).json()
+    assert body['total'] == count
+
+
+def test_фасеты_не_выходят_за_права(client, catalog, plain_user):
+    from app.core import database as db
+
+    db.grant_access('c-stock', user_id=plain_user['id'])
+
+    body = client.get('/api/reports/facets', headers=auth(plain_user)).json()
+
+    assert body['total'] == 1
+    assert {t['id'] for t in body['tags']} == {'логистика'}
+
+
+# --- избранное ---------------------------------------------------------------
+
+def test_закрепление_видно_в_каталоге(client, catalog, admin_headers):
+    assert client.put('/api/reports/a-sales/favorite', headers=admin_headers).status_code == 200
+
+    body = client.get('/api/reports?favorite=true', headers=admin_headers).json()
+    assert [r['slug'] for r in body['reports']] == ['a-sales']
+    assert body['reports'][0]['favorite'] is True
+
+
+def test_закрепление_личное(client, catalog, admin_headers, plain_user):
+    from app.core import database as db
+
+    db.grant_access('a-sales', user_id=plain_user['id'])
+    client.put('/api/reports/a-sales/favorite', headers=admin_headers)
+
+    body = client.get('/api/reports?favorite=true', headers=auth(plain_user)).json()
+    assert body['reports'] == []
+
+
+def test_повторное_закрепление_не_падает(client, catalog, admin_headers):
+    client.put('/api/reports/a-sales/favorite', headers=admin_headers)
+
+    assert client.put('/api/reports/a-sales/favorite', headers=admin_headers).status_code == 200
+    assert client.get('/api/reports/facets', headers=admin_headers).json()['favorites'] == 1
+
+
+def test_снятие_закрепления(client, catalog, admin_headers):
+    client.put('/api/reports/a-sales/favorite', headers=admin_headers)
+    client.delete('/api/reports/a-sales/favorite', headers=admin_headers)
+
+    assert client.get('/api/reports?favorite=true', headers=admin_headers).json()['total'] == 0
+
+
+def test_закрепить_недоступный_отчёт_нельзя(client, catalog, user_headers):
+    assert client.put('/api/reports/a-sales/favorite', headers=user_headers).status_code == 403
+
+
+def test_закрепление_несуществующего_отчёта_404(client, catalog, admin_headers):
+    assert client.put('/api/reports/нет-такого/favorite', headers=admin_headers).status_code == 404
+
+
+def test_удаление_отчёта_убирает_закрепления_и_темы(client, catalog, admin_headers):
+    from app.core import database as db
+
+    client.put('/api/reports/a-sales/favorite', headers=admin_headers)
+    client.delete('/api/reports/a-sales', headers=admin_headers)
+
+    assert db.favorite_slugs(db.get_user_by_name('root')['id']) == []
+    facets = client.get('/api/reports/facets', headers=admin_headers).json()
+    assert {t['id']: t['count'] for t in facets['tags']}.get('финансы') == 1
+
+
+# --- автор и темы ------------------------------------------------------------
+
+def test_автор_проставляется_при_создании(client, model, admin, admin_headers):
+    client.post('/api/reports/builder',
+                json={'title': 'Новый', 'slug': 'new-one', 'definition': definition()},
+                headers=admin_headers)
+
+    body = client.get('/api/reports?q=new-one', headers=admin_headers).json()
+    assert body['reports'][0]['author'] == admin['username']
+
+
+def test_правка_тем_заменяет_прежние(client, catalog, admin_headers):
+    client.patch('/api/reports/b-margin', json={'tags': ['север']}, headers=admin_headers)
+
+    body = client.get('/api/reports?q=b-margin', headers=admin_headers).json()
+    assert body['reports'][0]['tags'] == ['север']
+
+
+def test_правка_без_тем_их_не_трогает(client, catalog, admin_headers):
+    client.patch('/api/reports/b-margin', json={'title': 'Маржинальность'}, headers=admin_headers)
+
+    body = client.get('/api/reports?q=b-margin', headers=admin_headers).json()
+    assert body['reports'][0]['tags'] == ['финансы', 'юг']
+
+
+def test_пустой_список_тем_очищает(client, catalog, admin_headers):
+    client.patch('/api/reports/b-margin', json={'tags': []}, headers=admin_headers)
+
+    body = client.get('/api/reports?q=b-margin', headers=admin_headers).json()
+    assert body['reports'][0]['tags'] == []
+
+
+def test_поиск_переживает_переименование(client, catalog, admin_headers):
+    client.patch('/api/reports/d-old', json={'title': 'Обновлённый'}, headers=admin_headers)
+
+    body = client.get('/api/reports?q=обновл', headers=admin_headers).json()
+    assert [r['slug'] for r in body['reports']] == ['d-old']
+    assert client.get('/api/reports?q=старьё', headers=admin_headers).json()['total'] == 0
+
+
+def test_снятая_тема_перестаёт_находиться(client, catalog, admin_headers):
+    client.patch('/api/reports/c-stock', json={'tags': []}, headers=admin_headers)
+
+    assert client.get('/api/reports?q=логистик', headers=admin_headers).json()['total'] == 0

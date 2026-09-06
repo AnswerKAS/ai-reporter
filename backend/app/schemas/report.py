@@ -117,13 +117,21 @@ class ReportMeta(CamelModel):
     created_at: str
     updated_at: str
     filter_values: dict[str, str] | None = None
+    # разрезы каталога: автор (у отчётов старше каталога пуст), темы и
+    # закрепление — личное у каждого читателя
+    created_by: str | None = None
+    author: str | None = None
+    tags: list[str] = []
+    favorite: bool = False
 
 
 class ReportUpdate(CamelModel):
-    """Правка отчёта: название и описание — любой пользователь с доступом."""
+    """Правка отчёта: название, описание и темы — любой пользователь с доступом."""
 
     title: str | None = None
     description: str | None = None
+    # None — тем не касаемся; пустой список — очистить
+    tags: list[str] | None = None
 
 
 class FiltersPatch(CamelModel):

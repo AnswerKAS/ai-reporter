@@ -362,3 +362,36 @@ def test_повторный_подъём_схемы_безопасен(metabase)
     db.init_db()
 
     assert db.get_report('s') is not None
+
+
+# --- бэкфилл текста поиска ----------------------------------------------------
+
+def test_бэкфилл_заполняет_текст_поиска_пачками(metabase):
+    """Отчёты, заведённые до каталога, начинают находиться после миграции.
+
+    Заодно проверяется сама пачка: записей больше, чем помещается в один
+    запрос, — по строке на отчёт миграция десяти тысяч записей на удалённой
+    метабазе занимала бы минуты.
+    """
+    for i in range(db._BACKFILL_CHUNK + 5):
+        db.create_report(id=f'i{i}', slug=f'r{i}', title=f'Отчёт №{i}',
+                         description=None, definition={'sections': []})
+    db.set_report_tags('r7', ['Логистика'])
+    with db._conn() as conn:
+        conn.execute('UPDATE reports SET search_text = NULL')
+
+        db._backfill_search_text(conn)
+
+        assert conn.execute(
+            'SELECT COUNT(*) AS n FROM reports WHERE search_text IS NULL'
+        ).fetchone()['n'] == 0
+
+    admin = {'id': 'a', 'role': 'admin'}
+    assert db.search_reports(admin, q='отчёт №204')[1] == 1
+    # тема попадает в тот же текст, и регистр свёрнут
+    assert [r['slug'] for r in db.search_reports(admin, q='логистика')[0]] == ['r7']
+
+
+def test_бэкфилл_на_пустой_метабазе_ничего_не_делает(metabase):
+    with db._conn() as conn:
+        db._backfill_search_text(conn)  # не должен падать на пустой выборке
