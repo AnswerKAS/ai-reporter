@@ -254,7 +254,11 @@ kind — `select` | `text` | `number` | `daterange`); значения select п
   `/api/admin/groups` (+`/{id}/members`), `/api/admin/access` (назначение
   отчёта пользователю ИЛИ группе), `/api/admin/access/{slug}` — список.
 - Рассылка отчётов: `app/mail/registry.py` (серверы и расписания), `app/mail/sender.py`
-  (сборка письма и SMTP), `reports/render.py` (xlsx/pdf), планировщик — в
+  (сборка письма и SMTP), `reports/render.py` (xlsx/pdf; в PDF ширина полосы
+  набора одна на всё — `doc.width`: карточки, картинка графика и таблицы
+  тянутся по ней, ширины колонок считает `_column_widths` — без них reportlab
+  мерит колонки по содержимому и жмёт таблицу к левому краю; ячейки — абзацы,
+  поэтому текст в них экранируется), планировщик — в
   `services/worker.py` (проверка раз в минуту). Админ заводит серверы в
   `/api/admin/mail-servers` (пароль наружу не отдаётся), сотрудник — рассылки в
   `/api/reports/{slug}/schedules`. Свод «все мои рассылки по всем отчётам» —

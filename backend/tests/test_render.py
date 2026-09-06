@@ -139,6 +139,73 @@ def test_pdf_пустого_отчёта():
     assert data[:5] == b'%PDF-'
 
 
+def _frame() -> float:
+    """Ширина полосы набора PDF: лист минус поля — та же, что в to_pdf."""
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.units import mm
+
+    return landscape(A4)[0] - 24 * mm
+
+
+def test_ширина_колонок_занимает_всю_полосу():
+    """Таблица из коротких значений раньше жалась к левому краю на треть листа."""
+    from reportlab.lib.units import mm
+
+    body = [['Город', 'Шт.'], ['Москва', '10'], ['Тверь', '2']]
+
+    widths = render._column_widths(body, _frame(), 18 * mm)
+
+    assert sum(widths) == pytest.approx(_frame())
+
+
+def test_широкая_таблица_режет_только_длинные_колонки():
+    """Короткой колонке сжиматься некуда: режется та, где текст переносится."""
+    from reportlab.lib.units import mm
+
+    body = [['Наименование', 'Код'],
+            ['Кабель силовой ВВГнг(А)-LS 3х2,5 ГОСТ 31996-2012 барабан 500 м ' * 3, 'НОМ-000123']]
+
+    widths = render._column_widths(body, _frame(), 18 * mm)
+
+    assert sum(widths) == pytest.approx(_frame())
+    # колонка кода осталась натуральной ширины — её текст не переносится
+    assert widths[1] < 30 * mm
+    assert widths[0] > widths[1]
+
+
+def test_ширина_колонок_не_уже_минимума():
+    """Колонок больше, чем влезает: делим полосу поровну, а не в ноль."""
+    from reportlab.lib.units import mm
+
+    body = [['Очень длинный заголовок колонки номер %d' % i for i in range(30)]]
+
+    widths = render._column_widths(body, _frame(), 18 * mm)
+
+    assert sum(widths) == pytest.approx(_frame())
+    assert min(widths) > 0
+
+
+def test_pdf_со_спецсимволом_в_данных():
+    """Ячейки — Paragraph, а он читает разметку: «&» без экранирования ронял сборку."""
+    report = {'slug': 'r', 'title': 'Символы', 'sections': [
+        {'type': 'kpi', 'items': [{'label': 'Иванов & Ко', 'value': '<1'}]},
+        {'type': 'table', 'title': 'Контрагенты',
+         'columns': [{'key': 'a', 'header': 'Кто & что'}],
+         'rows': [{'a': 'ООО «Ромашка» <офис> & склад'}]}]}
+
+    assert render.to_pdf(report)[:5] == b'%PDF-'
+
+
+def test_размер_png_из_заголовка():
+    """Высота картинки графика на листе считается по её же пропорциям."""
+    png = render._chart_image({'type': 'chart', 'kind': 'bar', 'xKey': 'd',
+                               'series': [{'key': 'v', 'name': 'V'}],
+                               'data': [{'d': '1', 'v': 2}, {'d': '2', 'v': 3}]},
+                              width_px=400)
+
+    assert render._png_size(png)[0] == 400
+
+
 def test_pdf_обрезает_длинную_таблицу():
     report = {'slug': 'r', 'title': 'Большой', 'sections': [
         {'type': 'table', 'title': 'Много строк',

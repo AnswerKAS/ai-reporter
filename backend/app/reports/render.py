@@ -7,6 +7,7 @@ Excel даёт данные, с которыми можно работать д�
 
 from datetime import datetime
 from io import BytesIO
+from xml.sax.saxutils import escape
 
 _MONEY = ('money',)
 
@@ -166,6 +167,79 @@ def _register_fonts() -> None:
     _fonts_ready = True
 
 
+# Ширина колонки PDF, уже которой текст переносится по букве, а не по слову.
+PDF_MIN_COLUMN_MM = 18
+
+
+def _png_size(data: bytes) -> tuple[int, int]:
+    """Размер PNG из заголовка IHDR: по нему считается высота картинки на листе.
+
+    Пропорции задаёт `_chart_image` размером фигуры; вычитать их из заголовка
+    надёжнее, чем повторять числа здесь — они разъедутся при первой же правке.
+    """
+    return int.from_bytes(data[16:20], 'big'), int.from_bytes(data[20:24], 'big')
+
+
+def _column_widths(body: list[list[str]], available: float, minimum: float,
+                   size: int = 8, padding: float = 12) -> list[float]:
+    """Ширины колонок таблицы: таблица занимает всю ширину полосы набора.
+
+    Без явных ширин reportlab меряет колонки по содержимому — таблица из
+    коротких значений жмётся к левому краю на треть листа, а таблица из
+    длинных уезжает за правый край. Поэтому меряем сами: натуральная ширина —
+    по самой длинной ячейке колонки, дальше свободное место раздаётся
+    пропорционально ей.
+
+    Если натуральные ширины в полосу не влезли, режутся только широкие
+    колонки: подбирается предел, выше которого колонка не растёт, — короткие
+    («шт.», «код», «дата») остаются натуральными и не переносятся по буквам
+    ради того, чтобы уместилась колонка описания.
+    """
+    from reportlab.pdfbase import pdfmetrics
+
+    count = len(body[0]) if body else 0
+    if count == 0:
+        return []
+    if available <= count * minimum:
+        return [available / count] * count
+
+    natural = []
+    for i in range(count):
+        widest = max(
+            pdfmetrics.stringWidth(str(row[i]) if i < len(row) else '',
+                                   _FONT_BOLD if r == 0 else _FONT, size)
+            for r, row in enumerate(body)
+        )
+        natural.append(widest + padding)
+    total = sum(natural)
+    if total <= 0:
+        return [available / count] * count
+    if total <= available:
+        return [w * available / total for w in natural]
+
+    # Не влезли: ищем предел ширины, при котором сумма равна полосе. Колонки
+    # уже предела остаются натуральными, широкие получают предел и переносят
+    # текст по строкам — «уровень воды», а не общее пропорциональное сжатие:
+    # от него страдали бы и короткие колонки, которым сжиматься некуда.
+    low, high = 0.0, max(natural)
+    for _ in range(40):
+        cap = (low + high) / 2
+        if sum(min(w, cap) for w in natural) < available:
+            low = cap
+        else:
+            high = cap
+    cap = max(low, minimum)
+    widths = [min(w, cap) for w in natural]
+    total = sum(widths)
+    if total > available:  # предел упёрся в минимум — ужимаем всё
+        return [w * available / total for w in widths]
+    wide = [i for i, w in enumerate(natural) if w > cap]
+    if wide:  # остаток от округления — широким колонкам, они его и потратят
+        for i in wide:
+            widths[i] += (available - total) / len(wide)
+    return widths
+
+
 def to_pdf(report: dict) -> bytes:
     """Отчёт на бумаге: заголовок, фильтры, карточки, графики и таблицы."""
     from reportlab.lib import colors
@@ -193,12 +267,21 @@ def to_pdf(report: dict) -> bytes:
     section_title = ParagraphStyle('section', parent=styles['Heading2'], fontName=_FONT_BOLD,
                                    fontSize=11, spaceBefore=8)
     cell = ParagraphStyle('cell', parent=styles['Normal'], fontName=_FONT, fontSize=9)
+    # ячейки таблицы — абзацами: строка переносится внутри колонки, а не
+    # вылезает за её край, когда в поле длинное название
+    cell_text = ParagraphStyle('cell-text', parent=styles['Normal'], fontName=_FONT,
+                               fontSize=8, leading=10)
+    cell_head = ParagraphStyle('cell-head', parent=cell_text, fontName=_FONT_BOLD,
+                               textColor=colors.HexColor('#5f5f6e'))
 
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=landscape(A4),
                             leftMargin=12 * mm, rightMargin=12 * mm,
                             topMargin=12 * mm, bottomMargin=12 * mm,
                             title=report.get('title') or 'Отчёт')
+    # ширина полосы набора: по ней тянутся и карточки, и графики, и таблицы —
+    # раньше она была записана числом (265 мм) и на 8 мм не доходила до края
+    frame = doc.width
     flow = [Paragraph(report.get('title') or 'Отчёт', head)]
     if report.get('description'):
         flow.append(Paragraph(str(report['description']), sub))
@@ -209,11 +292,9 @@ def to_pdf(report: dict) -> bytes:
     flow.append(Paragraph('Сформирован ' + stamp + ('; ' + ', '.join(applied) if applied else ''), sub))
     flow.append(Spacer(1, 6))
 
+    # шрифт и цвет ячеек живут в стилях абзаца (cell_text / cell_head):
+    # ячейки таблицы — Paragraph, и настройки самой таблицы их не касаются
     grid = TableStyle([
-        ('FONTNAME', (0, 0), (-1, -1), _FONT),
-        ('FONTNAME', (0, 0), (-1, 0), _FONT_BOLD),
-        ('FONTSIZE', (0, 0), (-1, -1), 8),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor('#5f5f6e')),
         ('LINEBELOW', (0, 0), (-1, 0), 0.5, colors.HexColor('#d3d3e0')),
         ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f6f6fa')]),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
@@ -227,11 +308,11 @@ def to_pdf(report: dict) -> bytes:
                 continue
             flow.append(Paragraph('Показатели', section_title))
             cells = [[Paragraph(f"<font name='{_FONT_BOLD}' size=12>"
-                                f"{_fmt(i.get('value'), i.get('format'))}</font><br/>"
-                                f"<font size=7 color='#5f5f6e'>{i.get('label')}</font>",
+                                f"{escape(_fmt(i.get('value'), i.get('format')))}</font><br/>"
+                                f"<font size=7 color='#5f5f6e'>{escape(str(i.get('label') or ''))}</font>",
                                 cell)
                       for i in items]]
-            table = Table(cells, colWidths=[(265 * mm) / max(len(items), 1)] * len(items))
+            table = Table(cells, colWidths=[frame / max(len(items), 1)] * len(items))
             table.setStyle(TableStyle([
                 ('BOX', (0, 0), (-1, -1), 0.5, colors.HexColor('#e6e6ee')),
                 ('INNERGRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#e6e6ee')),
@@ -246,7 +327,9 @@ def to_pdf(report: dict) -> bytes:
         if kind == 'chart':
             png = _chart_image(section)
             if png:
-                flow.append(Image(BytesIO(png), width=265 * mm, height=94 * mm))
+                width_px, height_px = _png_size(png)
+                flow.append(Image(BytesIO(png), width=frame,
+                                  height=frame * height_px / max(width_px, 1)))
             continue
 
         head_row, rows = _section_rows(section)
@@ -256,7 +339,12 @@ def to_pdf(report: dict) -> bytes:
         shown = rows[:PDF_TABLE_ROWS]
         body = [head_row] + [[_fmt(v, formats[i] if i < len(formats) else None)
                               for i, v in enumerate(row)] for row in shown]
-        table = Table(body, repeatRows=1)
+        widths = _column_widths(body, frame, PDF_MIN_COLUMN_MM * mm)
+        # текст ячейки экранируется: Paragraph читает разметку, и «Иванов & Ко»
+        # в данных иначе роняет сборку письма целиком
+        cells = [[Paragraph(escape(str(value)), cell_head if r == 0 else cell_text)
+                  for value in row] for r, row in enumerate(body)]
+        table = Table(cells, colWidths=widths, repeatRows=1)
         table.setStyle(grid)
         flow.append(table)
         if len(rows) > len(shown):
