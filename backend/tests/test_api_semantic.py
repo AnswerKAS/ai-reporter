@@ -19,6 +19,8 @@ ADMIN_ONLY = [
     ('POST', '/api/dataset-links', {'leftSlug': 'a', 'rightSlug': 'b',
                                     'leftField': 'x', 'rightField': 'y'}),
     ('DELETE', '/api/dataset-links/1', None),
+    ('POST', '/api/metrics/test', {'slugs': []}),
+    ('GET', '/api/semantic/usage', None),
 ]
 
 
@@ -172,6 +174,47 @@ def test_проверка_метрики_чинит_прежнюю_ошибку(
 
 def test_проверка_несуществующей_метрики_404(client, metabase, admin_headers):
     assert client.post('/api/metrics/нет/test', headers=admin_headers).status_code == 404
+
+
+def test_проверка_пачкой_без_тела_берёт_весь_словарь(client, model, admin_headers):
+    """«Проверить все» не должно перечислять сотню slug'ов в запросе."""
+    from app.semantic import registry as semantic
+
+    semantic.update_metric('revenue', status='error', error='источник не отвечал')
+
+    body = client.post('/api/metrics/test', headers=admin_headers).json()
+
+    assert [m['slug'] for m in body['metrics']] == ['revenue']
+    assert body['metrics'][0]['status'] == 'ok'
+
+
+def test_проверка_пачкой_по_списку(client, model, dataset, admin_headers):
+    client.post('/api/metrics', headers=admin_headers, json={
+        'slug': 'orders', 'title': 'Заказы', 'datasetSlug': 'sales',
+        'expression': 'count()'})
+
+    body = client.post('/api/metrics/test', headers=admin_headers,
+                       json={'slugs': ['orders']}).json()
+
+    assert [m['slug'] for m in body['metrics']] == ['orders']
+
+
+def test_проверка_пачкой_с_неизвестным_slug_404(client, model, admin_headers, sources):
+    """Проверить половину и промолчать о второй хуже, чем не проверить ничего."""
+    from app.semantic import registry as semantic
+
+    semantic.update_metric('revenue', status='error', error='источник не отвечал')
+
+    response = client.post('/api/metrics/test', headers=admin_headers,
+                           json={'slugs': ['revenue', 'нет']})
+
+    assert response.status_code == 404
+    assert semantic.get_metric('revenue')['status'] == 'error'
+
+
+def test_проверка_пачкой_пустого_словаря(client, metabase, admin_headers):
+    assert client.post('/api/metrics/test',
+                       headers=admin_headers).json() == {'metrics': []}
 
 
 def test_удаление_метрики(client, model, admin_headers):
@@ -373,3 +416,60 @@ def test_удаление_связи(client, dataset, second_dataset, admin_head
 
 def test_удаление_несуществующей_связи_404(client, metabase, admin_headers):
     assert client.delete('/api/dataset-links/нет', headers=admin_headers).status_code == 404
+
+
+# --- использование словаря отчётами -------------------------------------------
+
+def test_свод_называет_отчёты_показателя(client, report, admin_headers):
+    body = client.get('/api/semantic/usage', headers=admin_headers).json()['usage']
+
+    assert body['revenue'] == [{'slug': 'sales-report', 'title': 'Продажи'}]
+    assert body['city'] == [{'slug': 'sales-report', 'title': 'Продажи'}]
+
+
+def test_свод_не_упоминает_неиспользуемое(client, report, admin_headers):
+    """Разрез «Дата» в отчёте не участвует — его в своде быть не должно."""
+    body = client.get('/api/semantic/usage', headers=admin_headers).json()['usage']
+
+    assert 'day' not in body
+
+
+def test_свод_видит_разрез_фильтра_и_сортировку(client, model, metabase, admin_headers):
+    from app.core import database as db
+
+    db.create_report(id='id2', slug='by-filter', title='Через фильтр', description=None,
+                     definition={'sections': [{'type': 'table', 'metrics': [],
+                                               'by': [], 'orderBy': 'revenue'}],
+                                 'filters': [{'dimension': 'day', 'kind': 'daterange'}]})
+
+    body = client.get('/api/semantic/usage', headers=admin_headers).json()['usage']
+
+    assert [r['slug'] for r in body['day']] == ['by-filter']
+    assert [r['slug'] for r in body['revenue']] == ['by-filter']
+
+
+def test_свод_видит_операнды_формулы(client, model, metabase, admin_headers):
+    from app.core import database as db
+
+    db.create_report(id='id3', slug='formula', title='С формулой', description=None,
+                     definition={'sections': [{'type': 'kpi', 'metrics': ['margin']}],
+                                 'computed': [{'key': 'margin', 'title': 'Маржа',
+                                               'left': 'revenue', 'op': '-',
+                                               'right': 'cost'}]})
+
+    body = client.get('/api/semantic/usage', headers=admin_headers).json()['usage']
+
+    assert [r['slug'] for r in body['revenue']] == ['formula']
+    # «margin» и «cost» словарю не принадлежат: свод перечисляет только его
+    assert set(body) <= {'revenue', 'city', 'day'}
+
+
+def test_свод_переживает_битое_определение(client, model, metabase, admin_headers):
+    from app.core import database as db
+
+    db.create_report(id='id4', slug='broken', title='Битый', description=None,
+                     definition={'sections': []})
+    with db._conn() as conn:
+        conn.execute("UPDATE reports SET definition = 'не json' WHERE slug = 'broken'")
+
+    assert client.get('/api/semantic/usage', headers=admin_headers).status_code == 200

@@ -27,6 +27,18 @@ export interface Dimension {
   updatedAt: string
 }
 
+/** Отчёт, ссылающийся на элемент словаря. */
+export interface UsageReport {
+  slug: string
+  title: string
+}
+
+/** Где используется словарь: slug показателя или разреза → отчёты с ним.
+
+    Ссылок нигде не хранится — свод считается по декларациям отчётов, поэтому
+    приезжает вместе со словарём и отдельно не обновляется. */
+export type SemanticUsage = Record<string, UsageReport[]>
+
 export interface DatasetLink {
   id: string
   title?: string

@@ -4,8 +4,11 @@
 изменение — только админ: выражения метрик это граница доверия системы.
 """
 
+import json
+
 from fastapi import APIRouter, Depends, HTTPException
 
+from ..core import database as db
 from ..core.security import get_current_user, require_admin
 from ..datasets import registry as ds_registry
 from ..datasets.base import DatasetError, sanitize_error
@@ -18,6 +21,7 @@ from ..schemas.semantic import (
     MetricCreate,
     MetricMeta,
     MetricPatch,
+    MetricsTest,
 )
 from ..semantic import registry as semantic
 
@@ -86,6 +90,30 @@ def patch_metric(slug: str, patch: MetricPatch, user: dict = Depends(require_adm
         expression=patch.expression, format=patch.format, unit=patch.unit,
     )
     return {'metric': _metric(semantic.validate_metric(slug))}
+
+
+@router.post('/metrics/test')
+def test_metrics(patch: MetricsTest | None = None, user: dict = Depends(require_admin)) -> dict:
+    """Проверяет пачку выражений: по умолчанию — весь словарь.
+
+    Перебирать метрики по одной со стороны клиента нельзя: подключение к
+    источнику стоит дороже самой проверки, а `validate_metrics` открывает одно
+    соединение на датасет и пробует все его выражения одним запросом.
+    """
+    slugs = [s.strip() for s in (patch.slugs if patch else []) if s and s.strip()]
+    if not slugs:
+        slugs = [m['slug'] for m in semantic.list_metrics()]
+    if not slugs:
+        return {'metrics': []}
+    missing = [s for s in slugs if semantic.get_metric(s) is None]
+    if missing:
+        # проверить половину и промолчать о второй хуже, чем не проверить ничего
+        raise HTTPException(404, f'метрики не найдены: {", ".join(missing)}')
+    try:
+        checked = semantic.validate_metrics(slugs)
+    except DatasetError as exc:
+        raise HTTPException(422, str(exc))
+    return {'metrics': [_metric(m) for m in checked]}
 
 
 @router.post('/metrics/{slug}/test')
@@ -175,3 +203,56 @@ def delete_link(link_id: str, user: dict = Depends(require_admin)) -> dict:
         raise HTTPException(404, 'связь не найдена')
     semantic.delete_link(link_id)
     return {'ok': True}
+
+
+# --- использование словаря отчётами -----------------------------------------
+
+def _definition_names(definition: dict) -> set[str]:
+    """Имена словаря, на которые ссылается декларация отчёта.
+
+    Отличить slug метрики от ключа собственного поля отчёта в декларации
+    нельзя: они лежат в одном списке и разрешаются системой в общем
+    пространстве имён. Поэтому собираем все имена, а сверяет их со словарём
+    вызывающий.
+    """
+    names: set[str] = set()
+    for section in definition.get('sections') or []:
+        names.update(str(x) for x in (section.get('metrics') or []) if x)
+        names.update(str(x) for x in (section.get('by') or []) if x)
+        order = section.get('orderBy') or section.get('order_by')
+        if order:
+            names.add(str(order))
+    for item in definition.get('filters') or []:
+        if item.get('dimension'):
+            names.add(str(item['dimension']))
+    for item in definition.get('computed') or []:
+        for side in ('left', 'right'):
+            if item.get(side):
+                names.add(str(item[side]))
+    return names
+
+
+@router.get('/semantic/usage')
+def semantic_usage(user: dict = Depends(require_admin)) -> dict:
+    """Кто на что ссылается: показатель или разрез → отчёты.
+
+    Считается по декларациям, а не хранится: ссылка появляется и исчезает
+    вместе с правкой отчёта, и отдельную таблицу связей пришлось бы держать
+    с ней в согласии. Нужно это ровно там, где словарь удаляют, — чтобы
+    удаление не ломало отчёты вслепую.
+    """
+    known = {m['slug'] for m in semantic.list_metrics()} | {
+        d['slug'] for d in semantic.list_dimensions()}
+    usage: dict[str, list[dict]] = {}
+    for report in db.list_reports():
+        raw = report.get('definition')
+        if not raw:
+            continue
+        try:
+            definition = json.loads(raw) if isinstance(raw, str) else raw
+        except ValueError:
+            continue
+        card = {'slug': report['slug'], 'title': report.get('title') or report['slug']}
+        for name in _definition_names(definition) & known:
+            usage.setdefault(name, []).append(card)
+    return {'usage': usage}

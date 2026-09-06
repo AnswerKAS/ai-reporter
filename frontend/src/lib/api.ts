@@ -28,6 +28,7 @@ import type {
   LinkInput,
   Metric,
   MetricInput,
+  SemanticUsage,
   ReportDefinition,
   ReportField,
 } from '../types/semantic'
@@ -532,6 +533,19 @@ export async function testMetric(slug: string): Promise<Metric> {
   return json.metric
 }
 
+/** Проверка пачки выражений: пустой список — весь словарь.
+
+    По одной метрике за запрос нельзя: подключение к источнику стоит дороже
+    самой проверки, а сервер открывает одно соединение на датасет. */
+export async function testMetrics(slugs: string[] = []): Promise<Metric[]> {
+  const json = await request<{ metrics: Metric[] }>('/metrics/test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ slugs }),
+  })
+  return json.metrics
+}
+
 export async function deleteMetric(slug: string): Promise<void> {
   await request(`/metrics/${slug}`, { method: 'DELETE' })
 }
@@ -571,6 +585,12 @@ export async function createLink(input: LinkInput): Promise<DatasetLink> {
     body: JSON.stringify(input),
   })
   return json.link
+}
+
+/** Где используется словарь: показатель или разрез → отчёты, ссылающиеся на него. */
+export async function fetchSemanticUsage(): Promise<SemanticUsage> {
+  const json = await request<{ usage: SemanticUsage }>('/semantic/usage')
+  return json.usage
 }
 
 export async function deleteLink(id: string): Promise<void> {

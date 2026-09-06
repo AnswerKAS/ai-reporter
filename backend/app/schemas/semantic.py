@@ -37,6 +37,16 @@ class MetricPatch(CamelModel):
     unit: str | None = None
 
 
+class MetricsTest(CamelModel):
+    """Что проверить: пустой список — весь словарь.
+
+    Кнопка «Проверить все» не должна перечислять сотню slug'ов, а проверка
+    одного датасета — должна.
+    """
+
+    slugs: list[str] = []
+
+
 class DimensionMeta(CamelModel):
     slug: str
     title: str

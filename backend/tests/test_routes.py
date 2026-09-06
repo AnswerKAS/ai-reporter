@@ -44,6 +44,7 @@ COVERED = {
     ('GET', '/api/metrics'): 'test_api_semantic.py',
     ('POST', '/api/metrics'): 'test_api_semantic.py',
     ('PATCH', '/api/metrics/{slug}'): 'test_api_semantic.py',
+    ('POST', '/api/metrics/test'): 'test_api_semantic.py',
     ('POST', '/api/metrics/{slug}/test'): 'test_api_semantic.py',
     ('DELETE', '/api/metrics/{slug}'): 'test_api_semantic.py',
     ('GET', '/api/dimensions'): 'test_api_semantic.py',
@@ -53,6 +54,7 @@ COVERED = {
     ('GET', '/api/dataset-links'): 'test_api_semantic.py',
     ('POST', '/api/dataset-links'): 'test_api_semantic.py',
     ('DELETE', '/api/dataset-links/{link_id}'): 'test_api_semantic.py',
+    ('GET', '/api/semantic/usage'): 'test_api_semantic.py',
 
     ('GET', '/api/reports'): 'test_api_reports.py',
     ('POST', '/api/reports/parse'): 'test_api_reports.py',
