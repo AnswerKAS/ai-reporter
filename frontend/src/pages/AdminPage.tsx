@@ -10,6 +10,7 @@ import {
 } from '../lib/api'
 import { useAuth } from '../lib/auth'
 import { AccessPanel } from '../components/admin/AccessPanel'
+import { DatasetsPanel } from '../components/admin/DatasetsPanel'
 import { GroupsPanel } from '../components/admin/GroupsPanel'
 import { MailServersPanel } from '../components/admin/MailServersPanel'
 import { UsersPanel } from '../components/admin/UsersPanel'
@@ -23,9 +24,9 @@ import {
   SkeletonRows,
 } from '../components/ui'
 
-type Tab = 'users' | 'groups' | 'access' | 'mail'
+type Tab = 'users' | 'groups' | 'access' | 'datasets' | 'mail'
 
-const TABS: Tab[] = ['users', 'groups', 'access', 'mail']
+const TABS: Tab[] = ['users', 'groups', 'access', 'datasets', 'mail']
 
 /**
  * Администрирование одной страницей с вкладками: все четыре блока сразу
@@ -48,6 +49,7 @@ export function AdminPage() {
   // отчётов, и ждать их, чтобы показать список пользователей, незачем
   const [accessReady, setAccessReady] = useState(false)
   const [mailCount, setMailCount] = useState<number | undefined>(undefined)
+  const [datasetCount, setDatasetCount] = useState<number | undefined>(undefined)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
@@ -125,7 +127,7 @@ export function AdminPage() {
     <Page>
       <PageHeader
         title="Администрирование"
-        subtitle="Кто заходит в систему, кто что видит и из какого ящика уходят рассылки."
+        subtitle="Кто заходит в систему, кто что видит, из чего собираются отчёты и из какого ящика уходят рассылки."
         actions={
           <Button onClick={() => void reload()} disabled={loading}>
             Обновить
@@ -141,6 +143,7 @@ export function AdminPage() {
             { value: 'users', label: 'Пользователи', count: users.length },
             { value: 'groups', label: 'Группы', count: groups.length },
             { value: 'access', label: 'Доступ к отчётам', count: accessReady ? grants : undefined },
+            { value: 'datasets', label: 'Датасеты', count: datasetCount },
             { value: 'mail', label: 'Почтовые серверы', count: mailCount },
           ]}
         />
@@ -185,6 +188,8 @@ export function AdminPage() {
           onFail={fail}
         />
         )
+      ) : tab === 'datasets' ? (
+        <DatasetsPanel onCount={setDatasetCount} />
       ) : (
         <MailServersPanel onCount={setMailCount} />
       )}

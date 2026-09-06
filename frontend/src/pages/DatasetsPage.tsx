@@ -1,34 +1,21 @@
-import { useCallback, useEffect, useState } from 'react'
-import type { Dataset, DatasetDetail, DatasetSource } from '../types/dataset'
-import {
-  ApiError,
-  createDataset,
-  deleteDataset,
-  fetchDataset,
-  fetchDatasets,
-  patchDataset,
-  refreshDataset,
-  uploadDatasetCsv,
-} from '../lib/api'
-import { DatasetSemanticDraft } from '../components/DatasetSemanticDraft'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import type { Dataset, DatasetSource, DatasetStatus } from '../types/dataset'
+import { ApiError, deleteDataset, fetchDatasets } from '../lib/api'
+import { DatasetModal } from '../components/DatasetModal'
 import { useAuth } from '../lib/auth'
 import {
   Alert,
   Badge,
   Button,
+  Chips,
   ConfirmDialog,
   EmptyState,
-  Field,
   Input,
   Page,
   PageHeader,
-  Select,
+  Panel,
   SkeletonCards,
-  Table,
-  Td,
-  Textarea,
-  Th,
-  Tr,
 } from '../components/ui'
 import type { BadgeTone } from '../components/ui/Badge'
 import { cn } from '../lib/cn'
@@ -40,20 +27,16 @@ const SOURCE_LABELS: Record<DatasetSource, string> = {
   csv: 'CSV-файл',
 }
 
-const DSN_PLACEHOLDERS: Record<DatasetSource, string> = {
-  clickhouse: 'clickhouse://user:pass@host:8123/db или env:VAR',
-  postgres: 'app:postgres (сервер приложения) или postgresql://user:pass@host:5432/db',
-  oracle: 'oracle://user:pass@host:1521/SERVICE или env:VAR',
-  csv: '',
+const STATUS_LABELS: Record<DatasetStatus, string> = {
+  ok: 'Проверены',
+  new: 'Не проверены',
+  error: 'С ошибкой',
 }
 
-/** Имя объекта Oracle без кавычек сервер сворачивает в верхний регистр. */
-const TABLE_PLACEHOLDERS: Record<DatasetSource, string> = {
-  clickhouse: 'my_table',
-  postgres: 'my_table',
-  oracle: 'MY_TABLE или SCHEMA.MY_TABLE',
-  csv: '',
-}
+/** Порядок фильтров задан здесь, а не порядком датасетов: полоса фильтров не
+    должна перетасовываться от того, что кто-то завёл новый источник. */
+const SOURCE_ORDER: DatasetSource[] = ['clickhouse', 'postgres', 'oracle', 'csv']
+const STATUS_ORDER: DatasetStatus[] = ['ok', 'new', 'error']
 
 const STATUS_TONES: Record<string, BadgeTone> = {
   ok: 'good',
@@ -61,17 +44,92 @@ const STATUS_TONES: Record<string, BadgeTone> = {
   new: 'neutral',
 }
 
-const FORM = 'mt-3.5 grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] items-end gap-3 rounded-card border border-line bg-surface p-4'
+/** Поиск идёт и по именам полей: «где у нас колонка revenue» — вопрос про
+    датасеты, а не про их названия, и отвечать на него открыванием карточек
+    по одной незачем. */
+function matches(dataset: Dataset, needle: string): boolean {
+  const text = [
+    dataset.title,
+    dataset.slug,
+    dataset.description ?? '',
+    dataset.tableName ?? '',
+    dataset.fields.map((f) => f.name).join(' '),
+  ]
+    .join(' ')
+    .toLowerCase()
+  return text.includes(needle)
+}
+
+/** Значения фильтра из адреса: чужое и повторы отбрасываются, порядок —
+    канонический, чтобы `?source=csv,postgres` и `?source=postgres,csv` были
+    одним и тем же состоянием полосы фильтров. */
+function parseFilter<T extends string>(raw: string | null, allowed: readonly T[]): T[] {
+  if (!raw) return []
+  const asked = raw.split(',').map((value) => value.trim())
+  return allowed.filter((value) => asked.includes(value))
+}
 
 export function DatasetsPage() {
   const { isAdmin } = useAuth()
+  const navigate = useNavigate()
   const [datasets, setDatasets] = useState<Dataset[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
-  const [detail, setDetail] = useState<DatasetDetail | null>(null)
-  const [detailError, setDetailError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
   const [pendingDelete, setPendingDelete] = useState<Dataset | null>(null)
+
+  /** Фильтры читаются из адреса при открытии и дальше держатся состоянием, а
+      адрес им зеркалится: ссылку на «всё сломанное в Oracle» можно передать,
+      но считать новый набор от адреса нельзя — роутер обновляет его переходом,
+      и второе из двух быстрых нажатий получило бы прежнее значение и затёрло
+      первое. Строка поиска в адрес не идёт: она меняется на каждый символ. */
+  const [params, setParams] = useSearchParams()
+  const [sources, setSources] = useState<DatasetSource[]>(() =>
+    parseFilter(params.get('source'), SOURCE_ORDER),
+  )
+  const [statuses, setStatuses] = useState<DatasetStatus[]>(() =>
+    parseFilter(params.get('status'), STATUS_ORDER),
+  )
+  const [query, setQuery] = useState('')
+
+  useEffect(() => {
+    setParams(
+      (current) => {
+        const next = new URLSearchParams(current)
+        if (sources.length) next.set('source', sources.join(','))
+        else next.delete('source')
+        if (statuses.length) next.set('status', statuses.join(','))
+        else next.delete('status')
+        return next
+      },
+      { replace: true },
+    )
+  }, [sources, statuses, setParams])
+
+  /** Порядок в наборе — канонический, а не порядок нажатий: иначе один и тот
+      же выбор давал бы разные адреса. */
+  const toggleSource = useCallback((value: DatasetSource) => {
+    setSources((current) =>
+      current.includes(value)
+        ? current.filter((v) => v !== value)
+        : SOURCE_ORDER.filter((v) => v === value || current.includes(v)),
+    )
+  }, [])
+
+  const toggleStatus = useCallback((value: DatasetStatus) => {
+    setStatuses((current) =>
+      current.includes(value)
+        ? current.filter((v) => v !== value)
+        : STATUS_ORDER.filter((v) => v === value || current.includes(v)),
+    )
+  }, [])
+
+  const resetFilters = useCallback(() => {
+    setQuery('')
+    setSources([])
+    setStatuses([])
+  }, [])
+
+  const filtered = query.trim() !== '' || sources.length > 0 || statuses.length > 0
 
   const loadList = useCallback(() => {
     fetchDatasets()
@@ -83,31 +141,33 @@ export function DatasetsPage() {
     loadList()
   }, [loadList])
 
-  useEffect(() => {
-    if (!selected) {
-      setDetail(null)
-      setDetailError(null)
-      return
+  /** Счётчик у варианта — сколько даст его нажатие, поэтому свой же фильтр в
+      расчёт не берётся: у выбранного источника иначе стояло бы число всех
+      прочих, а у невыбранных — нули. */
+  const { shown, sourceOptions, statusOptions } = useMemo(() => {
+    const all = datasets ?? []
+    const needle = query.trim().toLowerCase()
+    const found = needle ? all.filter((d) => matches(d, needle)) : all
+    const bySource = (d: Dataset) => sources.length === 0 || sources.includes(d.source)
+    const byStatus = (d: Dataset) => statuses.length === 0 || statuses.includes(d.status)
+    return {
+      shown: found.filter((d) => bySource(d) && byStatus(d)),
+      sourceOptions: SOURCE_ORDER.filter(
+        (value) => sources.includes(value) || all.some((d) => d.source === value),
+      ).map((value) => ({
+        value,
+        label: SOURCE_LABELS[value],
+        count: found.filter((d) => d.source === value && byStatus(d)).length,
+      })),
+      statusOptions: STATUS_ORDER.filter(
+        (value) => statuses.includes(value) || all.some((d) => d.status === value),
+      ).map((value) => ({
+        value,
+        label: STATUS_LABELS[value],
+        count: found.filter((d) => d.status === value && bySource(d)).length,
+      })),
     }
-    setDetail(null)
-    setDetailError(null)
-    fetchDataset(selected)
-      .then(setDetail)
-      .catch((err) => setDetailError(err instanceof ApiError ? err.message : 'Не удалось открыть датасет'))
-  }, [selected])
-
-  const runAdminAction = async (action: () => Promise<unknown>) => {
-    setBusy(true)
-    try {
-      await action()
-      loadList()
-      if (selected) return fetchDataset(selected).then(setDetail).catch(() => undefined)
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Операция не удалась')
-    } finally {
-      setBusy(false)
-    }
-  }
+  }, [datasets, query, sources, statuses])
 
   if (error && datasets === null) {
     return (
@@ -118,90 +178,148 @@ export function DatasetsPage() {
     )
   }
 
+  const total = datasets?.length ?? 0
+  const opened = (datasets ?? []).find((d) => d.slug === selected) ?? null
+
   return (
     <Page>
-      <PageHeader title="Датасеты" subtitle="Источники данных, из которых собираются отчёты" />
+      <PageHeader
+        title="Датасеты"
+        subtitle="Источники данных, из которых собираются отчёты"
+        actions={
+          isAdmin ? (
+            <Button onClick={() => navigate('/admin?tab=datasets')}>
+              Завести датасет
+            </Button>
+          ) : undefined
+        }
+      />
 
       {error && <Alert className="mb-4">{error}</Alert>}
 
-      {isAdmin && (
-        <details className="mb-5">
-          <summary className="inline-flex w-fit cursor-pointer list-none items-center rounded-control border border-transparent px-3.5 py-1.5 text-sm text-fg-muted hover:bg-surface-sunken hover:text-fg [&::-webkit-details-marker]:hidden">
-            Добавить датасет
-          </summary>
-          <DatasetCreateForm
-            busy={busy}
-            onCreated={(slug) => {
-              loadList()
-              setSelected(slug)
-            }}
-          />
-        </details>
-      )}
-
-
       {datasets === null ? (
         <SkeletonCards count={4} />
-      ) : datasets.length === 0 ? (
+      ) : total === 0 ? (
         <EmptyState
           title="Датасетов пока нет"
-          description={isAdmin ? 'Добавьте первый источник данных — кнопка выше.' : 'Источники данных заводит администратор.'}
+          description={isAdmin ? 'Первый источник данных заводится в админке.' : 'Источники данных заводит администратор.'}
+          action={
+            isAdmin ? (
+              <Button variant="primary" onClick={() => navigate('/admin?tab=datasets')}>
+                Завести датасет
+              </Button>
+            ) : undefined
+          }
         />
       ) : (
-        <div className="mb-7 grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-3.5">
-          {datasets.map((d) => (
-            <div
-              key={d.slug}
-              className={cn(
-                'relative rounded-card border bg-surface transition-colors',
-                selected === d.slug ? 'border-accent ring-2 ring-accent-soft' : 'border-line hover:border-accent',
-              )}
-            >
-              {isAdmin && (
-                <button
-                  type="button"
-                  title={`Удалить датасет ${d.slug}`}
-                  aria-label={`Удалить датасет ${d.title}`}
-                  onClick={() => setPendingDelete(d)}
-                  className="absolute top-3 right-3 z-10 flex h-6 w-6 cursor-pointer items-center justify-center rounded-control text-base leading-none text-fg-muted hover:bg-bad-soft hover:text-bad"
+        <Panel
+          className="mb-7"
+          title="Источники"
+          count={total}
+          toolbar={
+            <>
+              <Input
+                className="w-auto min-w-56 flex-1 py-1.5"
+                type="search"
+                placeholder="Поиск по названию, slug'у, таблице и полям"
+                aria-label="Поиск по датасетам"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+              />
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs text-fg-muted">Источник</span>
+                <Chips
+                  ariaLabel="Фильтр по источникам"
+                  values={sources}
+                  options={sourceOptions}
+                  onToggle={toggleSource}
+                />
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs text-fg-muted">Статус</span>
+                <Chips
+                  ariaLabel="Фильтр по статусу подключения"
+                  values={statuses}
+                  options={statusOptions}
+                  onToggle={toggleStatus}
+                />
+              </div>
+              <div className="ml-auto flex items-center gap-2">
+                <span className="text-xs text-fg-muted tabular-nums" aria-live="polite">
+                  {filtered ? `показано ${shown.length} из ${total}` : `всего ${total}`}
+                </span>
+                {filtered && (
+                  <Button size="sm" variant="ghost" onClick={resetFilters}>
+                    Сбросить
+                  </Button>
+                )}
+              </div>
+            </>
+          }
+        >
+          {shown.length === 0 ? (
+            <EmptyState
+              title="Под фильтры не попал ни один датасет"
+              description="Снимите часть фильтров или измените поисковый запрос."
+              action={
+                <Button variant="primary" onClick={resetFilters}>
+                  Сбросить фильтры
+                </Button>
+              }
+            />
+          ) : (
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-3.5">
+              {shown.map((d) => (
+                <div
+                  key={d.slug}
+                  className={cn(
+                    'relative rounded-card border bg-surface transition-colors',
+                    selected === d.slug ? 'border-accent ring-2 ring-accent-soft' : 'border-line hover:border-accent',
+                  )}
                 >
-                  <span aria-hidden="true">×</span>
-                </button>
-              )}
-              <button
-                type="button"
-                aria-pressed={selected === d.slug}
-                className="flex w-full cursor-pointer flex-col gap-2 p-4 text-left"
-                onClick={() => setSelected(d.slug === selected ? null : d.slug)}
-              >
-                <span className="flex items-center justify-between gap-2.5 pr-7">
-                  <span className="text-[15px] font-semibold">{d.title}</span>
-                  <Badge tone={STATUS_TONES[d.status] ?? 'neutral'}>{d.status}</Badge>
-                </span>
-                <span className="text-sm text-fg-muted">{d.description ?? '—'}</span>
-                <span className="text-xs text-fg-muted">
-                  {SOURCE_LABELS[d.source]}
-                  {d.isQuery ? ' · SQL-запрос' : d.tableName ? ` · ${d.tableName}` : ''}
-                  {` · полей: ${d.fields.length}`}
-                </span>
-              </button>
+                  {isAdmin && (
+                    <button
+                      type="button"
+                      title={`Удалить датасет ${d.slug}`}
+                      aria-label={`Удалить датасет ${d.title}`}
+                      onClick={() => setPendingDelete(d)}
+                      className="absolute top-3 right-3 z-10 flex h-6 w-6 cursor-pointer items-center justify-center rounded-control text-base leading-none text-fg-muted hover:bg-bad-soft hover:text-bad"
+                    >
+                      <span aria-hidden="true">×</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    aria-pressed={selected === d.slug}
+                    className="flex w-full cursor-pointer flex-col gap-2 p-4 text-left"
+                    onClick={() => setSelected(d.slug === selected ? null : d.slug)}
+                  >
+                    <span className="flex items-center justify-between gap-2.5 pr-7">
+                      <span className="text-[15px] font-semibold">{d.title}</span>
+                      <Badge tone={STATUS_TONES[d.status] ?? 'neutral'}>{d.status}</Badge>
+                    </span>
+                    <span className="text-sm text-fg-muted">{d.description ?? '—'}</span>
+                    <span className="text-xs text-fg-muted">
+                      {SOURCE_LABELS[d.source]}
+                      {d.isQuery ? ' · SQL-запрос' : d.tableName ? ` · ${d.tableName}` : ''}
+                      {` · полей: ${d.fields.length}`}
+                    </span>
+                  </button>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
+          )}
+        </Panel>
       )}
 
-      {detailError && <Alert className="mb-4">{detailError}</Alert>}
-
-      {detail && (
-        <DatasetDetailPanel
-          key={detail.dataset.slug}
-          detail={detail}
+      {opened && (
+        <DatasetModal
+          key={opened.slug}
+          dataset={opened}
           isAdmin={isAdmin}
-          busy={busy}
-          onRefresh={() => runAdminAction(() => refreshDataset(detail.dataset.slug))}
-          onDelete={() => setPendingDelete(detail.dataset)}
-          onUpload={(file) => runAdminAction(() => uploadDatasetCsv(detail.dataset.slug, file))}
-          onReload={() => runAdminAction(async () => undefined)}
+          onClose={() => setSelected(null)}
+          onChanged={loadList}
+          onDelete={() => setPendingDelete(opened)}
         />
       )}
 
@@ -219,299 +337,5 @@ export function DatasetsPage() {
         />
       )}
     </Page>
-  )
-}
-
-function DatasetCreateForm({ busy, onCreated }: { busy: boolean; onCreated: (slug: string) => void }) {
-  const [source, setSource] = useState<DatasetSource>('clickhouse')
-  const [mode, setMode] = useState<'table' | 'query'>('table')
-  const [slug, setSlug] = useState('')
-  const [title, setTitle] = useState('')
-  const [description, setDescription] = useState('')
-  const [dsn, setDsn] = useState('env:DATABASE_URL')
-  const [tableName, setTableName] = useState('')
-  const [query, setQuery] = useState('')
-  const [error, setError] = useState<string | null>(null)
-
-  const asQuery = source !== 'csv' && mode === 'query'
-
-  const submit = async () => {
-    setError(null)
-    try {
-      const { dataset } = await createDataset({
-        slug, title, description: description || undefined, source, dsn,
-        tableName: asQuery ? '' : tableName,
-        query: asQuery ? query : '',
-      })
-      onCreated(dataset.slug)
-      setSlug(''); setTitle(''); setDescription(''); setTableName(''); setQuery('')
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Не удалось создать датасет')
-    }
-  }
-
-  return (
-    <div className={FORM}>
-      <Field label="Источник">
-        <Select value={source} onChange={(e) => setSource(e.target.value as DatasetSource)}>
-          <option value="clickhouse">ClickHouse</option>
-          <option value="postgres">PostgreSQL</option>
-          <option value="oracle">Oracle</option>
-          <option value="csv">CSV-файл</option>
-        </Select>
-      </Field>
-      {source !== 'csv' && (
-        <Field label="Читаем">
-          <Select value={mode} onChange={(e) => setMode(e.target.value as 'table' | 'query')}>
-            <option value="table">Таблицу или представление</option>
-            <option value="query">SQL-запрос</option>
-          </Select>
-        </Field>
-      )}
-      <Field label="Slug">
-        <Input value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="my-data" />
-      </Field>
-      <Field label="Название">
-        <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Мои данные" />
-      </Field>
-      <Field label="Описание">
-        <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="необязательно" />
-      </Field>
-      {source !== 'csv' && (
-        <>
-          <Field label="DSN, env:VAR или app:postgres" className="col-span-full">
-            <Input
-              value={dsn}
-              onChange={(e) => setDsn(e.target.value)}
-              placeholder={DSN_PLACEHOLDERS[source]}
-            />
-          </Field>
-          {asQuery ? (
-            <Field
-              label="SQL-запрос"
-              className="col-span-full"
-              hint="Один запрос, SELECT или WITH. Выполняется заново на каждую секцию отчёта, на каждый список значений фильтра и на детализацию — держите его дешёвым: тяжёлую агрегацию лучше вынести в представление источника."
-            >
-              <Textarea
-                rows={10}
-                className="font-mono text-xs"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder={'SELECT o.order_date, c.region, o.revenue\nFROM orders o\nJOIN clients c ON c.id = o.client_id'}
-              />
-            </Field>
-          ) : (
-            <Field label="Таблица">
-              <Input value={tableName} onChange={(e) => setTableName(e.target.value)} placeholder={TABLE_PLACEHOLDERS[source]} />
-            </Field>
-          )}
-        </>
-      )}
-      {source === 'csv' && (
-        <p className="col-span-full text-sm text-fg-muted">Файл .csv загружается после создания на карточке датасета.</p>
-      )}
-      {error && (
-        <div className="col-span-full">
-          <Alert>{error}</Alert>
-        </div>
-      )}
-      <div className="col-span-full">
-        <Button
-          variant="primary"
-          disabled={busy || !slug || !title || (asQuery && !query.trim())}
-          onClick={submit}
-        >
-          Создать и проверить
-        </Button>
-      </div>
-    </div>
-  )
-}
-
-function DatasetDetailPanel({
-  detail,
-  isAdmin,
-  busy,
-  onRefresh,
-  onDelete,
-  onUpload,
-  onReload,
-}: {
-  detail: DatasetDetail
-  isAdmin: boolean
-  busy: boolean
-  onRefresh: () => void
-  onDelete: () => void
-  onUpload: (file: File) => void
-  onReload: () => void
-}) {
-  const { dataset, preview } = detail
-  const notes = detail.notes ?? []
-  return (
-    <section className="rounded-card border border-line bg-surface p-5">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-lg font-semibold">
-          {dataset.title} <span className="font-mono text-xs font-normal text-fg-muted">{dataset.slug}</span>
-        </h2>
-        {isAdmin && (
-          <div className="flex flex-wrap gap-2">
-            <label className="inline-flex cursor-pointer items-center rounded-control border border-transparent px-3.5 py-1.5 text-sm text-fg-muted hover:bg-surface-sunken hover:text-fg">
-              Загрузить CSV
-              <input
-                type="file"
-                accept=".csv"
-                hidden
-                onChange={(e) => {
-                  const file = e.target.files?.[0]
-                  if (file) onUpload(file)
-                  e.target.value = ''
-                }}
-              />
-            </label>
-            <Button variant="ghost" disabled={busy} onClick={onRefresh}>
-              Проверить и вычитать схему
-            </Button>
-            <Button variant="danger" disabled={busy} onClick={onDelete}>
-              Удалить
-            </Button>
-          </div>
-        )}
-      </div>
-      {dataset.error && <Alert className="mb-3">{dataset.error}</Alert>}
-      {notes.map((note) => (
-        <Alert key={note} tone="warn" className="mb-3">{note}</Alert>
-      ))}
-
-      {/* редактор нужен и датасету без источника вовсе: у него isQuery = false,
-          и без этого починить его в интерфейсе было бы нечем */}
-      {isAdmin && dataset.source !== 'csv' && (dataset.isQuery || !dataset.tableName) && (
-        <DatasetQueryEditor dataset={dataset} busy={busy} onSaved={onReload} />
-      )}
-
-      <h3 className="mt-5 mb-2 text-sm font-semibold">Поля</h3>
-      {dataset.fields.length > 0 ? (
-        <Table>
-          <thead>
-            <tr>
-              <Th>Поле</Th>
-              <Th>Тип</Th>
-            </tr>
-          </thead>
-          <tbody>
-            {dataset.fields.map((f) => (
-              <Tr key={f.name}>
-                <Td>{f.name}</Td>
-                <Td>{f.type}</Td>
-              </Tr>
-            ))}
-          </tbody>
-        </Table>
-      ) : (
-        <p className="text-sm text-fg-muted">Схема не вычитана — выполните «Проверить и вычитать схему».</p>
-      )}
-
-      <h3 className="mt-5 mb-2 text-sm font-semibold">Превью (первые 50 строк)</h3>
-      {preview && preview.columns.length > 0 ? (
-        <Table>
-          <thead>
-            <tr>
-              {preview.columns.map((c) => (
-                <Th key={c}>{c}</Th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {preview.rows.map((row, i) => (
-              <Tr key={i}>
-                {row.map((cell, j) => (
-                  <Td key={j}>{cell}</Td>
-                ))}
-              </Tr>
-            ))}
-          </tbody>
-        </Table>
-      ) : (
-        <p className="text-sm text-fg-muted">Превью недоступно.</p>
-      )}
-
-      {isAdmin && dataset.status === 'ok' && dataset.fields.length > 0 && (
-        <DatasetSemanticDraft slug={dataset.slug} />
-      )}
-    </section>
-  )
-}
-
-/** Правка запроса-источника: схема перечитывается сразу, потерянные поля — предупреждением. */
-function DatasetQueryEditor({
-  dataset,
-  busy,
-  onSaved,
-}: {
-  dataset: Dataset
-  busy: boolean
-  onSaved: () => void
-}) {
-  const initial = dataset.query ?? ''
-  const [open, setOpen] = useState(false)
-  const [value, setValue] = useState(initial)
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [warnings, setWarnings] = useState<string[]>([])
-
-  const save = async () => {
-    setSaving(true)
-    setError(null)
-    try {
-      const result = await patchDataset(dataset.slug, { query: value })
-      setWarnings(result.warnings ?? [])
-      onSaved()
-      if (!(result.warnings ?? []).length) setOpen(false)
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Не удалось сохранить запрос')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  if (!open) {
-    return (
-      <div className="mb-3">
-        <Button variant="ghost" onClick={() => { setValue(initial); setOpen(true) }}>
-          Показать и править SQL-запрос
-        </Button>
-      </div>
-    )
-  }
-
-  return (
-    <div className="mb-3 rounded-card border border-line bg-surface-sunken p-4">
-      <Field
-        label="SQL-запрос"
-        hint="После сохранения схема вычитывается заново. Если колонка исчезнет, разрезы и показатели на ней перестанут работать."
-      >
-        <Textarea
-          rows={12}
-          className="font-mono text-xs"
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-        />
-      </Field>
-      {error && <Alert className="mt-3">{error}</Alert>}
-      {warnings.map((w) => (
-        <Alert key={w} className="mt-3">{w}</Alert>
-      ))}
-      <div className="mt-3 flex gap-2">
-        <Button
-          variant="primary"
-          disabled={busy || saving || !value.trim() || value === initial}
-          onClick={save}
-        >
-          Сохранить и проверить
-        </Button>
-        <Button variant="ghost" disabled={saving} onClick={() => { setOpen(false); setWarnings([]); setError(null) }}>
-          Отмена
-        </Button>
-      </div>
-    </div>
   )
 }
