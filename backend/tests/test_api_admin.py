@@ -44,17 +44,13 @@ def test_список_пользователей(client, admin_headers, plain_us
     assert body['users'][0]['role'] in ('admin', 'user')
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    'дефект: UserPublic — CamelModel с extra="allow", поэтому model_validate '
-    'проносит password_hash из строки БД в ответ. Чинится ConfigDict(extra="ignore") '
-    'на UserPublic или явной сборкой словаря, как в security._public_user'))
 def test_список_пользователей_не_отдаёт_хеш_пароля(client, admin_headers, plain_user):
+    """UserPublic собирается из строки users, где лежит и хеш пароля."""
     body = client.get('/api/admin/users', headers=admin_headers).json()
 
     assert all('password_hash' not in u for u in body['users'])
 
 
-@pytest.mark.xfail(strict=True, reason='тот же дефект UserPublic на создании пользователя')
 def test_создание_пользователя_не_отдаёт_хеш_пароля(client, admin_headers):
     body = client.post('/api/admin/users', headers=admin_headers,
                        json={'username': 'ivanov', 'password': 'пароль'}).json()

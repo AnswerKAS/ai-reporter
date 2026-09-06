@@ -65,28 +65,9 @@ def test_разовая_отправка_выключается_сама(metabas
 
     stored = mail.get_schedule(schedule['id'])
     assert stored['enabled'] is False
-    # повторно рассылка не сработает: due_schedules берёт только enabled
+    # срок следующей отправки обнуляется: повторять разовую рассылку нечем
+    assert stored['next_run_at'] is None
     assert mail.due_schedules(datetime.now()) == []
-
-
-NULLABLE_BUG = (
-    'дефект: update_schedule() пишет колонку только при fields.get(column) is not None, '
-    'поэтому next_run_at нельзя обнулить. Отработавшая разовая рассылка остаётся '
-    'с прошедшим сроком следующей отправки — она выключена и не повторится, '
-    'но в интерфейсе показывает «следующая отправка» в прошлом. Тем же путём '
-    'ходит и _apply_next_run в api/mail.py. Чинится флагом вроде clear_error '
-    '(например clear_next_run) или списком колонок, которые можно писать в NULL'
-)
-
-
-@pytest.mark.xfail(strict=True, reason=NULLABLE_BUG)
-def test_отработавшая_разовая_рассылка_теряет_срок(metabase, sent):
-    past = (datetime.now() - timedelta(days=1)).isoformat(timespec='seconds')
-    schedule = due_schedule(kind='once', run_at=past, next_run_at=past)
-
-    asyncio.run(Worker()._send_due())
-
-    assert mail.get_schedule(schedule['id'])['next_run_at'] is None
 
 
 def test_несозревшие_рассылки_не_трогаются(metabase, sent):

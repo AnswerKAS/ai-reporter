@@ -436,6 +436,31 @@ def test_загрузка_csv(client, metabase, sources, admin_headers):
     assert response.json()['rows'] == 1
 
 
+def test_csv_датасет_работает_на_настоящем_адаптере(client, metabase, sources,
+                                                     admin_headers, monkeypatch):
+    """Сквозной путь CSV без подмены источника: создание, загрузка, схема, превью.
+
+    У CSV-датасета DSN пуст по определению, и adapter_for обязан это принять.
+    """
+    sources.uninstall(monkeypatch)
+    client.post('/api/datasets', headers=admin_headers,
+                json={'slug': 'f', 'title': 'Файл', 'source': 'csv'})
+
+    uploaded = client.post(
+        '/api/datasets/f/upload', headers=admin_headers,
+        files=csv_file(content='city,revenue\nМосква,10\nТверь,20\n'.encode()))
+
+    assert uploaded.status_code == 200
+    assert uploaded.json()['rows'] == 2
+    dataset = uploaded.json()['dataset']
+    assert dataset['status'] == 'ok'
+    assert [f['name'] for f in dataset['fields']] == ['city', 'revenue']
+
+    card = client.get('/api/datasets/f', headers=admin_headers).json()
+    assert card['preview']['columns'] == ['city', 'revenue']
+    assert card['preview']['rows'] == [['Москва', '10'], ['Тверь', '20']]
+
+
 def test_загрузка_в_не_csv_датасет_409(client, dataset, admin_headers):
     response = client.post('/api/datasets/sales/upload', headers=admin_headers, files=csv_file())
 

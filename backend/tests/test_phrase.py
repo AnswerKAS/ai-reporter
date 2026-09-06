@@ -87,22 +87,16 @@ def test_разрез_подразумевает_график(catalog):
     assert (section['type'], section['kind']) == ('chart', 'bar')
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    'дефект: в parse_section ветка «есть разрез → chart» сразу ставит kind="bar", '
-    'поэтому следующее правило «по дате естественнее линия» недостижимо — '
-    'временной ряд всегда рисуется столбцами. Чинится удалением chart_kind = "bar" '
-    'из этой ветки: правило ниже само выберет line для разреза-даты'))
 def test_по_дате_естественнее_линия(catalog):
     section = phrase.parse_section('выручка по дате', catalog)['section']
 
-    assert (section['type'], section['kind']) == ('chart', 'line')
+    assert (section['type'], section['kind'], section['by']) == ('chart', 'line', ['day'])
 
 
-def test_разрез_даты_пока_рисуется_столбцами(catalog):
-    """Характеризующий тест к тому же дефекту."""
-    section = phrase.parse_section('выручка по дате', catalog)['section']
+def test_по_категориям_естественнее_столбцы(catalog):
+    section = phrase.parse_section('выручка по городам', catalog)['section']
 
-    assert (section['type'], section['kind'], section['by']) == ('chart', 'bar', ['day'])
+    assert (section['type'], section['kind']) == ('chart', 'bar')
 
 
 @pytest.mark.parametrize('word,kind', [

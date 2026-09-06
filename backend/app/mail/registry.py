@@ -150,6 +150,12 @@ def create_schedule(*, report_slug: str, author_id: str, recipients: list[str], 
     return get_schedule(schedule_id)
 
 
+# Колонки, которым None — это значение, а не «не трогать». «Следующей
+# отправки нет» надо уметь записать: отработавшая разовая рассылка иначе
+# навсегда остаётся с прошедшим сроком в карточке.
+NULLABLE = ('next_run_at',)
+
+
 def update_schedule(schedule_id: str, **fields) -> dict | None:
     columns = ('server_id', 'format', 'kind', 'at_time', 'weekday', 'day_of_month',
                'run_at', 'next_run_at', 'last_run_at', 'last_status', 'last_error')
@@ -158,6 +164,8 @@ def update_schedule(schedule_id: str, **fields) -> dict | None:
         if fields.get(column) is not None:
             sets.append(f'{column} = %s')
             values.append(fields[column])
+        elif column in NULLABLE and column in fields:
+            sets.append(f'{column} = NULL')
     if fields.get('recipients') is not None:
         sets.append('recipients = %s')
         values.append(json.dumps(fields['recipients'], ensure_ascii=False))
