@@ -67,9 +67,15 @@ def resolve_dataset_dsn(dataset: dict) -> str:
     - `app:postgres` или пустой DSN (для postgres) — тот же сервер PostgreSQL,
       где хранятся метаданные приложения (PG* из .env);
     - литеральный DSN.
+
+    У CSV подключения нет вовсе: источник — файл в хранилище артефактов, и
+    требовать DSN здесь значит не дать создать адаптер ни одному такому
+    датасету. Это же исключение уже сделано в api/datasets.py:_validate_dsn.
     """
     raw = (dataset.get('dsn') or '').strip()
     source = dataset.get('source') or ''
+    if source == 'csv':
+        return ''
     if raw.lower().startswith('env:'):
         var = raw[4:].strip()
         value = os.environ.get(var, '').strip()

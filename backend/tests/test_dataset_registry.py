@@ -72,18 +72,8 @@ def test_адаптер_по_типу_источника(metabase, source, dsn, 
     assert isinstance(ds.adapter_for(dataset), cls)
 
 
-CSV_DSN_BUG = (
-    'дефект: adapter_for() резолвит DSN до выбора адаптера, а resolve_dataset_dsn() '
-    'требует непустой DSN у всех источников, кроме postgres. У CSV-датасета DSN пуст '
-    'по определению, поэтому адаптер не создаётся никогда: refresh_schema ловит '
-    'DatasetError и ставит датасету status=error «DSN не задан», а карточка отдаёт 502. '
-    'Чинится ранним возвратом для source == "csv" в resolve_dataset_dsn — так же, '
-    'как это уже сделано в api/datasets.py:_validate_dsn'
-)
-
-
-@pytest.mark.xfail(strict=True, reason=CSV_DSN_BUG)
 def test_адаптер_csv_смотрит_в_хранилище(metabase):
+    """У CSV подключения нет: DSN пуст, источник — файл в хранилище."""
     dataset = {'slug': 'файл', 'source': 'csv', 'dsn': '', 'table_name': ''}
 
     adapter = ds.adapter_for(dataset)
@@ -92,9 +82,7 @@ def test_адаптер_csv_смотрит_в_хранилище(metabase):
     assert adapter._file == ds.csv_path('файл')
 
 
-@pytest.mark.xfail(strict=True, reason=CSV_DSN_BUG)
 def test_вычитка_схемы_csv_датасета(metabase):
-    """Последствие того же дефекта: загруженный CSV не вычитывается."""
     make('файл', source='csv', dsn='', table_name='', schema=[], status='new')
     ds.save_csv('файл', 'city,revenue\nМосква,10\n'.encode())
 
@@ -104,14 +92,8 @@ def test_вычитка_схемы_csv_датасета(metabase):
     assert [f['name'] for f in refreshed['schema']] == ['city', 'revenue']
 
 
-def test_csv_датасет_пока_получает_статус_error(metabase):
-    """Характеризующий тест к тому же дефекту: фиксирует поведение как оно есть."""
-    make('файл', source='csv', dsn='', table_name='', schema=[], status='new')
-    ds.save_csv('файл', 'city,revenue\nМосква,10\n'.encode())
-
-    refreshed = ds.refresh_schema('файл')
-
-    assert (refreshed['status'], refreshed['error']) == ('error', 'DSN не задан')
+def test_у_csv_датасета_dsn_не_спрашивается(metabase):
+    assert ds.resolve_dataset_dsn({'source': 'csv', 'dsn': ''}) == ''
 
 
 def test_неизвестный_тип_источника(metabase):

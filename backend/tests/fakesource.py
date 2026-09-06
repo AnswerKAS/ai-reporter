@@ -119,6 +119,9 @@ class Sources:
     def __init__(self) -> None:
         self.specs: dict[str, FakeSource] = {}
         self.adapters: list[FakeAdapter] = []
+        # настоящая фабрика адаптеров: нужна тестам, которые проверяют
+        # источник целиком (например CSV — он читает файл, а не сеть)
+        self.real_adapter_for = None
 
     def add(self, slug: str, spec: FakeSource | None = None, **kwargs) -> FakeSource:
         self.specs[slug] = spec or FakeSource(**kwargs)
@@ -139,5 +142,12 @@ class Sources:
     def install(self, monkeypatch) -> 'Sources':
         from app.datasets import registry as dataset_registry
 
+        self.real_adapter_for = dataset_registry.adapter_for
         monkeypatch.setattr(dataset_registry, 'adapter_for', self.adapter_for)
         return self
+
+    def uninstall(self, monkeypatch) -> None:
+        # вернуть настоящую фабрику адаптеров на время одного теста
+        from app.datasets import registry as dataset_registry
+
+        monkeypatch.setattr(dataset_registry, 'adapter_for', self.real_adapter_for)

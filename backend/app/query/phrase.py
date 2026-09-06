@@ -191,11 +191,10 @@ def parse_section(text: str, catalog) -> dict:
 
     # вид секции: явное слово важнее, иначе разрез подразумевает график
     if section_type is None:
-        if chart_kind is not None:
+        if chart_kind is not None or dimensions:
+            # вид графика не выбираем здесь: его подберёт правило ниже,
+            # которое знает тип разреза
             section_type = 'chart'
-        elif dimensions:
-            section_type = 'chart'
-            chart_kind = 'bar'
         else:
             section_type = 'kpi'
     if section_type == 'chart' and chart_kind is None:

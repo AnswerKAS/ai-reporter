@@ -15,6 +15,19 @@ class CamelModel(BaseModel):
 
 
 class UserPublic(CamelModel):
+    """Пользователь наружу: ровно четыре поля и ничего сверх них.
+
+    Модель собирается прямо из строки таблицы users, где лежит и
+    password_hash, поэтому extra='allow' базового CamelModel здесь не
+    подходит: лишние колонки строки уехали бы в ответ API вместе с хешем.
+    """
+
+    model_config = ConfigDict(
+        alias_generator=to_camel,
+        populate_by_name=True,
+        extra='ignore',
+    )
+
     id: str
     username: str
     role: Literal['admin', 'user']
