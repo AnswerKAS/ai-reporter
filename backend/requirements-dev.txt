@@ -1,0 +1,4 @@
+# Зависимости тестов (сами тесты — в backend/tests, запуск: .venv/bin/python -m pytest)
+-r requirements.txt
+pytest>=8.0
+httpx>=0.27

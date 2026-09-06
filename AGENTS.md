@@ -19,6 +19,21 @@
 - Существующие спеки сверять с поведением при изменениях в той области;
   валидация — `openspec validate --all`.
 
+## Тесты
+
+- Набор — `backend/tests` (pytest, ~1100 тестов, ~12 с). Запуск:
+  `cd backend && .venv/bin/pip install -r requirements-dev.txt` и
+  `.venv/bin/python -m pytest`. Наружу набор не ходит: метабаза — SQLite
+  в памяти под контрактом psycopg (`tests/fakedb.py`, приложение выполняет свои
+  настоящие SQL-тексты), источники — фейковый адаптер, запоминающий собранный
+  SQL (`tests/fakesource.py`), почта и модель подменяются.
+- `tests/test_routes.py` — опись всех методов API: новый эндпоинт без тестов
+  роняет набор. Добавили метод — добавьте его в опись вместе с тестами.
+- `@pytest.mark.xfail(strict=True)` в наборе означает найденный дефект: тест
+  описывает правильное поведение, `reason` — причину и способ починки. После
+  исправления тест начнёт проходить, и strict сообщит об этом (XPASS).
+  Подробнее — `backend/tests/README.md`.
+
 ## Структура проекта
 
 - `frontend/` — React 19 + Vite + TS, роутинг `react-router-dom`, графики `recharts`, стили — **Tailwind v4** (CSS-first, без `tailwind.config.js`). Типы отчёта: `src/types/report.ts`, датасеты: `src/types/dataset.ts`, словарь и декларация: `src/types/semantic.ts`, рендеры секций `src/components/`, страницы `src/pages/` (в т.ч. `/builder`, `/datasets`, `/model`), левое меню — `src/components/Sidebar.tsx`: отчёты (`ReportTree.tsx`: поиск, создание/переименование/удаление); ширину меню читатель тянет за разделитель (`SidebarPanel`, 200–560 px, стрелки и Home с клавиатуры, значение в `localStorage`). Список отчётов один на приложение — контекст `src/lib/reports.tsx` (`ReportsProvider`/`useReports`), после создания, правки или удаления отчёта надо звать `reload()`.
