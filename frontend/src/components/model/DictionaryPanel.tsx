@@ -82,6 +82,10 @@ export function DictionaryPanel({
   const [filter, setFilter] = useState<Filter>('all')
   const [editingMetric, setEditingMetric] = useState<Editing<Metric>>(null)
   const [editingDimension, setEditingDimension] = useState<Editing<Dimension>>(null)
+  /** Раскрытые датасеты: только те, где читатель нажал вопреки умолчанию.
+      Хранить решение по каждому датасету нельзя — умолчание зависит от
+      фильтров, и «не трогал» пришлось бы отличать от «свернул». */
+  const [override, setOverride] = useState<Record<string, boolean>>({})
   const { confirm, dialog } = useConfirm()
 
   const broken = metrics.filter((m) => m.status === 'error').length
@@ -115,6 +119,22 @@ export function DictionaryPanel({
       }))
       .filter((group) => group.metrics.length > 0 || group.dimensions.length > 0)
   }, [metrics, dimensions, datasets, query, dataset, onlyBroken])
+
+  /** Пока фильтры не тронуты, датасеты свёрнуты: на трёх десятках датасетов
+      развёрнутый словарь — это километр прокрутки, в котором ничего не найти.
+      Как только читатель сузил список сам, показываем найденное сразу. */
+  const openByDefault =
+    query.trim() !== '' || dataset !== '' || onlyBroken || groups.length === 1
+  const isOpen = (slug: string) => override[slug] ?? openByDefault
+  const toggle = (slug: string) =>
+    setOverride((current) => ({ ...current, [slug]: !(current[slug] ?? openByDefault) }))
+
+  /** Смена фильтра начинает просмотр заново — прежние «свернул/развернул»
+      к новому списку не относятся. */
+  const refilter = (apply: () => void) => {
+    apply()
+    setOverride({})
+  }
 
   const saveMetric = (input: MetricInput) =>
     run(async () => {
@@ -174,14 +194,14 @@ export function DictionaryPanel({
             placeholder="Поиск по названию, коду, выражению или полю"
             aria-label="Поиск по словарю"
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => refilter(() => setQuery(e.target.value))}
           />
           <Select
             fit
             className="py-1.5"
             aria-label="Датасет"
             value={dataset}
-            onChange={(e) => setDataset(e.target.value)}
+            onChange={(e) => refilter(() => setDataset(e.target.value))}
           >
             <option value="">все датасеты</option>
             {datasets.map((d) => (
@@ -193,7 +213,7 @@ export function DictionaryPanel({
           <Segmented
             ariaLabel="Что показывать"
             value={filter}
-            onChange={setFilter}
+            onChange={(next) => refilter(() => setFilter(next))}
             options={[
               { value: 'all', label: 'Всё' },
               { value: 'error', label: 'Выражения с ошибкой', count: broken },
@@ -220,15 +240,19 @@ export function DictionaryPanel({
         <div className="flex flex-col gap-6">
           {groups.map((group) => (
             <section key={group.slug}>
-              <header className="mb-2.5 flex flex-wrap items-baseline gap-2 border-b border-line pb-1.5">
-                <h3 className="text-sm font-semibold">{group.dataset?.title ?? group.slug}</h3>
-                <code className="text-xs text-fg-muted">{group.slug}</code>
-                {group.dataset && group.dataset.status !== 'ok' && (
-                  <Badge tone="warn">датасет: {group.dataset.status}</Badge>
-                )}
-              </header>
+              <DatasetHeader
+                title={group.dataset?.title ?? group.slug}
+                slug={group.slug}
+                status={group.dataset?.status}
+                metrics={group.metrics.length}
+                dimensions={group.dimensions.length}
+                broken={group.metrics.filter((m) => m.status === 'error').length}
+                open={isOpen(group.slug)}
+                onToggle={() => toggle(group.slug)}
+              />
 
-              <div className="grid gap-4 md:grid-cols-2">
+              {!isOpen(group.slug) ? null : (
+              <div className="mt-3 grid gap-4 md:grid-cols-2">
                 <Column title="Показатели" count={group.metrics.length}>
                   {group.metrics.map((m) => (
                     <li key={m.slug}>
@@ -332,6 +356,7 @@ export function DictionaryPanel({
                   </Column>
                 )}
               </div>
+              )}
             </section>
           ))}
         </div>
@@ -359,6 +384,53 @@ export function DictionaryPanel({
       )}
       {dialog}
     </Panel>
+  )
+}
+
+/**
+ * Шапка датасета: она же кнопка раскрытия.
+ *
+ * В свёрнутом виде датасет — одна строка со сводкой: сколько показателей,
+ * сколько разрезов и есть ли битые выражения. Этого хватает, чтобы понять,
+ * куда идти, не прокручивая весь словарь.
+ */
+function DatasetHeader({
+  title,
+  slug,
+  status,
+  metrics,
+  dimensions,
+  broken,
+  open,
+  onToggle,
+}: {
+  title: string
+  slug: string
+  status?: string
+  metrics: number
+  dimensions: number
+  broken: number
+  open: boolean
+  onToggle: () => void
+}) {
+  return (
+    <button
+      type="button"
+      aria-expanded={open}
+      onClick={onToggle}
+      className="flex w-full cursor-pointer flex-wrap items-center gap-2 border-b border-line px-1 py-2 text-left transition-colors hover:bg-surface-sunken"
+    >
+      <span aria-hidden="true" className="w-3 text-fg-muted">
+        {open ? '▾' : '▸'}
+      </span>
+      <span className="text-sm font-semibold">{title}</span>
+      <code className="text-xs text-fg-muted">{slug}</code>
+      {status && status !== 'ok' && <Badge tone="warn">датасет: {status}</Badge>}
+      {broken > 0 && <Badge tone="bad">с ошибкой: {broken}</Badge>}
+      <span className="ml-auto text-xs text-fg-muted">
+        показателей: {metrics} · разрезов: {dimensions}
+      </span>
+    </button>
   )
 }
 
