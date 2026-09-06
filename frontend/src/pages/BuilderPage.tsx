@@ -196,7 +196,18 @@ function StepLink({
   )
 }
 
+/**
+ * `/builder` и `/builder/<slug>` — один и тот же элемент маршрута, и без
+ * ключа React переиспользует состояние: после правки отчёта «Новый отчёт»
+ * открывался с его секциями и выбранными данными, а переход от одного отчёта
+ * к другому подсовывал раскладку предыдущего.
+ */
 export function BuilderPage() {
+  const { slug } = useParams<{ slug: string }>()
+  return <Builder key={slug ?? 'new'} />
+}
+
+function Builder() {
   const { slug } = useParams<{ slug: string }>()
   const navigate = useNavigate()
   const { isAdmin } = useAuth()
@@ -211,7 +222,14 @@ export function BuilderPage() {
   const [loading, setLoading] = useState(true)
 
   // --- шаг 1: данные ---
-  const [step, setStep] = useState<1 | 2>(1)
+  /** Правка открывается сразу раскладкой: автор пришёл со страницы отчёта
+      править секции, а не пересобирать выбор данных. Шаг «Данные» никуда не
+      делся — он рядом, первым в цепочке. */
+  const [step, setStep] = useState<1 | 2>(editing ? 2 : 1)
+  /** Определение едет отдельным запросом. Пока оно не приехало, показывать
+      нечего: раскладка была бы пустой, а шаг «Данные» — тем самым «не тем
+      экраном», на который жалуются. */
+  const [definitionLoading, setDefinitionLoading] = useState(editing)
   const [pickedDatasets, setPickedDatasets] = useState<string[]>([])
   const [pickedMetrics, setPickedMetrics] = useState<string[]>([])
   const [pickedDimensions, setPickedDimensions] = useState<string[]>([])
@@ -283,7 +301,13 @@ export function BuilderPage() {
 
   // правка существующего отчёта: шаг 1 восстанавливается из определения
   useEffect(() => {
-    if (!slug || metrics.length === 0) return
+    if (!slug) return
+    if (metrics.length === 0) {
+      // словарь ещё едет; приехал пустым — правка невозможна, но и висеть
+      // скелетом незачем
+      if (!loading) setDefinitionLoading(false)
+      return
+    }
     let alive = true
     fetchDefinition(slug)
       .then(({ definition: def, title: savedTitle, description: savedDescription }) => {
@@ -325,13 +349,20 @@ export function BuilderPage() {
         setDrilldown(Boolean(def.drilldown))
         setStep(2)
       })
-      .catch((err) =>
-        alive && setSaveError(err instanceof Error ? err.message : 'не удалось открыть определение'),
-      )
+      .catch((err) => {
+        if (!alive) return
+        setSaveError(err instanceof Error ? err.message : 'не удалось открыть определение')
+        // определения нет (отчёт старше конструктора) — собирать придётся
+        // с выбора данных
+        setStep(1)
+      })
+      .finally(() => {
+        if (alive) setDefinitionLoading(false)
+      })
     return () => {
       alive = false
     }
-  }, [slug, metrics.length, metricsBySlug, dimensionsBySlug])
+  }, [slug, loading, metrics.length, metricsBySlug, dimensionsBySlug])
 
   // --- что доступно на шаге 2 ---
   const availableMetrics = useMemo(
@@ -691,10 +722,10 @@ export function BuilderPage() {
     }
   }
 
-  if (loading)
+  if (loading || definitionLoading)
     return (
       <Page>
-        <PageHeader title="Конструктор отчёта" />
+        <PageHeader title={editing ? 'Правка отчёта' : 'Конструктор отчёта'} />
         <SkeletonRows count={5} />
       </Page>
     )
