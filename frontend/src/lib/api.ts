@@ -708,6 +708,50 @@ export interface ParseResult {
   fallbackReason?: string
 }
 
+/** Реплика переписки о будущем отчёте. Историю держит клиент: сервер
+ *  диалоговых сессий не заводит, вся переписка уходит с каждым обращением. */
+export interface ChatMessage {
+  role: 'user' | 'assistant'
+  text: string
+}
+
+export interface ChatAnswer {
+  /** Ответ собеседника по-русски — его и показываем в переписке. */
+  reply: string
+  /** Раскладка целиком; `null`, когда собеседник переспрашивает. */
+  definition: ReportDefinition | null
+  /** Название, предложенное моделью, — подставляется в пустое поле. */
+  title?: string | null
+  notes: ParseNote[]
+  source?: 'llm' | 'parser'
+  /** Какая модель ответила: у диалога и разбора они разные. */
+  model?: string
+}
+
+/** Ход диалога об отчёте. Текущее определение уходит вместе с перепиской:
+ *  «добавь фильтр по городу» — это правка раскладки, а не новый отчёт. */
+export async function chatReport(
+  messages: ChatMessage[],
+  context: {
+    fields?: ReportField[]
+    computed?: ComputedField[]
+    datasets?: string[]
+    definition?: ReportDefinition | null
+  } = {},
+): Promise<ChatAnswer> {
+  return request<ChatAnswer>('/reports/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      messages,
+      fields: context.fields ?? [],
+      computed: context.computed ?? [],
+      datasets: context.datasets ?? [],
+      definition: context.definition ?? null,
+    }),
+  })
+}
+
 /** Разбор описания. Поля и формулы отчёта передаются вместе с текстом:
  *  в общем словаре их нет, но для этого отчёта это полноценные показатели. */
 export async function parsePhrase(

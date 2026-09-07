@@ -125,6 +125,34 @@ def parse_phrase(payload: dict, user: dict = Depends(get_current_user)) -> dict:
         catalog.close()
 
 
+@router.post('/reports/chat')
+def chat_report(payload: dict, user: dict = Depends(get_current_user)) -> dict:
+    """Диалог о будущем отчёте: переписка → ответ собеседника и раскладка.
+
+    Отличие от `/reports/parse` — разговор продолжается: несогласие
+    пользователя не заканчивает разбор, а становится следующей репликой, и
+    модель правит уже собранное определение, а не пересобирает его с нуля.
+    Поэтому текущее определение приезжает вместе с перепиской.
+
+    Состояния на сервере нет: переписку держит клиент и присылает целиком,
+    в модель уходит её хвост. Ошибка сверки со словарём возвращается ответом
+    собеседника, а не 422, — иначе диалог обрывался бы там, где ради него и
+    затевался.
+    """
+    messages = payload.get('messages') or []
+    fields = payload.get('fields') or []
+    computed = payload.get('computed') or []
+    datasets = payload.get('datasets') or []
+    definition = payload.get('definition') or None
+    catalog = query_builder.Catalog()
+    try:
+        return interpret.chat(messages, catalog, fields, computed, datasets, definition)
+    except DatasetError as exc:
+        raise HTTPException(422, str(exc))
+    finally:
+        catalog.close()
+
+
 @router.post('/reports/preview')
 def preview_definition(definition: ReportDefinition, user: dict = Depends(get_current_user)) -> dict:
     """Выполняет определение, ничего не сохраняя — живой предпросмотр конструктора.

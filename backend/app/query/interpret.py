@@ -43,18 +43,33 @@ _AUTH_PATHS = (
 
 
 # Разбор описания — короткая задача на структурирование. Модель выбрана
-# замером на реальном словаре: разбирался запрос из пяти строк, считалось,
-# сколько разобрано верно.
-#   gemini-2.5-flash   1.9–3.3 с   5/5   (четыре прогона подряд)
-#   gpt-4o-mini        1.6–3.0 с   4/5
-#   claude-haiku-4.5   3.0 с       4/5
-#   minimax-m2        43.5 с       4/5
-#   glm-5.3-flash    ~120 с        —  медленно
-#   deepseek-v4-flash ~40 с        —  не укладывается в TIMEOUT
+# замером на реальном словаре (139 показателей, 145 разрезов; три описания:
+# три секции с фильтром, «максимально подробно» с двумя фильтрами и
+# арифметика с формулой). Считалось время худшего из трёх и число
+# выполненных ожиданий; ответы проверялись тем же _validate.
+#   gemini-2.5-flash   1.2–1.8 с   10/10
+#   deepseek-v4-flash  3.3–9.6 с   10/10   в 7 раз дешевле gemini
+#   glm-5.3-flash     11.1–26.7 с  10/10   цена как у deepseek
+#   gpt-5-nano        22.6–33.4 с   9/10
+# ВАЖНО: мерить последовательно. Прежняя запись «glm ~120 с, deepseek ~40 с»
+# получена параллельным прогоном — это было время очереди у провайдера, а не
+# модели, и она отвела от обеих дешёвых моделей на год.
 # Переопределяется INTERPRET_MODEL; при промахе по TIMEOUT разбор уходит
 # к запасной, а не заставляет ждать.
 DEFAULT_MODEL = 'google/gemini-2.5-flash'
 DEFAULT_FALLBACK = 'openai/gpt-4o-mini'
+
+# Диалог — задача другая: модель держит переписку, правит готовую раскладку и
+# пишет человеку ответ словами. Здесь важнее цена и качество, чем доли
+# секунды, поэтому взяты дешёвые модели, а предел ожидания свой: с общим
+# INTERPRET_TIMEOUT (25 с) диалог рвался бы на каждом втором ходу.
+CHAT_MODEL_DEFAULT = 'deepseek/deepseek-v4-flash'
+CHAT_FALLBACK_DEFAULT = 'z-ai/glm-5.3-flash'
+CHAT_TIMEOUT = int(os.environ.get('CHAT_TIMEOUT', '90'))
+
+# Сколько последних реплик уходит в модель. Переписка живёт на клиенте и
+# растёт бесконечно, а платим мы за каждый токен промпта на каждом ходу.
+CHAT_HISTORY = int(os.environ.get('CHAT_HISTORY', '12'))
 
 
 def _models() -> tuple[str | None, str | None]:
@@ -66,6 +81,12 @@ def _models() -> tuple[str | None, str | None]:
     """
     return (os.environ.get('INTERPRET_MODEL') or DEFAULT_MODEL,
             os.environ.get('INTERPRET_FALLBACK_MODEL') or DEFAULT_FALLBACK)
+
+
+def _chat_models() -> tuple[str | None, str | None]:
+    """Модели диалога — отдельные от моделей разбора: разные задачи, разный выбор."""
+    return (os.environ.get('CHAT_MODEL') or CHAT_MODEL_DEFAULT,
+            os.environ.get('CHAT_FALLBACK_MODEL') or CHAT_FALLBACK_DEFAULT)
 
 
 def _openrouter_key() -> str | None:
@@ -100,12 +121,13 @@ def available() -> bool:
     return bool(_openrouter_key())
 
 
-def _ask(prompt_text: str, model: str, key: str) -> str:
+def _ask(prompt_text: str, model: str, key: str, timeout: int | None = None) -> str:
     """Один запрос к модели через LangChain.
 
-    Разбор описания — это одно обращение, а не диалог: модель получает
-    словарь и текст, возвращает JSON. Никаких инструментов и сессий,
-    поэтому и обёртка нужна самая тонкая.
+    Модель получает готовый текст и возвращает JSON: ни инструментов, ни
+    сессий у провайдера мы не заводим — переписку диалога склеивает
+    вызывающий, поэтому обёртка нужна самая тонкая. Предел ожидания
+    передаётся параметром: у диалога он свой, больше разборного.
     """
     from langchain_core.messages import HumanMessage
     from langchain_openai import ChatOpenAI
@@ -128,12 +150,13 @@ def _ask(prompt_text: str, model: str, key: str) -> str:
         raise DatasetError(
             'сейчас разбирается слишком много описаний — попробуйте через минуту'
         )
+    limit = TIMEOUT if timeout is None else timeout
     future = _POOL.submit(call)
     try:
-        answer = future.result(timeout=TIMEOUT)
+        answer = future.result(timeout=limit)
     except _Timeout:
         raise DatasetError(
-            f'модель не ответила за {TIMEOUT} с — попробуйте ещё раз '
+            f'модель не ответила за {limit} с — попробуйте ещё раз '
             'или соберите отчёт мышью: поля слева, секции по центру'
         )
     content = answer.content
@@ -146,11 +169,11 @@ def _ask(prompt_text: str, model: str, key: str) -> str:
 
 _JSON_RE = re.compile(r'\{.*\}', re.DOTALL)
 
-_INSTRUCTIONS = """Ты превращаешь описание отчёта на русском в JSON-декларацию.
-
-Отвечай ТОЛЬКО JSON, без пояснений и без markdown-ограждений.
-
-Формат:
+# Формат декларации и правила выбора полей — одни и те же у одиночного
+# разбора и у диалога: два расходящихся списка правил разъехались бы
+# молча, а порядок правил здесь — не стилистика, а работоспособность
+# (правило арифметики обязано стоять до правила «верни ошибку»).
+_FORMAT = """Формат:
 {"sections": [
    {"type": "kpi|chart|table", "kind": "bar|line|area|pie|null",
     "metrics": ["slug", ...], "by": ["slug"], "grain": "day|week|month|quarter|year|null",
@@ -160,7 +183,9 @@ _INSTRUCTIONS = """Ты превращаешь описание отчёта н�
  "computed": [{"key": "calc_1", "title": "A / B", "left": "slug_a", "op": "/",
                "right": "slug_b", "format": "number"}]}
 
-Правила:
+"""
+
+_RULES = """Правила:
 - В metrics, by и filters допустимы ТОЛЬКО slug из списков ниже. Ничего не выдумывай.
 
 - АРИФМЕТИКА. Фраза вида «A разделить на B», «A делить на B», «A / B»,
@@ -214,6 +239,60 @@ m_fee: Комиссия, m_rev: Выручка, d_city: Город. Описан
                "left": "m_pay", "op": "/", "right": "m_fee", "format": "number"}]}
 Ответ {"error": ...} на такое описание — ошибка.
 """
+
+_INSTRUCTIONS = ("""Ты превращаешь описание отчёта на русском в JSON-декларацию.
+
+Отвечай ТОЛЬКО JSON, без пояснений и без markdown-ограждений.
+
+"""
+                 + _FORMAT + _RULES)
+
+
+# Диалог: та же декларация и те же правила выбора полей, но разговор.
+# Правила диалога стоят ПОСЛЕ общих намеренно — они отменяют «одна мысль
+# пользователя — одна секция», а модель следует последнему прочитанному.
+_CHAT_INSTRUCTIONS = ("""Ты помогаешь человеку собрать отчёт: он пишет обычными
+словами, чего хочет, ты предлагаешь раскладку и правишь её по его замечаниям.
+
+Отвечай ТОЛЬКО JSON, без пояснений и без markdown-ограждений:
+{"reply": "ответ человеку по-русски",
+ "title": "короткое название отчёта",
+ "definition": {"sections": [...], "filters": [...], "computed": [...]} | null}
+
+- reply — одна-две фразы живым языком: что собрал или что уточняешь. Не
+  пересказывай JSON и не перечисляй slug'и — человек их не знает.
+- definition — раскладка целиком или null, если собирать пока нечего.
+- title — название по смыслу отчёта, без слова «отчёт» в начале.
+
+"""
+                      + _FORMAT + _RULES + """
+
+ПРАВИЛА ДИАЛОГА (они главнее правил выше, если расходятся):
+- ТЫ ВСЕГДА СОБИРАЕШЬ ОТЧЁТ. definition: null — недопустимый ответ, кроме
+  одного случая: человек ничего не просил (поздоровался, поблагодарил).
+  Отказ «у меня нет таких показателей» ЗАПРЕЩЁН. Правило выше про
+  {"error": ...} в диалоге НЕ действует: ошибку вместо отчёта не возвращай.
+- Не нашёл того, что просили дословно, — возьми БЛИЖАЙШЕЕ по смыслу из
+  списков и собери отчёт из него, а в reply одной фразой скажи, что взял
+  вместо просимого. Человек посмотрит и поправит: это разговор, а не экзамен.
+  Просили «продажи», а есть «Сумма заказов» — это они и есть. Просили
+  «города», а есть «Регион» или «Магазин» — бери его. Ничего похожего нет
+  вовсе — собери отчёт из самых осмысленных показателей и разрезов, какие
+  видишь, и скажи в reply, что показываешь вместо просимого.
+- Человек просит ОТЧЁТ, а не одну секцию. Правило «одна мысль — одна секция»
+  здесь НЕ действует: разложи просьбу подробно, насколько позволяет словарь —
+  карточки итогов (kpi), динамика по разрезу типа date (chart line), разбивки
+  по значимым разрезам (chart bar), таблица подробностей (table).
+- Заведи фильтр по КАЖДОМУ разрезу, который попал в секции, включая разрез
+  типа date — он станет фильтром-периодом.
+- Показатели и разрезы ОДНОЙ СЕКЦИИ бери из одного датасета (подпись
+  [датасет ...] в списках): секция из разных датасетов не соберётся. Разные
+  секции из разных датасетов — можно.
+- Если пришло ТЕКУЩЕЕ ОПРЕДЕЛЕНИЕ, человек правит его. Верни ВСЁ определение
+  целиком с внесённой правкой: секции, которых он не касался, сохрани как есть.
+- Не переспрашивай. Уточнение задавай одной фразой в reply ПОСЛЕ того, как
+  собрал отчёт, а не вместо него.
+""")
 
 
 def vocabulary_of(catalog, fields=None, computed=None, datasets=None) -> tuple[dict, dict]:
@@ -474,8 +553,30 @@ def _validate(data: dict, metrics: dict, dimensions: dict) -> dict:
             section['kind'] = None
         if not section['by']:
             section['grain'] = None
-    return {'sections': sections, 'filters': data.get('filters') or [],
+    return {'sections': sections, 'filters': _filters(data, dimensions),
             'computed': computed}
+
+
+def _filters(data: dict, dimensions: dict) -> list[dict]:
+    """Фильтры ответа с видом по типу разреза.
+
+    Модель почти всегда пишет `select`, и по разрезу-дате это давало читателю
+    список всех дат источника вместо периода «с — по». Вид фильтра —
+    следствие типа разреза, а не мнения модели: руками конструктор делает
+    ровно так же (`d.type === 'date' ? 'daterange' : 'select'`).
+    """
+    out: list[dict] = []
+    for item in data.get('filters') or []:
+        if not isinstance(item, dict):
+            continue
+        slug = item.get('dimension')
+        kind = item.get('kind')
+        if dimensions.get(slug, {}).get('type') == 'date':
+            kind = 'daterange'
+        elif kind not in ('select', 'text', 'number', 'daterange'):
+            kind = 'select'
+        out.append({**item, 'dimension': slug, 'kind': kind})
+    return out
 
 
 class _Vocabulary:
@@ -484,6 +585,26 @@ class _Vocabulary:
     def __init__(self, metrics: dict, dimensions: dict) -> None:
         self.metrics = metrics
         self.dimensions = dimensions
+
+
+def _used_titles(definition: dict, metrics: dict, dimensions: dict) -> tuple[list[str], list[str]]:
+    """Что модель в итоге взяла — теми же названиями, что видит человек.
+
+    Без этого строка отчёта о разборе писала «показатели: —» у отчёта, который
+    модель собрала правильно: в секциях лежат slug'и, а не названия.
+    """
+    # формулы модели в словаре не значатся — их названия берём у них самих
+    formulas = {item['key']: item['title'] for item in definition.get('computed') or []}
+
+    def titles(source: dict, slugs) -> list[str]:
+        return [(source[s].get('title') if s in source else formulas.get(s)) or s
+                for s in slugs if s in source or s in formulas]
+
+    used_metrics, used_dimensions = [], []
+    for section in definition.get('sections') or []:
+        used_metrics += [m for m in section.get('metrics') or [] if m not in used_metrics]
+        used_dimensions += [d for d in section.get('by') or [] if d not in used_dimensions]
+    return titles(metrics, used_metrics), titles(dimensions, used_dimensions)
 
 
 def parse(text: str, catalog, fields=None, computed=None, datasets=None) -> dict:
@@ -519,27 +640,15 @@ def parse(text: str, catalog, fields=None, computed=None, datasets=None) -> dict
             continue
         # ответ модели разбирается и сверяется со словарём; выдумки не проходят
         definition = _validate(_extract(raw), metrics, dimensions)
-        # что модель в итоге взяла — теми же названиями, что показывает разбор
-        # по словарю. Без этого строка отчёта о разборе писала «показатели: —»
-        # у отчёта, который модель собрала правильно
-        def titles(source: dict, slugs) -> list[str]:
-            # формулы модели в словаре не значатся — их названия берём у них самих
-            return [(source[s].get('title') if s in source else formulas.get(s)) or s
-                    for s in slugs if s in source or s in formulas]
-
-        formulas = {item['key']: item['title'] for item in definition.get('computed') or []}
-        used_metrics, used_dimensions = [], []
-        for section in definition['sections']:
-            used_metrics += [m for m in section['metrics'] if m not in used_metrics]
-            used_dimensions += [d for d in section['by'] if d not in used_dimensions]
+        used_metrics, used_dimensions = _used_titles(definition, metrics, dimensions)
         return {
             'definition': definition,
             'notes': [{
                 'text': text,
                 'problem': None,
                 'source': _model_id(model),
-                'matchedMetrics': titles(metrics, used_metrics),
-                'matchedDimensions': titles(dimensions, used_dimensions),
+                'matchedMetrics': used_metrics,
+                'matchedDimensions': used_dimensions,
             }],
             'source': 'llm',
         }
@@ -554,3 +663,155 @@ def parse(text: str, catalog, fields=None, computed=None, datasets=None) -> dict
     parsed['fallbackReason'] = (problems[0][:200] if problems
                                 else 'модель не настроена')
     return parsed
+
+
+def _extract_chat(raw: str) -> dict:
+    """Ответ диалога: `{reply, title, definition}` из того, что прислала модель.
+
+    Проза — законный ответ собеседника, а не брак: в диалоге модель вправе
+    переспросить словами. Поэтому текст, из которого не вышло JSON, становится
+    репликой, а не ошибкой «модель ответила не тем».
+    """
+    text = (raw or '').strip()
+    for candidate in [text] + (_JSON_RE.findall(text) or []):
+        try:
+            data = json.loads(candidate)
+        except Exception:
+            continue
+        if not isinstance(data, dict):
+            continue
+        if 'reply' in data or 'definition' in data:
+            return data
+        # модель нередко отдаёт одну декларацию без обёртки — это тот же ответ
+        if 'sections' in data or 'error' in data:
+            return {'reply': '', 'definition': data}
+    plain = ' '.join(text.split())
+    if plain:
+        return {'reply': plain[:1500], 'definition': None}
+    return {'reply': '', 'definition': None}
+
+
+def _history(messages, limit: int) -> str:
+    """Переписка в текст. В модель уходит хвост: платим за каждый ход целиком."""
+    tail = [m for m in messages if str(m.get('text') or '').strip()][-limit:]
+    lines = []
+    for item in tail:
+        who = 'ПОЛЬЗОВАТЕЛЬ' if (item.get('role') or 'user') == 'user' else 'ТЫ'
+        lines.append(f'{who}: {str(item["text"]).strip()}')
+    return '\n'.join(lines)
+
+
+def chat(messages, catalog, fields=None, computed=None, datasets=None,
+         definition=None) -> dict:
+    """Переписка об отчёте → ответ собеседника и, когда есть что, определение.
+
+    Отличие от `parse` не в модели, а в том, что разговор продолжается:
+    несогласие пользователя — не конец разбора, а следующая реплика. Поэтому
+    ошибка сверки со словарём («модель назвала поле, которого нет») здесь
+    не исключение, а ответ собеседника: диалог ради того и заведён, чтобы
+    из такого положения можно было выйти уточнением, а не начинать заново.
+
+    Состояния у сервера нет: всю переписку присылает клиент, а текущая
+    раскладка приезжает рядом — по ней модель правит, а не пересобирает.
+    """
+    said = [m for m in (messages or []) if str((m or {}).get('text') or '').strip()]
+    if not said:
+        raise DatasetError('напишите, какой отчёт нужен — обычными словами')
+    # Словарь диалога — ВЕСЬ, а не суженный до выбранных датасетов.
+    # Сужение здесь оборачивалось отказом: автор с одним выбранным датасетом
+    # на «отчёт по продажам» получал «у меня нет показателей по продажам»,
+    # хотя в установке они есть. Датасеты выбранного шага остаются
+    # предпочтением, а не границей: собеседник обязан собрать отчёт.
+    metrics, dimensions = vocabulary_of(catalog, fields, computed)
+    if not metrics:
+        raise DatasetError(
+            'в словаре нет ни одного показателя: собирать не из чего. '
+            'Заведите показатели в «Модели данных»'
+        )
+
+    preferred = ''
+    picked = [str(slug) for slug in (datasets or []) if slug]
+    if picked:
+        preferred = ('\n\nАВТОР УЖЕ ВЫБРАЛ ДАТАСЕТЫ: ' + ', '.join(picked)
+                     + '. Предпочитай их поля, но если просимого там нет — бери '
+                       'из любых других: отчёт должен собраться.')
+    current = ''
+    if definition and (definition.get('sections') or definition.get('filters')):
+        current = ('\n\nТЕКУЩЕЕ ОПРЕДЕЛЕНИЕ (его правит пользователь):\n'
+                   + json.dumps(definition, ensure_ascii=False))
+    prompt_text = (f'{_CHAT_INSTRUCTIONS}\n\n{_vocabulary(metrics, dimensions)}'
+                   f'{preferred}{current}\n\nПЕРЕПИСКА:\n'
+                   f'{_history(said, CHAT_HISTORY)}\n\nТвой ответ (только JSON):')
+
+    key = _openrouter_key()
+    if not key:
+        raise DatasetError(
+            'модель не настроена, поэтому диалог недоступен — соберите отчёт '
+            'мышью или разберите описание кнопкой «Собрать по описанию»'
+        )
+
+    problems: list[str] = []
+    for model in _chat_models():
+        if not model:
+            continue
+        try:
+            raw = _ask(prompt_text, model, key, timeout=CHAT_TIMEOUT)
+        except DatasetError as exc:
+            problems.append(str(exc))
+            continue
+        except Exception as exc:
+            problems.append(f'{_model_id(model)}: {exc}')
+            continue
+
+        answer = _extract_chat(raw)
+        reply = str(answer.get('reply') or '').strip()
+        title = str(answer.get('title') or '').strip() or None
+        proposed = answer.get('definition')
+        if not isinstance(proposed, dict):
+            # собеседник переспрашивает — законный ход, собирать пока нечего
+            return {'reply': reply or 'Уточните, что посчитать и в каком разрезе.',
+                    'definition': None, 'title': None, 'notes': [],
+                    'source': 'llm', 'model': _model_id(model)}
+
+        try:
+            checked = _validate(proposed, metrics, dimensions)
+        except DatasetError as exc:
+            # Модель ошиблась в именах — показываем ей ошибку и просим собрать
+            # заново, а не сдаёмся: собеседник обязан собрать отчёт, и один
+            # лишний ход дешевле отказа, за которым человеку идти некуда.
+            try:
+                repeat = _ask(
+                    f'{prompt_text}\n\nТЫ ОШИБСЯ: {exc}\nСобери отчёт заново — '
+                    'только из полей, которые есть в списках выше. '
+                    'Отказываться нельзя.',
+                    model, key, timeout=CHAT_TIMEOUT)
+                checked = _validate(_extract_chat(repeat).get('definition') or {},
+                                    metrics, dimensions)
+                reply = reply or 'Собрал отчёт из полей, которые нашлись в словаре.'
+            except DatasetError:
+                # второй промах — тема для разговора, а не 422: текст ошибки
+                # уже написан как обращение к человеку
+                return {'reply': str(exc), 'definition': None, 'title': None,
+                        'notes': [], 'source': 'llm', 'model': _model_id(model)}
+
+        used_metrics, used_dimensions = _used_titles(checked, metrics, dimensions)
+        return {
+            'reply': reply or 'Собрал раскладку — посмотрите предпросмотр ниже.',
+            'definition': checked,
+            'title': title,
+            'notes': [{
+                'text': said[-1].get('text', ''),
+                'problem': None,
+                'source': _model_id(model),
+                'matchedMetrics': used_metrics,
+                'matchedDimensions': used_dimensions,
+            }],
+            'source': 'llm',
+            'model': _model_id(model),
+        }
+
+    print('[chat] модель не сработала: ' + ' | '.join(p[:200] for p in problems))
+    raise DatasetError(
+        (problems[0] if problems else 'модель не ответила')
+        + ' Попробуйте ещё раз или соберите отчёт мышью.'
+    )

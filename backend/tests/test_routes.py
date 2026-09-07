@@ -61,6 +61,7 @@ COVERED = {
     ('PUT', '/api/reports/{slug}/favorite'): 'test_api_reports.py',
     ('DELETE', '/api/reports/{slug}/favorite'): 'test_api_reports.py',
     ('POST', '/api/reports/parse'): 'test_api_reports.py',
+    ('POST', '/api/reports/chat'): 'test_interpret_chat.py',
     ('POST', '/api/reports/preview'): 'test_api_reports.py',
     ('POST', '/api/reports/builder'): 'test_api_reports.py',
     ('GET', '/api/reports/{slug}'): 'test_api_reports.py',

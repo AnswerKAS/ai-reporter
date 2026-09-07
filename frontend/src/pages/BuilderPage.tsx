@@ -14,7 +14,6 @@ import type {
   ReportDefinition,
   SectionDefinition,
 } from '../types/semantic'
-import type { ParseNote } from '../lib/api'
 import {
   ApiError,
   createBuilderReport,
@@ -23,18 +22,18 @@ import {
   fetchDimensions,
   fetchLinks,
   fetchMetrics,
-  parsePhrase,
   previewDefinition,
   saveDefinition,
   updateReport,
 } from '../lib/api'
 import { SectionsGrid } from '../components/SectionsGrid'
 import { ReportFilters } from '../components/ReportFilters'
-import { Alert, Button, Field, Input, Modal, Page, PageHeader, Select, SkeletonRows, Textarea, useConfirm } from '../components/ui'
+import { Alert, Button, Field, Input, Modal, Page, PageHeader, Select, SkeletonRows, useConfirm } from '../components/ui'
 import { cn } from '../lib/cn'
 import type { LinkIndex } from '../lib/dataset-links'
 import { buildLinkIndex, reachableFrom } from '../lib/dataset-links'
 import { DatasetPicker } from '../components/builder/DatasetPicker'
+import { ReportChat } from '../components/builder/ReportChat'
 import { useAuth } from '../lib/auth'
 import { useReports } from '../lib/reports'
 import { VocabularyDialog } from '../components/builder/VocabularyDialog'
@@ -135,6 +134,18 @@ function plural(n: number, one: string, few: string, many: string): string {
   if (mod10 === 1) return `${n} ${one}`
   if (mod10 >= 2 && mod10 <= 4) return `${n} ${few}`
   return `${n} ${many}`
+}
+
+/** Состояние отчёта до предложения собеседника: его возвращает «вернуть как
+    было». Выбор шага «Данные» входит в снимок наравне с раскладкой — диалог
+    правит и его, и откат обязан отменять правку целиком. */
+interface Snapshot {
+  sections: SectionDefinition[]
+  filters: FilterDefinition[]
+  computed: ComputedField[]
+  pickedMetrics: string[]
+  pickedDimensions: string[]
+  pickedDatasets: string[]
 }
 
 function emptySection(type: SectionDefinition['type'] = 'kpi'): SectionDefinition {
@@ -313,13 +324,7 @@ function Builder() {
   // клик — равноправная альтернатива перетаскиванию: с тачскрина и с
   // клавиатуры drag недоступен, поэтому поле кладётся в активную секцию
   const [activeSection, setActiveSection] = useState(0)
-  const [phrase, setPhrase] = useState('')
-  const [phraseNotes, setPhraseNotes] = useState<ParseNote[]>([])
-  const [phraseSource, setPhraseSource] = useState<'llm' | 'parser' | null>(null)
-  const [phraseFallback, setPhraseFallback] = useState<string | null>(null)
   const [vocabularyOpen, setVocabularyOpen] = useState(false)
-  const [phraseError, setPhraseError] = useState<string | null>(null)
-  const [parsing, setParsing] = useState(false)
 
   useEffect(() => {
     let alive = true
@@ -783,19 +788,14 @@ function Builder() {
     moveSection(payload.index, index)
   }
 
-  /** Словесное ТЗ — короткий путь: заполняет и выбор полей, и раскладку. */
-  const onPhrase = async () => {
-    if (!phrase.trim()) return
-    setParsing(true)
-    setPhraseError(null)
-    try {
-      const { definition: parsed, notes, source, fallbackReason } = await parsePhrase(phrase, {
-        fields: ownFields,
-        computed,
-        datasets: pickedDatasets,
-      })
-      setPhraseSource(source ?? null)
-      setPhraseFallback(fallbackReason ?? null)
+  /**
+   * Разобранное определение — в конструктор: датасеты, показатели, разрезы,
+   * формулы и раскладка. Один путь и у диалога, и у разбора по словарю:
+   * раскладка, приехавшая двумя разными дорогами, обязана попадать в
+   * состояние одинаково.
+   */
+  const applyDefinition = useCallback(
+    (parsed: ReportDefinition) => {
       const usedM = new Set<string>()
       const usedD = new Set<string>()
       for (const s of parsed.sections) {
@@ -833,17 +833,48 @@ function Builder() {
       }
       setSections(parsed.sections.length ? parsed.sections : [emptySection()])
       setFilters(parsed.filters ?? [])
-      setPhraseNotes(notes)
       setActiveSection(0)
-    } catch (err) {
-      setPhraseNotes([])
-      setPhraseSource(null)
-      setPhraseFallback(null)
-      setPhraseError(err instanceof Error ? err.message : 'не удалось разобрать описание')
-    } finally {
-      setParsing(false)
-    }
-  }
+    },
+    [metricsBySlug, dimensionsBySlug, ownByKey],
+  )
+
+  /** Раскладка, бывшая до предложения собеседника, — её возвращает откат. */
+  const before = useRef<Snapshot | null>(null)
+
+  const applyProposal = useCallback(
+    (parsed: ReportDefinition, proposed?: string | null) => {
+      // снимок берём перед каждым предложением, а не один раз за диалог:
+      // «вернуть как было» отменяет последний ход, а не весь разговор
+      before.current = {
+        sections,
+        filters,
+        computed,
+        pickedMetrics,
+        pickedDimensions,
+        pickedDatasets,
+      }
+      applyDefinition(parsed)
+      // предложение смотрят на раскладке — туда и переводим: иначе автор
+      // видит ответ «собрал отчёт» и пустой шаг «Данные» под ним
+      setStep(2)
+      // название предлагает модель, но своё автор уже не потеряет
+      if (proposed && !title.trim()) setTitle(proposed)
+    },
+    [applyDefinition, sections, filters, computed, pickedMetrics, pickedDimensions,
+     pickedDatasets, title],
+  )
+
+  const revertProposal = useCallback(() => {
+    const snapshot = before.current
+    if (!snapshot) return
+    setSections(snapshot.sections)
+    setFilters(snapshot.filters)
+    setComputed(snapshot.computed)
+    setPickedMetrics(snapshot.pickedMetrics)
+    setPickedDimensions(snapshot.pickedDimensions)
+    setPickedDatasets(snapshot.pickedDatasets)
+    before.current = null
+  }, [])
 
   const onSave = async () => {
     setSaveError(null)
@@ -917,6 +948,25 @@ function Builder() {
       </div>
       {saveError && <Alert className="my-3">{saveError}</Alert>}
 
+      {/* Диалог стоит над шагами, а не внутри раскладки: описать отчёт словами
+          человек хочет с самого начала, а шаг «Раскладка» до выбора первого
+          показателя недоступен — там диалог был бы заперт за тем самым
+          выбором, который он и должен избавить делать руками. */}
+      <ReportChat
+        fields={ownFields}
+        computed={computed}
+        datasets={pickedDatasets}
+        definition={definition}
+        isAdmin={isAdmin}
+        saving={busy}
+        title={title}
+        onTitle={setTitle}
+        onProposal={applyProposal}
+        onRevert={revertProposal}
+        onSave={onSave}
+        onVocabulary={() => setVocabularyOpen(true)}
+      />
+
       {step === 1 ? (
         <StepData
           datasets={datasets}
@@ -938,58 +988,6 @@ function Builder() {
         />
       ) : (
         <>
-          <section className="mt-3 flex flex-col gap-2 rounded-card border border-line bg-surface p-3.5">
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-medium tracking-wide text-fg-muted uppercase">Или опишите отчёт словами</span>
-              {/* словами можно назвать только то, что есть в словаре, — и он
-                  должен быть под рукой, а не угадываться по тексту ошибки */}
-              <button
-                type="button"
-                aria-label="Показать словарь отчёта"
-                title="Какие показатели и разрезы можно назвать"
-                onClick={() => setVocabularyOpen(true)}
-                className="flex size-5 cursor-pointer items-center justify-center rounded-full border border-line text-xs font-semibold text-fg-muted transition-colors hover:border-accent hover:text-accent"
-              >
-                ?
-              </button>
-            </div>
-            <Textarea
-              value={phrase}
-              onChange={(e) => setPhrase(e.target.value)}
-              rows={3}
-              placeholder={'итого выручка и заказы, отдельно выручка по городам столбцами'}
-            />
-            <div className="flex flex-wrap items-center gap-3">
-              <Button variant="ghost" onClick={onPhrase} disabled={parsing || !phrase.trim()}>
-                {parsing ? 'Разбираю, это занимает секунд двадцать…' : 'Собрать по описанию'}
-              </Button>
-              <span className="text-xs text-fg-muted">
-                {phraseSource === 'parser'
-                  ? `разобрано по словарю, без модели${phraseFallback ? `: ${phraseFallback}` : ''}`
-                  : phraseSource === 'llm'
-                    ? 'разобрала модель; выбирать ей можно только из словаря, поэтому выдуманных показателей в отчёте не будет'
-                    : 'описание разбирает модель, но выбирает она только из вашего словаря — результат виден и правится руками'}
-              </span>
-            </div>
-            {phraseError && <Alert>{phraseError}</Alert>}
-            {phraseNotes.length > 0 && (
-              <ul className="list-disc pl-4 text-xs text-fg-muted">
-                {phraseNotes.map((note, i) => (
-                  <li key={i} className={note.problem ? 'text-bad' : undefined}>
-                    «{note.text}» —{' '}
-                    {note.problem
-                      ? note.problem
-                      : `показатели: ${(note.matchedMetrics ?? []).join(', ') || '—'}` +
-                        (note.matchedDimensions?.length
-                          ? `; разрез: ${note.matchedDimensions.join(', ')}`
-                          : '')}
-                    {note.unmatched?.length ? ` · не понял: ${note.unmatched.join(', ')}` : ''}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
-
           <div className="my-4 flex flex-wrap gap-4">
             <Field label="Название">              <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Продажи по городам" /></Field>
             <Field label="Описание">              <Input

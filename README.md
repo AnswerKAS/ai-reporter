@@ -86,6 +86,7 @@ npm run dev                 # http://localhost:5173 (/api проксируетс
 | `CLICKHOUSE_SECURE` | TLS к ClickHouse (по умолчанию `true`, сертификат — `certifi`) |
 | `ORACLE_DSN` | необязательна: DSN для датасетов Oracle, если ссылаться на него как `env:ORACLE_DSN`. Формат `oracle://user:pass@host:1521/SERVICE` (для SID — `?sid=ORCL`), спецсимволы в пароле percent-encoded |
 | `OPENROUTER_API_KEY`, `INTERPRET_MODEL` | разбор словесного ТЗ моделью; без ключа разбирает встроенный парсер |
+| `CHAT_MODEL`, `CHAT_FALLBACK_MODEL`, `CHAT_TIMEOUT` | диалог о будущем отчёте в конструкторе: модели и предел ожидания (умолчания — `deepseek/deepseek-v4-flash`, `z-ai/glm-5.3-flash`, 90 с) |
 | `ARTIFACTS_DIR`, `ARTIFACTS_STORAGE` | каталог и режим хранилища загруженных CSV |
 | `CORS_ORIGINS`, `SESSION_TTL_DAYS` | источники фронта и срок жизни сессии |
 
