@@ -30,8 +30,11 @@ import {
 } from '../lib/api'
 import { SectionsGrid } from '../components/SectionsGrid'
 import { ReportFilters } from '../components/ReportFilters'
-import { Alert, Button, Field, Input, Modal, Page, PageHeader, Select, SkeletonRows, Textarea } from '../components/ui'
+import { Alert, Button, Field, Input, Modal, Page, PageHeader, Select, SkeletonRows, Textarea, useConfirm } from '../components/ui'
 import { cn } from '../lib/cn'
+import type { LinkIndex } from '../lib/dataset-links'
+import { buildLinkIndex, reachableFrom } from '../lib/dataset-links'
+import { DatasetPicker } from '../components/builder/DatasetPicker'
 import { useAuth } from '../lib/auth'
 import { useReports } from '../lib/reports'
 import { VocabularyDialog } from '../components/builder/VocabularyDialog'
@@ -122,6 +125,16 @@ function startDrag(event: DragEvent, payload: DragPayload) {
   event.dataTransfer.setData(MIME, raw)
   event.dataTransfer.setData('text/plain', raw)
   event.dataTransfer.effectAllowed = 'copyMove'
+}
+
+/** Русское склонение при числе: «1 поле», «2 поля», «5 полей». */
+function plural(n: number, one: string, few: string, many: string): string {
+  const mod100 = n % 100
+  const mod10 = n % 10
+  if (mod100 >= 11 && mod100 <= 14) return `${n} ${many}`
+  if (mod10 === 1) return `${n} ${one}`
+  if (mod10 >= 2 && mod10 <= 4) return `${n} ${few}`
+  return `${n} ${many}`
 }
 
 function emptySection(type: SectionDefinition['type'] = 'kpi'): SectionDefinition {
@@ -253,6 +266,7 @@ function Builder() {
   const navigate = useNavigate()
   const { isAdmin } = useAuth()
   const { reload: reloadReports } = useReports()
+  const { confirm, dialog } = useConfirm()
   const editing = Boolean(slug)
 
   // --- словарь ---
@@ -519,24 +533,15 @@ function Builder() {
     [dimensionInfo],
   )
 
+  /** Индекс связей: соседи и группы (компоненты связности). Считается один
+      раз на список связей — им живут и достижимость на раскладке, и цвета
+      групп на плитке датасетов. */
+  const linkIndex = useMemo(() => buildLinkIndex(links), [links])
+
   /** Датасеты, достижимые по связям, — джойн строит бэкенд, UI лишь не мешает. */
   const reachable = useCallback(
-    (from: Set<string>): Set<string> => {
-      const seen = new Set(from)
-      const queue = [...from]
-      while (queue.length) {
-        const current = queue.pop()!
-        for (const l of links) {
-          const other = l.leftSlug === current ? l.rightSlug : l.rightSlug === current ? l.leftSlug : null
-          if (other && !seen.has(other)) {
-            seen.add(other)
-            queue.push(other)
-          }
-        }
-      }
-      return seen
-    },
-    [links],
+    (from: Set<string>): Set<string> => reachableFrom(linkIndex, from),
+    [linkIndex],
   )
 
   const dimensionFits = useCallback(
@@ -557,6 +562,96 @@ function Builder() {
       return [...new Set(slugs.filter(Boolean) as string[])]
     },
     [datasetOfField, datasetOfDimension],
+  )
+
+  /**
+   * Ключи, которые уходят из отчёта вместе с датасетом: его показатели и
+   * разрезы словаря, свои поля отчёта и формулы, чьи операнды ушли.
+   *
+   * Считается одним набором заранее, а не по очереди от уже обновлённого
+   * состояния: апдейтеры React выполняются лениво, и второй шаг увидел бы
+   * прежний набор.
+   */
+  const datasetFallout = useCallback(
+    (slug: string): Set<string> => {
+      const gone = new Set<string>()
+      metrics.forEach((m) => m.datasetSlug === slug && gone.add(m.slug))
+      dimensions.forEach((d) => d.datasetSlug === slug && gone.add(d.slug))
+      ownFields.forEach((f) => f.datasetSlug === slug && gone.add(f.key))
+      computed.forEach((c) => (gone.has(c.left) || gone.has(c.right)) && gone.add(c.key))
+      return gone
+    },
+    [metrics, dimensions, ownFields, computed],
+  )
+
+  /**
+   * Снятие датасета: из отчёта уходит всё, что на него опиралось.
+   *
+   * Чистить только отмеченные показатели и разрезы мало: палитра раскладки
+   * собирается в том числе из своих полей отчёта и о выборе датасетов не
+   * знает, поэтому поле снятого датасета оставалось бы на раскладке и
+   * уезжало в сохранённое определение вместе с формулой на нём, ссылкой в
+   * секции и фильтром.
+   */
+  const removeDataset = useCallback(
+    (slug: string) => {
+      const gone = datasetFallout(slug)
+      const apply = () => {
+        setPickedDatasets((prev) => prev.filter((s) => s !== slug))
+        setPickedMetrics((prev) => prev.filter((m) => !gone.has(m)))
+        setPickedDimensions((prev) => prev.filter((d) => !gone.has(d)))
+        setOwnFields((prev) => prev.filter((f) => f.datasetSlug !== slug))
+        setComputed((prev) => prev.filter((c) => !gone.has(c.key)))
+        setFilters((prev) => prev.filter((f) => !gone.has(f.dimension)))
+        setSections((prev) =>
+          prev.map((s) => {
+            const by = s.by.filter((b) => !gone.has(b))
+            return {
+              ...s,
+              metrics: s.metrics.filter((m) => !gone.has(m)),
+              by,
+              // шаг по дате нужен, только пока в разрезах есть дата, а
+              // сортировка по ушедшему полю — ссылка в никуда
+              grain: by.some((b) => dimensionInfo(b)?.type === 'date') ? s.grain : null,
+              orderBy: s.orderBy && gone.has(s.orderBy) ? null : s.orderBy,
+            }
+          }),
+        )
+      }
+
+      // Спрашиваем, только когда снятие заденет раскладку: вопрос на каждый
+      // снятый датасет — это вопрос, который перестают читать.
+      const hitFields = new Set<string>()
+      let hitSections = 0
+      for (const s of sections) {
+        const hit = [...s.metrics, ...s.by].filter((key) => gone.has(key))
+        if (hit.length === 0) continue
+        hitSections += 1
+        hit.forEach((key) => hitFields.add(key))
+      }
+      if (hitSections === 0) return apply()
+      confirm({
+        title: 'Убрать датасет из отчёта?',
+        description:
+          `Вместе с датасетом «${datasetTitle(slug)}» из раскладки уйдёт ` +
+          `${plural(hitFields.size, 'поле', 'поля', 'полей')} ` +
+          `в ${plural(hitSections, 'секции', 'секциях', 'секциях')}. ` +
+          'Свои поля и формулы этого датасета тоже будут удалены.',
+        confirmLabel: 'Убрать',
+        onConfirm: apply,
+      })
+    },
+    [datasetFallout, sections, dimensionInfo, datasetTitle, confirm],
+  )
+
+  /** Щелчок по карточке: невыбранный датасет добавляется, выбранный уходит
+      тем же полным снятием, что и по крестику. */
+  const toggleDataset = useCallback(
+    (slug: string) => {
+      if (pickedDatasets.includes(slug)) return removeDataset(slug)
+      setPickedDatasets((prev) => (prev.includes(slug) ? prev : [...prev, slug]))
+    },
+    [pickedDatasets, removeDataset],
   )
 
   const timer = useRef<number | undefined>(undefined)
@@ -825,11 +920,12 @@ function Builder() {
       {step === 1 ? (
         <StepData
           datasets={datasets}
-          links={links}
+          linkIndex={linkIndex}
           metrics={metrics}
           dimensions={dimensions}
           pickedDatasets={pickedDatasets}
-          setPickedDatasets={setPickedDatasets}
+          onToggleDataset={toggleDataset}
+          onRemoveDataset={removeDataset}
           pickedMetrics={pickedMetrics}
           setPickedMetrics={setPickedMetrics}
           pickedDimensions={pickedDimensions}
@@ -1401,7 +1497,169 @@ function Builder() {
           )}
         </>
       )}
+      {dialog}
     </Page>
+  )
+}
+
+/** Сколько полей в датасете, чтобы под ними понадобился свой поиск: до этого
+    числа чипы читаются взглядом, дальше — уже нет. */
+const FIELDS_SEARCH_FROM = 12
+
+/**
+ * Выбранный датасет на шаге «Данные»: его показатели и разрезы чипами.
+ *
+ * Отдельный компонент, а не разметка внутри `StepData`, ради собственного
+ * состояния — поиска по полям: у широкой витрины их бывают сотни, и выбрать
+ * из них взглядом нельзя. Заодно шапка датасета получает то, чего ей не
+ * хватало: счётчик отмеченного и крестик «убрать», — снятие датасета
+ * повторным щелчком по карточке остаётся, но перестаёт быть единственным
+ * способом о нём догадаться.
+ */
+function PickedDataset({
+  title,
+  metrics,
+  dimensions,
+  ownFields,
+  pickedMetrics,
+  pickedDimensions,
+  onToggleMetric,
+  onToggleDimension,
+  onDropOwnField,
+  onAddOwnField,
+  onRemove,
+}: {
+  title: string
+  metrics: Metric[]
+  dimensions: Dimension[]
+  ownFields: ReportField[]
+  pickedMetrics: string[]
+  pickedDimensions: string[]
+  onToggleMetric: (key: string) => void
+  onToggleDimension: (key: string) => void
+  onDropOwnField: (key: string) => void
+  onAddOwnField: () => void
+  onRemove: () => void
+}) {
+  const [query, setQuery] = useState('')
+  const needle = query.trim().toLowerCase()
+  const hit = (...parts: (string | null | undefined)[]) =>
+    !needle || parts.some((part) => (part ?? '').toLowerCase().includes(needle))
+
+  // свои поля встают в тот же ряд, что и словарные: датасет без словаря
+  // не должен выглядеть пустым, если поля в нём уже заведены руками
+  const myMetrics = ownFields.filter((f) => f.role === 'metric')
+  const myDimensions = ownFields.filter((f) => f.role === 'dimension')
+  const total = metrics.length + dimensions.length
+  const picked =
+    metrics.filter((m) => pickedMetrics.includes(m.slug)).length +
+    dimensions.filter((d) => pickedDimensions.includes(d.slug)).length +
+    ownFields.length
+
+  const shownMetrics = metrics.filter((m) => hit(m.title, m.slug, m.description, m.expression))
+  const shownDimensions = dimensions.filter((d) => hit(d.title, d.slug, d.field))
+  const shownMyMetrics = myMetrics.filter((f) => hit(f.title, f.field))
+  const shownMyDimensions = myDimensions.filter((f) => hit(f.title, f.field))
+
+  return (
+    <section className="flex flex-col gap-2.5 rounded-card border border-line bg-surface p-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <h3 className="text-[15px] font-semibold">{title}</h3>
+        <span className="text-xs text-fg-muted tabular-nums">
+          отмечено полей: {picked}
+          {total > 0 && ` · в словаре: ${total}`}
+        </span>
+        {total >= FIELDS_SEARCH_FROM && (
+          <Input
+            className="w-auto min-w-44 py-1"
+            type="search"
+            placeholder="Поиск по полям датасета"
+            aria-label={`Поиск по полям датасета «${title}»`}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        )}
+        <Button variant="ghost" size="sm" className="ml-auto" onClick={onAddOwnField}>
+          + своё поле
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          title="Убрать датасет из отчёта"
+          aria-label={`Убрать датасет «${title}»`}
+          onClick={onRemove}
+          className="hover:bg-bad-soft hover:text-bad"
+        >
+          <span aria-hidden="true">×</span> убрать
+        </Button>
+      </div>
+      <div className="flex flex-col gap-2">
+        <span className="text-xs font-medium tracking-wide text-fg-muted uppercase">Показатели</span>
+        <div className="flex flex-wrap gap-1.5">
+          {metrics.length === 0 && myMetrics.length === 0 && (
+            <span className="text-xs text-fg-muted">
+              в этом датасете нет показателей — заведите своё поле кнопкой справа
+            </span>
+          )}
+          {needle && shownMetrics.length === 0 && shownMyMetrics.length === 0 && metrics.length + myMetrics.length > 0 && (
+            <span className="text-xs text-fg-muted">под поиск не попал ни один показатель</span>
+          )}
+          {shownMetrics.map((m) => (
+            <button
+              key={m.slug}
+              className={cn(
+                CHIP,
+                pickedMetrics.includes(m.slug) && CHIP_ON,
+                m.status === 'error' && 'cursor-not-allowed opacity-40',
+              )}
+              disabled={m.status === 'error'}
+              onClick={() => onToggleMetric(m.slug)}
+              title={m.description || m.expression}
+            >
+              {m.title}
+            </button>
+          ))}
+          {shownMyMetrics.map((f) => (
+            <OwnChip
+              key={f.key}
+              title={f.title}
+              hint={`своё поле · ${AGG_LABELS[f.agg ?? 'sum']} по ${f.field}`}
+              onRemove={() => onDropOwnField(f.key)}
+            />
+          ))}
+        </div>
+        <span className="text-xs font-medium tracking-wide text-fg-muted uppercase">Разрезы</span>
+        <div className="flex flex-wrap gap-1.5">
+          {dimensions.length === 0 && myDimensions.length === 0 && (
+            <span className="text-xs text-fg-muted">
+              в этом датасете нет разрезов — заведите своё поле кнопкой справа
+            </span>
+          )}
+          {needle && shownDimensions.length === 0 && shownMyDimensions.length === 0 && dimensions.length + myDimensions.length > 0 && (
+            <span className="text-xs text-fg-muted">под поиск не попал ни один разрез</span>
+          )}
+          {shownDimensions.map((d) => (
+            <button
+              key={d.slug}
+              className={cn(CHIP, 'border-dashed', pickedDimensions.includes(d.slug) && CHIP_ON)}
+              onClick={() => onToggleDimension(d.slug)}
+              title={`${d.datasetSlug}.${d.field}`}
+            >
+              {d.title}
+            </button>
+          ))}
+          {shownMyDimensions.map((f) => (
+            <OwnChip
+              key={f.key}
+              dashed
+              title={f.title}
+              hint={`своё поле · разрез по ${f.field}`}
+              onRemove={() => onDropOwnField(f.key)}
+            />
+          ))}
+        </div>
+      </div>
+    </section>
   )
 }
 
@@ -1409,11 +1667,12 @@ function Builder() {
     дальше он уже приезжает вместе с полем. */
 function StepData({
   datasets,
-  links,
+  linkIndex,
   metrics,
   dimensions,
   pickedDatasets,
-  setPickedDatasets,
+  onToggleDataset,
+  onRemoveDataset,
   pickedMetrics,
   setPickedMetrics,
   pickedDimensions,
@@ -1425,11 +1684,12 @@ function StepData({
   onNext,
 }: {
   datasets: Dataset[]
-  links: DatasetLink[]
+  linkIndex: LinkIndex
   metrics: Metric[]
   dimensions: Dimension[]
   pickedDatasets: string[]
-  setPickedDatasets: (fn: (prev: string[]) => string[]) => void
+  onToggleDataset: (slug: string) => void
+  onRemoveDataset: (slug: string) => void
   pickedMetrics: string[]
   setPickedMetrics: (fn: (prev: string[]) => string[]) => void
   pickedDimensions: string[]
@@ -1442,41 +1702,9 @@ function StepData({
 }) {
   // датасет, для которого открыта модалка своих полей
   const [modalFor, setModalFor] = useState<string | null>(null)
-  // показываем все датасеты, а не только те, что уже в словаре: поле из
-  // колонки можно завести прямо здесь, и датасет без словаря — как раз тот
-  // случай, ради которого это и сделано
-  const hasVocabulary = useMemo(
-    () => new Set([...metrics.map((m) => m.datasetSlug), ...dimensions.map((d) => d.datasetSlug)]),
-    [metrics, dimensions],
-  )
-
-  const linkedTo = useCallback(
-    (slug: string) =>
-      links
-        .filter((l) => l.leftSlug === slug || l.rightSlug === slug)
-        .map((l) => (l.leftSlug === slug ? l.rightSlug : l.leftSlug)),
-    [links],
-  )
-
-  const toggleDataset = (slug: string) => {
-    // снятие датасета и очистка его полей — два независимых обновления:
-    // побочные эффекты внутри функции-апдейтера React вправе выполнить
-    // дважды, и любая неидемпотентная правка начала бы терять состояние
-    const off = pickedDatasets.includes(slug)
-    setPickedDatasets((prev) => (off ? prev.filter((s) => s !== slug) : [...prev, slug]))
-    if (!off) return
-    // вместе с датасетом уходят и его поля: иначе отчёт ссылается на то,
-    // чего пользователь уже не выбирал
-    setPickedMetrics((ms) => ms.filter((m) => metrics.find((x) => x.slug === m)?.datasetSlug !== slug))
-    setPickedDimensions((ds) =>
-      ds.filter((d) => dimensions.find((x) => x.slug === d)?.datasetSlug !== slug),
-    )
-  }
 
   const toggle = (setList: (fn: (prev: string[]) => string[]) => void, key: string) =>
     setList((prev) => (prev.includes(key) ? prev.filter((x) => x !== key) : [...prev, key]))
-
-  const joinable = pickedDatasets.length > 0 ? new Set(pickedDatasets.flatMap(linkedTo)) : new Set<string>()
 
   const hasAnyMetric =
     pickedMetrics.length > 0 || ownFields.some((f) => f.role === 'metric')
@@ -1486,125 +1714,35 @@ function StepData({
 
   return (
     <div className="flex flex-col gap-4">
-      <section className="flex flex-col gap-2.5 rounded-card border border-line bg-surface p-4">
-        <h2>Шаг 1. Данные</h2>
-        <p className="max-w-prose text-xs text-fg-muted">
-          Выберите датасет и поля, которые понадобятся в отчёте. Дальше, на раскладке, датасет
-          уже не спрашивают — он приезжает вместе с полем.
-        </p>
-        <div className="flex flex-wrap gap-2.5">
-          {datasets.map((d) => {
-            const on = pickedDatasets.includes(d.slug)
-            const linked = pickedDatasets.length > 0 && !on && joinable.has(d.slug)
-            return (
-              <button
-                key={d.slug}
-                type="button"
-                className={cn(
-                  'flex min-w-48 cursor-pointer flex-col items-start gap-0.5 rounded-control border border-line px-3.5 py-2.5 text-left transition-colors',
-                  on && 'border-accent ring-2 ring-accent-soft',
-                )}
-                onClick={() => toggleDataset(d.slug)}
-              >
-                <strong>{d.title}</strong>
-                <code>{d.slug}</code>
-                {linked && <span className="mt-1 text-xs text-accent">есть связь</span>}
-                {pickedDatasets.length > 0 && !on && !linked && (
-                  <span className="mt-1 text-xs text-warn">связи нет</span>
-                )}
-                {!hasVocabulary.has(d.slug) && (
-                  <span className="mt-1 text-xs text-accent">поля заводятся вручную</span>
-                )}
-              </button>
-            )
-          })}
-        </div>
-      </section>
+      <DatasetPicker
+        datasets={datasets}
+        metrics={metrics}
+        dimensions={dimensions}
+        ownFields={ownFields}
+        index={linkIndex}
+        picked={pickedDatasets}
+        pickedMetrics={pickedMetrics}
+        pickedDimensions={pickedDimensions}
+        onToggle={onToggleDataset}
+        onRemove={onRemoveDataset}
+      />
 
-      {pickedDatasets.map((slug) => {
-        const ds = datasets.find((d) => d.slug === slug)
-        const ms = metrics.filter((m) => m.datasetSlug === slug)
-        const dims = dimensions.filter((d) => d.datasetSlug === slug)
-        const mine = ownFields.filter((f) => f.datasetSlug === slug)
-        // свои поля встают в тот же ряд, что и словарные: датасет без словаря
-        // не должен выглядеть пустым, если поля в нём уже заведены руками
-        const myMetrics = mine.filter((f) => f.role === 'metric')
-        const myDimensions = mine.filter((f) => f.role === 'dimension')
-        return (
-          <section key={slug} className="flex flex-col gap-2.5 rounded-card border border-line bg-surface p-4">
-            <div className="flex items-center gap-3">
-              <h3 className="text-[15px] font-semibold">{ds?.title ?? slug}</h3>
-              <Button variant="ghost" size="sm" className="ml-auto" onClick={() => setModalFor(slug)}>
-                + своё поле
-              </Button>
-            </div>
-            <div className="flex flex-col gap-2">
-              <span className="text-xs font-medium tracking-wide text-fg-muted uppercase">Показатели</span>
-              <div className="flex flex-wrap gap-1.5">
-                {ms.length === 0 && myMetrics.length === 0 && (
-                  <span className="text-xs text-fg-muted">
-                    в этом датасете нет показателей — заведите своё поле кнопкой справа
-                  </span>
-                )}
-                {ms.map((m) => (
-                  <button
-                    key={m.slug}
-                    className={cn(
-                      CHIP,
-                      pickedMetrics.includes(m.slug) && CHIP_ON,
-                      m.status === 'error' && 'cursor-not-allowed opacity-40',
-                    )}
-                    disabled={m.status === 'error'}
-                    onClick={() => toggle(setPickedMetrics, m.slug)}
-                    title={m.description || m.expression}
-                  >
-                    {m.title}
-                  </button>
-                ))}
-                {myMetrics.map((f) => (
-                  <OwnChip
-                    key={f.key}
-                    title={f.title}
-                    hint={`своё поле · ${AGG_LABELS[f.agg ?? 'sum']} по ${f.field}`}
-                    onRemove={() => setOwnFields((prev) => prev.filter((x) => x.key !== f.key))}
-                  />
-                ))}
-              </div>
-              <span className="text-xs font-medium tracking-wide text-fg-muted uppercase">Разрезы</span>
-              <div className="flex flex-wrap gap-1.5">
-                {dims.length === 0 && myDimensions.length === 0 && (
-                  <span className="text-xs text-fg-muted">
-                    в этом датасете нет разрезов — заведите своё поле кнопкой справа
-                  </span>
-                )}
-                {dims.map((d) => (
-                  <button
-                    key={d.slug}
-                    className={cn(
-                      CHIP,
-                      'border-dashed',
-                      pickedDimensions.includes(d.slug) && CHIP_ON,
-                    )}
-                    onClick={() => toggle(setPickedDimensions, d.slug)}
-                    title={`${d.datasetSlug}.${d.field}`}
-                  >
-                    {d.title}
-                  </button>
-                ))}
-                {myDimensions.map((f) => (
-                  <OwnChip
-                    key={f.key}
-                    dashed
-                    title={f.title}
-                    hint={`своё поле · разрез по ${f.field}`}
-                    onRemove={() => setOwnFields((prev) => prev.filter((x) => x.key !== f.key))}
-                  />
-                ))}
-              </div>
-            </div>
-          </section>
-        )
-      })}
+      {pickedDatasets.map((slug) => (
+        <PickedDataset
+          key={slug}
+          title={datasets.find((d) => d.slug === slug)?.title ?? slug}
+          metrics={metrics.filter((m) => m.datasetSlug === slug)}
+          dimensions={dimensions.filter((d) => d.datasetSlug === slug)}
+          ownFields={ownFields.filter((f) => f.datasetSlug === slug)}
+          pickedMetrics={pickedMetrics}
+          pickedDimensions={pickedDimensions}
+          onToggleMetric={(key) => toggle(setPickedMetrics, key)}
+          onToggleDimension={(key) => toggle(setPickedDimensions, key)}
+          onDropOwnField={(key) => setOwnFields((prev) => prev.filter((x) => x.key !== key))}
+          onAddOwnField={() => setModalFor(slug)}
+          onRemove={() => onRemoveDataset(slug)}
+        />
+      ))}
 
       {computed.length > 0 && (
         <section className="flex flex-col gap-2.5 rounded-card border border-line bg-surface p-4">

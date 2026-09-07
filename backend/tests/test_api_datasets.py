@@ -57,6 +57,54 @@ def test_текст_запроса_виден_админу_но_не_польз�
     assert for_user['query'] is None and for_user['isQuery'] is True
 
 
+def test_сервер_датасета_в_выдаче(client, dataset, user_headers):
+    body = client.get('/api/datasets', headers=user_headers).json()
+
+    assert body['datasets'][0]['serverId'] == 'clickhouse-1'
+    assert body['datasets'][0]['serverTitle'] == 'ClickHouse · сервер 1'
+
+
+def test_адрес_сервера_виден_админу_но_не_пользователю(client, dataset,
+                                                       admin_headers, user_headers):
+    """Хост — такой же секрет, как DSN: пользователю достаётся номер."""
+    for_admin = client.get('/api/datasets', headers=admin_headers).json()['datasets'][0]
+    for_user = client.get('/api/datasets', headers=user_headers).json()['datasets'][0]
+
+    assert for_admin['serverTitle'] == 'ClickHouse · host:8443/db'
+    assert for_user['serverTitle'] == 'ClickHouse · сервер 1'
+    assert 'host' not in for_user['serverTitle']
+    # тождество одно на всех: по нему идёт отбор в конструкторе
+    assert for_admin['serverId'] == for_user['serverId']
+
+
+def test_у_csv_датасета_сервера_нет(client, metabase, sources, user_headers):
+    from app.datasets import registry as ds
+
+    ds.create(slug='file', title='Файл', description=None, source='csv',
+              dsn='', table_name='', schema=[], status='new', error=None)
+
+    body = client.get('/api/datasets', headers=user_headers).json()
+    row = next(d for d in body['datasets'] if d['slug'] == 'file')
+
+    assert row['serverId'] is None and row['serverTitle'] is None
+
+
+def test_датасеты_одной_базы_с_разными_логинами_на_одном_сервере(
+        client, dataset, sources, user_headers):
+    """Сервер определяется адресом, а не тем, кем к нему подключились."""
+    from app.datasets import registry as ds
+
+    sources.add('sales2', FakeSource(source='clickhouse', table='sales_orders'))
+    ds.create(slug='sales2', title='Продажи 2', description=None, source='clickhouse',
+              dsn='clickhouse://other:pass@host:8443/db', table_name='sales_orders',
+              schema=[], status='ok', error=None)
+
+    rows = client.get('/api/datasets', headers=user_headers).json()['datasets']
+    ids = {d['slug']: d['serverId'] for d in rows}
+
+    assert ids['sales'] == ids['sales2']
+
+
 def test_список_без_токена_401(client, dataset):
     assert client.get('/api/datasets').status_code == 401
 

@@ -28,6 +28,26 @@
   --bad-soft: rgb(220 38 38 / 0.08);
   --warn: #b45309;
   --warn-soft: rgb(234 138 20 / 0.12);
+  /* Группы связанных датасетов в конструкторе: один цвет — одна группа,
+     то есть датасеты, которые встают в одну секцию отчёта. Групп бывает
+     больше восьми, цвета тогда повторяются — различает группы подпись
+     рядом, цвет лишь помогает сгруппировать карточки взглядом. */
+  --cluster-1: #0d9488;
+  --cluster-1-soft: rgb(13 148 136 / 0.1);
+  --cluster-2: #c2410c;
+  --cluster-2-soft: rgb(194 65 12 / 0.1);
+  --cluster-3: #7c3aed;
+  --cluster-3-soft: rgb(124 58 237 / 0.1);
+  --cluster-4: #0369a1;
+  --cluster-4-soft: rgb(3 105 161 / 0.1);
+  --cluster-5: #be123c;
+  --cluster-5-soft: rgb(190 18 60 / 0.1);
+  --cluster-6: #4d7c0f;
+  --cluster-6-soft: rgb(77 124 15 / 0.1);
+  --cluster-7: #a21caf;
+  --cluster-7-soft: rgb(162 28 175 / 0.1);
+  --cluster-8: #92400e;
+  --cluster-8-soft: rgb(146 64 14 / 0.1);
   --overlay: rgb(20 20 35 / 0.45);
   --shadow-card: 0 1px 2px rgb(15 15 30 / 0.04);
   --shadow-pop: 0 10px 30px rgb(15 15 30 / 0.08);
@@ -54,6 +74,22 @@
   --bad-soft: rgb(248 113 113 / 0.14);
   --warn: #fbbf24;
   --warn-soft: rgb(251 191 36 / 0.14);
+  --cluster-1: #2dd4bf;
+  --cluster-1-soft: rgb(45 212 191 / 0.14);
+  --cluster-2: #fb923c;
+  --cluster-2-soft: rgb(251 146 60 / 0.14);
+  --cluster-3: #a78bfa;
+  --cluster-3-soft: rgb(167 139 250 / 0.14);
+  --cluster-4: #38bdf8;
+  --cluster-4-soft: rgb(56 189 248 / 0.14);
+  --cluster-5: #fb7185;
+  --cluster-5-soft: rgb(251 113 133 / 0.14);
+  --cluster-6: #a3e635;
+  --cluster-6-soft: rgb(163 230 53 / 0.14);
+  --cluster-7: #e879f9;
+  --cluster-7-soft: rgb(232 121 249 / 0.14);
+  --cluster-8: #e0a878;
+  --cluster-8-soft: rgb(224 168 120 / 0.14);
   --overlay: rgb(5 5 10 / 0.6);
   --shadow-card: 0 1px 2px rgb(0 0 0 / 0.3);
   --shadow-pop: 0 10px 30px rgb(0 0 0 / 0.45);
@@ -80,6 +116,22 @@
   --color-bad-soft: var(--bad-soft);
   --color-warn: var(--warn);
   --color-warn-soft: var(--warn-soft);
+  --color-cluster-1: var(--cluster-1);
+  --color-cluster-1-soft: var(--cluster-1-soft);
+  --color-cluster-2: var(--cluster-2);
+  --color-cluster-2-soft: var(--cluster-2-soft);
+  --color-cluster-3: var(--cluster-3);
+  --color-cluster-3-soft: var(--cluster-3-soft);
+  --color-cluster-4: var(--cluster-4);
+  --color-cluster-4-soft: var(--cluster-4-soft);
+  --color-cluster-5: var(--cluster-5);
+  --color-cluster-5-soft: var(--cluster-5-soft);
+  --color-cluster-6: var(--cluster-6);
+  --color-cluster-6-soft: var(--cluster-6-soft);
+  --color-cluster-7: var(--cluster-7);
+  --color-cluster-7-soft: var(--cluster-7-soft);
+  --color-cluster-8: var(--cluster-8);
+  --color-cluster-8-soft: var(--cluster-8-soft);
   --color-overlay: var(--overlay);
 
   /* Ширина центральной колонки — одно место на всё приложение (max-w-page). */

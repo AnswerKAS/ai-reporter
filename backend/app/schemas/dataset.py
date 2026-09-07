@@ -22,6 +22,11 @@ class DatasetMeta(CamelModel):
     is_query: bool = False
     file: str | None = None
     fields: list[DatasetField] = []
+    # сервер, на котором лежит датасет: тождество для отбора и имя для
+    # интерфейса. Адрес в имени — только администратору (datasets/servers.py);
+    # у CSV-датасета сервера нет
+    server_id: str | None = None
+    server_title: str | None = None
     status: Literal['new', 'ok', 'error'] = 'new'
     error: str | None = None
     created_at: str

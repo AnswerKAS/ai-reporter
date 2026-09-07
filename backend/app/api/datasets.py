@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 
 from ..core.security import get_current_user, require_admin
 from ..datasets import registry as ds_registry
+from ..datasets import servers as ds_servers
 from ..datasets import sqlsource
 from ..datasets.base import DatasetError, sanitize_error
 from ..schemas.dataset import (
@@ -31,10 +32,30 @@ def _is_admin(user: dict) -> bool:
     return user.get('role') == 'admin'
 
 
-def _meta(d: dict, *, reveal_query: bool = False) -> dict:
+def _servers() -> dict[str, dict]:
+    """Индекс серверов по всему реестру.
+
+    Считается один раз на запрос и передаётся в `_meta`: номер сервера
+    зависит от всего реестра, и вычислять его на каждый датасет значило бы
+    читать таблицу столько раз, сколько в ней строк.
+    """
+    return ds_servers.index(ds_registry.list_all())
+
+
+def _meta(d: dict, *, reveal_query: bool = False,
+          servers: dict[str, dict] | None = None) -> dict:
     data = dict(d)
+    # сервер считается по DSN до того, как строка уйдёт из ответа
+    server_id, server_title = ds_servers.of(
+        d, servers if servers is not None else _servers(),
+        # адрес сервера — та же граница, что и текст запроса: наружу уходит
+        # имя «PostgreSQL · сервер 2», хост виден только администратору
+        reveal_address=reveal_query,
+    )
     data.pop('dsn', None)  # креды не покидают бэкенд
     data['fields'] = data.pop('schema')
+    data['server_id'] = server_id
+    data['server_title'] = server_title
     query = (data.get('query') or '').strip()
     data['is_query'] = bool(query)
     # в запросе бывают зашиты имена схем и служебные значения, а датасеты
@@ -111,7 +132,9 @@ def _get_or_404(slug: str) -> dict:
 @router.get('')
 def list_datasets(user: dict = Depends(get_current_user)) -> dict:
     admin = _is_admin(user)
-    return {'datasets': [_meta(d, reveal_query=admin) for d in ds_registry.list_all()]}
+    datasets = ds_registry.list_all()
+    servers = ds_servers.index(datasets)
+    return {'datasets': [_meta(d, reveal_query=admin, servers=servers) for d in datasets]}
 
 
 @router.get('/{slug}')

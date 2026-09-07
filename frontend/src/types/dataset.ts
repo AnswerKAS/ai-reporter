@@ -22,6 +22,10 @@ export interface Dataset {
   isQuery: boolean
   file?: string | null
   fields: DatasetField[]
+  /** Сервер, на котором лежит датасет: тождество для отбора. У CSV его нет. */
+  serverId?: string | null
+  /** Имя сервера для интерфейса. Адрес в нём виден только администратору. */
+  serverTitle?: string | null
   status: DatasetStatus
   error?: string | null
   createdAt: string
