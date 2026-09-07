@@ -811,12 +811,15 @@ def report_facets(user: dict, *, q: str | None = None) -> dict:
         if no_group:
             groups.append({'id': NONE_BUCKET, 'name': None, 'count': no_group})
 
+        # Условие вынесено из f-строки: до 3.12 выражение внутри f-строки не
+        # принимает обратный слэш, а сервер работает на системном python3.10.
+        authored = _clause([*where, 'r.created_by IS NOT NULL', "r.created_by <> ''"])
         authors = [
             {'id': row['id'], 'name': row['name'], 'count': row['count']}
             for row in conn.execute(
                 'SELECT r.created_by AS id, u.username AS name, COUNT(*) AS count '
                 'FROM reports r LEFT JOIN users u ON u.id = r.created_by'
-                f'{_clause([*where, "r.created_by IS NOT NULL", "r.created_by <> \'\'"])} '
+                f'{authored} '
                 'GROUP BY r.created_by, u.username ORDER BY u.username',
                 args,
             ).fetchall()

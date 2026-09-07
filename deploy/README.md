@@ -39,6 +39,8 @@ adduser --disabled-password --gecos "" deploy
 usermod -aG sudo deploy
 
 # 2. venv (системный python3.10 достаточно, код совместим)
+#    Сборка в CI закреплена на той же 3.10 — иначе она пропускает синтаксис,
+#    который сервер не парсит, и падение вылезает только в проде.
 apt update && apt install -y nginx rsync
 sudo -u deploy python3 -m venv /home/deploy/ai-reporter/backend/.venv
 

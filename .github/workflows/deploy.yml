@@ -28,7 +28,10 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          # Ровно та версия, что стоит на VPS: на 3.12 проходит синтаксис,
+          # который системный python3.10 сервера не парсит, и сборка тогда
+          # пропускает код, падающий на импорте уже в проде.
+          python-version: '3.10'
           cache: pip
           cache-dependency-path: backend/requirements.txt
 
@@ -117,4 +120,28 @@ jobs:
           SERVER: ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}
         run: |
           ssh $SERVER \
-            "cd $APP_DIR/backend && .venv/bin/pip install -q -r requirements.txt && sudo systemctl restart $SERVICE_NAME && systemctl is-active $SERVICE_NAME"
+            "cd $APP_DIR/backend && .venv/bin/pip install -q -r requirements.txt && sudo systemctl restart $SERVICE_NAME"
+
+      - name: Проверка живости бэкенда
+        env:
+          SERVER: ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}
+        run: |
+          # systemctl is-active для Type=simple отвечает "active" сразу после
+          # запуска процесса — ещё до импорта приложения, поэтому падение старта
+          # он не ловит. Живость подтверждает только ответ самого бэкенда.
+          # Опрашиваем интерпретатором из venv, а не curl: этот бинарник на
+          # сервере есть заведомо — им же запускается сам сервис.
+          ssh $SERVER "
+            cd $APP_DIR/backend
+            for i in \$(seq 1 15); do
+              if .venv/bin/python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5)\"; then
+                echo '✓ бэкенд отвечает на /api/health'
+                exit 0
+              fi
+              sleep 2
+            done
+            echo '::error::бэкенд не ответил на /api/health за 30 секунд'
+            systemctl status $SERVICE_NAME --no-pager || true
+            journalctl -u $SERVICE_NAME -n 50 --no-pager || true
+            exit 1
+          "
