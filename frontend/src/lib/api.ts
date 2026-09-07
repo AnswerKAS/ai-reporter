@@ -61,7 +61,11 @@ async function request<T>(
   const token = getToken()
   if (token) headers['Authorization'] = `Bearer ${token}`
   const res = await fetch(`${BASE}${path}`, { ...options, headers })
-  if (res.status === 401) {
+  // 401 на самом входе — это неверный логин или пароль, а не протухшая
+  // сессия: чистить токен и уводить на страницу входа тут нечего, а текст
+  // нужен серверный, иначе человек с опечаткой видит «требуется авторизация»
+  // и не понимает, что именно не так. Такой ответ разбирает ветка ниже.
+  if (res.status === 401 && path !== '/auth/login') {
     setToken(null)
     onUnauthorized?.()
     throw new ApiError(401, 'требуется авторизация')
