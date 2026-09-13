@@ -1,0 +1,76 @@
+# AI Reporter в Docker: метабаза PostgreSQL, бэкенд (FastAPI) и фронт (nginx
+# со статикой и прокси /api). Настройки бэкенда — backend/.env; адрес метабазы
+# задаётся здесь и перекрывает PG* из .env.
+#
+#   docker compose up -d --build              # http://localhost:8080
+#   docker compose --profile demo up -d       # + ClickHouse с демо-витриной
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ai_reporter
+      POSTGRES_USER: ai_reporter
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ai_reporter}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ai_reporter -d ai_reporter"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    env_file:
+      - path: backend/.env
+        required: false
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: ai_reporter
+      PGUSER: ai_reporter
+      PGPASSWORD: ${POSTGRES_PASSWORD:-ai_reporter}
+      PGSSLMODE: disable
+      ARTIFACTS_DIR: /data/artifacts
+    volumes:
+      - artifacts:/data/artifacts
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-8080}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  # Демо-витрина: поднимается только с --profile demo. Бэкенду в backend/.env:
+  #   DATABASE_URL=clickhouse://default:demo@clickhouse:8123/default
+  #   CLICKHOUSE_SECURE=false
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.3-alpine
+    profiles: [demo]
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_PASSWORD: demo
+    volumes:
+      - chdata:/var/lib/clickhouse
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }
+
+volumes:
+  pgdata:
+  artifacts:
+  chdata:

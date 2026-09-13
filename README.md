@@ -44,7 +44,56 @@ backend/
   artifacts/datasets/      загруженные CSV
 ```
 
-## Быстрый старт
+## Запуск в Docker
+
+Требования: Docker с Compose v2.24+. PostgreSQL для метабазы поднимается
+вместе с приложением — ставить его отдельно не нужно.
+
+```bash
+cp backend/.env.example backend/.env    # PG* здесь не нужны: адрес метабазы задаёт compose
+docker compose up -d --build            # http://localhost:8080
+```
+
+| Сервис | Что делает |
+|---|---|
+| `postgres` | метабаза приложения, данные в томе `pgdata` |
+| `backend` | FastAPI на :8000 внутри сети; схема и администратор создаются при первом старте |
+| `frontend` | nginx: собранный фронт и прокси `/api` → `backend` — наружу торчит только он |
+| `clickhouse` | демо-витрина, только с `--profile demo` |
+
+Из `backend/.env` compose берёт всё, кроме подключения к метабазе
+(`PG*`) и `ARTIFACTS_DIR` — их он задаёт сам. Загруженные CSV лежат
+в томе `artifacts`. Порт и пароль метабазы меняются переменными окружения
+или файлом `.env` в корне репозитория: `APP_PORT` (по умолчанию `8080`)
+и `POSTGRES_PASSWORD`. Ключ модели в контейнер из файла opencode не попадёт —
+задайте `OPENROUTER_API_KEY` в `backend/.env`.
+
+Демо-витрина с тестовыми данными:
+
+```bash
+# в backend/.env:
+#   DATABASE_URL=clickhouse://default:demo@clickhouse:8123/default
+#   CLICKHOUSE_SECURE=false
+docker compose --profile demo up -d --build
+docker compose exec backend python -m app.reports.seed    # 30 дней данных
+```
+
+Что ещё пригодится:
+
+```bash
+docker compose logs -f backend          # логи бэкенда
+docker compose up -d --build            # пересобрать после обновления кода
+docker compose down                     # остановить; данные в томах сохраняются
+docker compose down -v                  # остановить и удалить тома (метабаза и CSV пропадут)
+```
+
+Чтобы работать с внешним PostgreSQL, уберите из `docker-compose.yml` сервис
+`postgres`, его `depends_on` у бэкенда и `PG*` из `environment` —
+тогда подключение возьмётся из `backend/.env`. Адрес `localhost` там
+указывает на сам контейнер, а не на ваш компьютер; до базы на хосте
+достучитесь через `host.docker.internal`.
+
+## Локальный запуск без Docker
 
 Требования: Python 3.12, Node.js, доступ к PostgreSQL (метабаза приложения).
 
