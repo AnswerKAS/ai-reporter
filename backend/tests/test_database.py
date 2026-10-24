@@ -159,6 +159,7 @@ def test_пользователю_доступно_только_назначен
 
 def test_доступ_через_группу(metabase):
     db.create_user(id='u1', username='ivanov', password_hash='x')
+    db.create_report(id='i1', slug='отчёт', title='T', description=None, definition={})
     db.create_group(id='g1', name='Отдел')
     db.add_group_member('g1', 'u1')
     db.grant_access('отчёт', group_id='g1')

@@ -12,6 +12,7 @@ from starlette.concurrency import run_in_threadpool
 
 from ..core import database as db
 from ..core.security import get_current_user, require_admin
+from ..core import report_access
 from ..schemas.report import FiltersPatch, ReportMeta, ReportUpdate
 from ..datasets.base import DatasetError
 from ..query import builder as query_builder
@@ -42,9 +43,11 @@ def _meta_for(report: dict, user: dict) -> ReportMeta:
     return _report_meta(db.decorate_report(report, user))
 
 
-def _check_access(user: dict, slug: str) -> None:
-    slugs = db.accessible_slugs(user)
-    if slugs is not None and slug not in slugs:
+def _check_access(user: dict, slug: str, action: str = 'view') -> None:
+    report = db.get_report(slug)
+    if report is None:
+        raise HTTPException(404, 'отчёт не найден')
+    if not report_access.can(user, report, action):
         raise HTTPException(403, 'нет доступа к отчёту')
 
 
@@ -153,6 +156,21 @@ def chat_report(payload: dict, user: dict = Depends(get_current_user)) -> dict:
         catalog.close()
 
 
+@router.post('/reports/recommendations')
+def report_recommendations(payload: dict, user: dict = Depends(get_current_user)) -> dict:
+    """Варианты отчёта по словарю без обращения к модели или источникам."""
+    catalog = query_builder.Catalog()
+    try:
+        return interpret.recommend(catalog, payload.get('fields') or [],
+                                   payload.get('computed') or [],
+                                   payload.get('datasets') or [],
+                                   str(payload.get('request') or '')[:1000])
+    except DatasetError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    finally:
+        catalog.close()
+
+
 @router.post('/reports/preview')
 def preview_definition(definition: ReportDefinition, user: dict = Depends(get_current_user)) -> dict:
     """Выполняет определение, ничего не сохраняя — живой предпросмотр конструктора.
@@ -219,7 +237,8 @@ def read_definition(slug: str, user: dict = Depends(get_current_user)) -> dict:
 
 @router.put('/reports/{slug}/definition')
 def update_definition(slug: str, definition: ReportDefinition,
-                      user: dict = Depends(require_admin)) -> dict:
+                      user: dict = Depends(get_current_user)) -> dict:
+    _check_access(user, slug, 'definition')
     report = db.get_report(slug)
     if report is None:
         raise HTTPException(404, 'отчёт не найден')
@@ -270,7 +289,9 @@ async def get_report(slug: str, user: dict = Depends(get_current_user)) -> dict:
 @router.patch('/reports/{slug}')
 def update_report(slug: str, patch: ReportUpdate, user: dict = Depends(get_current_user)) -> dict:
     """Правка отчёта: название и описание — любой пользователь с доступом."""
-    _check_access(user, slug)
+    _check_access(user, slug, 'metadata')
+    if patch.tags is not None:
+        _check_access(user, slug, 'tags')
     report = db.get_report(slug)
     if report is None:
         raise HTTPException(404, 'отчёт не найден')
@@ -288,8 +309,9 @@ def update_report(slug: str, patch: ReportUpdate, user: dict = Depends(get_curre
 
 
 @router.delete('/reports/{slug}')
-def delete_report(slug: str, user: dict = Depends(require_admin)) -> dict:
+def delete_report(slug: str, user: dict = Depends(get_current_user)) -> dict:
     """Удаление отчёта (только админ): запись и назначения доступа."""
+    _check_access(user, slug, 'delete')
     report = db.get_report(slug)
     if report is None:
         raise HTTPException(404, 'отчёт не найден')
@@ -386,7 +408,7 @@ async def set_report_filters(
     slug: str, patch: FiltersPatch, user: dict = Depends(get_current_user)
 ) -> dict:
     """Сохраняет значения фильтров и сразу пересчитывает отчёт."""
-    _check_access(user, slug)
+    _check_access(user, slug, 'filters')
     report = await _db(db.get_report, slug)
     if report is None:
         raise HTTPException(404, 'отчёт не найден')

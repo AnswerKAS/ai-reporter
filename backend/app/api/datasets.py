@@ -6,7 +6,9 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
 from ..core.security import get_current_user, require_admin
+from ..core.config import connection as db_connection, connections as db_connections
 from ..datasets import registry as ds_registry
+from ..datasets import answer as dataset_answer
 from ..datasets import servers as ds_servers
 from ..datasets import sqlsource
 from ..datasets.base import DatasetError, sanitize_error
@@ -43,15 +45,19 @@ def _servers() -> dict[str, dict]:
 
 
 def _meta(d: dict, *, reveal_query: bool = False,
-          servers: dict[str, dict] | None = None) -> dict:
+          servers: dict[str, dict] | None = None,
+          connection_catalog: dict[str, dict] | None = None) -> dict:
     data = dict(d)
-    # сервер считается по DSN до того, как строка уйдёт из ответа
-    server_id, server_title = ds_servers.of(
-        d, servers if servers is not None else _servers(),
-        # адрес сервера — та же граница, что и текст запроса: наружу уходит
-        # имя «PostgreSQL · сервер 2», хост виден только администратору
-        reveal_address=reveal_query,
-    )
+    if d.get('connection_key'):
+        server_id = d['connection_key']
+        item = (connection_catalog if connection_catalog is not None else db_connections()).get(server_id)
+        server_title = (item or {}).get('title') or server_id
+    else:
+        # Старые DSN до миграции группируются нормализованным адресом.
+        server_id, server_title = ds_servers.of(
+            d, servers if servers is not None else _servers(),
+            reveal_address=reveal_query,
+        )
     data.pop('dsn', None)  # креды не покидают бэкенд
     data['fields'] = data.pop('schema')
     data['server_id'] = server_id
@@ -133,8 +139,38 @@ def _get_or_404(slug: str) -> dict:
 def list_datasets(user: dict = Depends(get_current_user)) -> dict:
     admin = _is_admin(user)
     datasets = ds_registry.list_all()
-    servers = ds_servers.index(datasets)
-    return {'datasets': [_meta(d, reveal_query=admin, servers=servers) for d in datasets]}
+    servers = ds_servers.index([d for d in datasets if not d.get('connection_key')])
+    catalog = db_connections()
+    return {'datasets': [_meta(d, reveal_query=admin, servers=servers,
+                               connection_catalog=catalog) for d in datasets]}
+
+
+@router.get('/connections')
+def list_connections(user: dict = Depends(get_current_user)) -> dict:
+    return {'connections': [
+        {'key': key, 'source': item['source'],
+         'title': item.get('title') or key,
+         'address': item['dsn'].split('@')[-1] if _is_admin(user) else None}
+        for key, item in db_connections().items() if key != 'metabase'
+    ]}
+
+
+@router.post('/connections/{key}/test')
+def test_connection(key: str, user: dict = Depends(require_admin)) -> dict:
+    try:
+        item = db_connection(key)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    from ..datasets import registry
+    adapter = registry.adapter_for({'slug': '_connection_test', 'source': item['source'],
+                                    'connection_key': key, 'table_name': 'dual', 'query': ''})
+    try:
+        adapter.test_connection()
+    except DatasetError as exc:
+        raise HTTPException(502, sanitize_error(str(exc))) from exc
+    finally:
+        adapter.close()
+    return {'ok': True}
 
 
 @router.get('/{slug}')
@@ -156,6 +192,22 @@ def get_dataset(slug: str, user: dict = Depends(get_current_user)) -> dict:
                          notes=notes).model_dump(by_alias=True)
 
 
+@router.post('/{slug}/ask')
+def ask_dataset(slug: str, payload: dict, user: dict = Depends(get_current_user)) -> dict:
+    dataset = _get_or_404(slug)
+    question = payload.get('question')
+    history = payload.get('history') or []
+    if not isinstance(question, str) or not question.strip() or len(question) > 1000:
+        raise HTTPException(422, 'вопрос должен быть непустым и не длиннее 1000 символов')
+    if not isinstance(history, list) or len(history) > 50 or any(not isinstance(item, dict) for item in history):
+        raise HTTPException(422, 'некорректная история вопросов')
+    try:
+        return dataset_answer.answer(dataset, question.strip(), history,
+                                     reveal_sql=_is_admin(user))
+    except DatasetError as exc:
+        raise HTTPException(422, sanitize_error(str(exc))) from exc
+
+
 @router.post('', status_code=201)
 def create_dataset(patch: DatasetCreate, user: dict = Depends(require_admin)) -> dict:
     slug = patch.slug.strip().lower()
@@ -171,13 +223,22 @@ def create_dataset(patch: DatasetCreate, user: dict = Depends(require_admin)) ->
             source='csv', dsn='', table_name='', schema=[], status='new', error=None,
         )
         return {'dataset': _meta(created, reveal_query=True)}
-    dsn_error = _validate_dsn(patch.source, patch.dsn)
-    if dsn_error:
-        raise HTTPException(422, dsn_error)
+    if db_connections():
+        if patch.dsn.strip():
+            raise HTTPException(422, 'DSN задаётся в DB_CONNECTIONS, выберите connectionKey')
+        try:
+            db_connection(patch.connection_key or '', patch.source)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+    else:
+        dsn_error = _validate_dsn(patch.source, patch.dsn)
+        if dsn_error:
+            raise HTTPException(422, dsn_error)
     query = _check_query(patch.source, patch.query, patch.table_name)
     created = ds_registry.create(
         slug=slug, title=patch.title, description=patch.description,
-        source=patch.source, dsn=patch.dsn.strip(),
+        source=patch.source, dsn='' if db_connections() else patch.dsn.strip(),
+        connection_key=patch.connection_key,
         table_name='' if query else patch.table_name.strip(), query=query,
         schema=[], status='new', error=None,
     )
@@ -191,7 +252,14 @@ def patch_dataset(slug: str, patch: DatasetPatch, user: dict = Depends(require_a
     dataset = _get_or_404(slug)
     # пустая строка — это не «не менять» (для этого есть None), а стирание
     # DSN: без проверки она обнуляла бы подключение датасета молча
-    if patch.dsn is not None:
+    if db_connections() and patch.dsn is not None:
+        raise HTTPException(422, 'DSN задаётся в DB_CONNECTIONS, выберите connectionKey')
+    if patch.connection_key is not None:
+        try:
+            db_connection(patch.connection_key, dataset['source'])
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+    if patch.dsn is not None and not db_connections():
         dsn_error = _validate_dsn(dataset['source'], patch.dsn)
         if dsn_error:
             raise HTTPException(422, dsn_error)
@@ -207,11 +275,13 @@ def patch_dataset(slug: str, patch: DatasetPatch, user: dict = Depends(require_a
     updated = ds_registry.update(
         slug,
         title=patch.title, description=patch.description,
-        dsn=patch.dsn,
+        dsn=patch.dsn if not db_connections() else None,
+        connection_key=patch.connection_key,
         table_name=('' if query else patch.table_name),
         query=query,
     )
-    if query is None:
+    connection_changed = patch.connection_key is not None and patch.connection_key != dataset.get('connection_key')
+    if query is None and not connection_changed:
         return {'dataset': _meta(updated, reveal_query=True)}
 
     # запрос поменялся — схема обязана перечитаться сразу, а не при первом
@@ -221,7 +291,7 @@ def patch_dataset(slug: str, patch: DatasetPatch, user: dict = Depends(require_a
     after = {f.get('name') for f in (refreshed.get('schema') or [])}
     return {
         'dataset': _meta(refreshed, reveal_query=True),
-        'notes': sqlsource.query_notes(query),
+        'notes': sqlsource.query_notes(query if query is not None else dataset.get('query') or ''),
         'warnings': _orphaned(slug, before - after),
     }
 

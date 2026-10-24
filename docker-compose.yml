@@ -1,6 +1,5 @@
 # AI Reporter в Docker: метабаза PostgreSQL, бэкенд (FastAPI) и фронт (nginx
-# со статикой и прокси /api). Настройки бэкенда — backend/.env; адрес метабазы
-# задаётся здесь и перекрывает PG* из .env.
+# со статикой и прокси /api). Все подключения бэкенда — DB_CONNECTIONS в backend/.env.
 #
 #   docker compose up -d --build              # http://localhost:8080
 #   docker compose --profile demo up -d       # + ClickHouse с демо-витриной
@@ -26,14 +25,8 @@ services:
     restart: unless-stopped
     env_file:
       - path: backend/.env
-        required: false
+        required: true
     environment:
-      PGHOST: postgres
-      PGPORT: "5432"
-      PGDATABASE: ai_reporter
-      PGUSER: ai_reporter
-      PGPASSWORD: ${POSTGRES_PASSWORD:-ai_reporter}
-      PGSSLMODE: disable
       ARTIFACTS_DIR: /data/artifacts
     volumes:
       - artifacts:/data/artifacts
@@ -56,8 +49,7 @@ services:
       backend:
         condition: service_healthy
 
-  # Демо-витрина: поднимается только с --profile demo. Бэкенду в backend/.env:
-  #   DATABASE_URL=clickhouse://default:demo@clickhouse:8123/default
+  # Демо-витрина: поднимается только с --profile demo; её ключ в DB_CONNECTIONS — demo.
   #   CLICKHOUSE_SECURE=false
   clickhouse:
     image: clickhouse/clickhouse-server:25.3-alpine

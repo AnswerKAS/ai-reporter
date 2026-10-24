@@ -1,4 +1,5 @@
 import os
+import json
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -8,6 +9,49 @@ from dotenv import load_dotenv
 BASE_DIR = Path(__file__).resolve().parents[2]
 
 load_dotenv(BASE_DIR / '.env')
+
+
+def connections() -> dict[str, dict]:
+    """Единственный рабочий каталог подключений приложения и источников.
+
+    Отсутствие переменной пока допускается для старых установок до миграции.
+    Если переменная задана, любые ошибки в ней останавливают запуск.
+    """
+    raw = os.environ.get('DB_CONNECTIONS', '').strip()
+    if not raw:
+        return {}
+    try:
+        values = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError('DB_CONNECTIONS: некорректный JSON') from exc
+    if not isinstance(values, dict):
+        raise ValueError('DB_CONNECTIONS: ожидается объект с именованными подключениями')
+    for key, value in values.items():
+        if not isinstance(key, str) or not key or not isinstance(value, dict):
+            raise ValueError('DB_CONNECTIONS: ключ и запись подключения должны быть объектами')
+        if value.get('source') not in ('postgres', 'clickhouse', 'oracle') or not isinstance(value.get('dsn'), str) or not value['dsn']:
+            raise ValueError(f'DB_CONNECTIONS: некорректная запись {key}')
+        schemes = {'postgres': ('postgres://', 'postgresql://'),
+                   'clickhouse': ('clickhouse://', 'clickhouses://'),
+                   'oracle': ('oracle://',)}
+        if not value['dsn'].lower().startswith(schemes[value['source']]):
+            raise ValueError(f'DB_CONNECTIONS: строка подключения {key} не соответствует типу')
+        if 'secure' in value and not isinstance(value['secure'], bool):
+            raise ValueError(f'DB_CONNECTIONS: secure подключения {key} должен быть true или false')
+        if 'schema' in value and not isinstance(value['schema'], str):
+            raise ValueError(f'DB_CONNECTIONS: schema подключения {key} должна быть строкой')
+        if 'sslmode' in value and not isinstance(value['sslmode'], str):
+            raise ValueError(f'DB_CONNECTIONS: sslmode подключения {key} должен быть строкой')
+    if 'metabase' not in values or values['metabase']['source'] != 'postgres':
+        raise ValueError('DB_CONNECTIONS: требуется подключение metabase типа postgres')
+    return values
+
+
+def connection(key: str, source: str | None = None) -> dict:
+    item = connections().get(key)
+    if item is None or (source and item['source'] != source):
+        raise ValueError(f'подключение {key} не найдено или имеет другой тип')
+    return item
 
 # Схема clickhouse:// у пользовательского сервера отдаёт только HTTPS.
 # secure по умолчанию = True; отключить можно переменной CLICKHOUSE_SECURE=false
@@ -75,7 +119,11 @@ class DbConfig:
         return f'DbConfig(host={self.host}, port={self.port}, database={self.database}, secure={self.secure})'
 
 
-DB = DbConfig(os.environ.get('DATABASE_URL'))
+_catalog = connections()
+_demo = _catalog.get('demo', {})
+DB = DbConfig(_demo.get('dsn') if _catalog else os.environ.get('DATABASE_URL'))
+if 'secure' in _demo:
+    DB.secure = bool(_demo['secure'])
 
 
 class PgConfig:
@@ -86,6 +134,18 @@ class PgConfig:
     """
 
     def __init__(self) -> None:
+        item = connections().get('metabase')
+        if item:
+            from urllib.parse import urlsplit, unquote, parse_qs
+            parsed = urlsplit(item['dsn'])
+            self.host = parsed.hostname or 'localhost'
+            self.port = parsed.port or 5432
+            self.database = unquote(parsed.path.lstrip('/')) or 'postgres'
+            self.user = unquote(parsed.username or 'postgres')
+            self.password = unquote(parsed.password or '')
+            self.sslmode = item.get('sslmode', parse_qs(parsed.query).get('sslmode', ['prefer'])[0])
+            self.schema = item.get('schema', 'ai_reporter').strip() or 'ai_reporter'
+            return
         self.host = os.environ.get('PGHOST', 'localhost')
         self.port = int(os.environ.get('PGPORT', '5432'))
         self.database = os.environ.get('PGDATABASE', 'postgres')

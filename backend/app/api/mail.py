@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from ..core import database as db
 from ..core.security import get_current_user, require_admin
+from ..core import report_access
 from ..mail import registry, sender
 from ..schemas.mail import MailServerCreate, MailServerPatch, SchedulePatch, ScheduleCreate
 
@@ -18,12 +19,11 @@ router = APIRouter(prefix='/api', tags=['mail'])
 
 
 def _check_access(user: dict, slug: str) -> dict:
-    slugs = db.accessible_slugs(user)
-    if slugs is not None and slug not in slugs:
-        raise HTTPException(403, 'нет доступа к отчёту')
     report = db.get_report(slug)
     if report is None:
         raise HTTPException(404, 'отчёт не найден')
+    if not report_access.can(user, report, 'view'):
+        raise HTTPException(403, 'нет доступа к отчёту')
     return report
 
 

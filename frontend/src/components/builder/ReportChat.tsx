@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
-import type { ChatMessage } from '../../lib/api'
-import { ApiError, chatReport, parsePhrase } from '../../lib/api'
+import type { ChatMessage, ReportRecommendation } from '../../lib/api'
+import { ApiError, chatReport, parsePhrase, recommendReports } from '../../lib/api'
 import type { ComputedField, ReportDefinition, ReportField } from '../../types/semantic'
-import { Alert, Button, Input, Modal, Textarea } from '../ui'
+import { Alert, Button, Card, Input, Modal, Textarea } from '../ui'
 import { cn } from '../../lib/cn'
 
 /**
@@ -54,6 +54,10 @@ export function ReportChat({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [model, setModel] = useState<string | null>(null)
+  const [parserMode, setParserMode] = useState(false)
+  const [recommendations, setRecommendations] = useState<ReportRecommendation[]>([])
+  const [recommendationsBusy, setRecommendationsBusy] = useState(false)
+  const recommendationRequest = useRef(0)
   /** Есть ли что подтверждать: предложение пришло и его ещё не откатили. */
   const [proposed, setProposed] = useState(false)
   /** Последняя реплика человека — её разбирает запасной путь без модели. */
@@ -63,6 +67,30 @@ export function ReportChat({
   useEffect(() => {
     if (open) tail.current?.scrollIntoView({ block: 'nearest' })
   }, [messages, busy, open])
+
+  const loadRecommendations = async () => {
+    if (recommendationsBusy) return
+    const request = ++recommendationRequest.current
+    setRecommendationsBusy(true)
+    setError(null)
+    try {
+      const answer = await recommendReports({ fields, computed, datasets })
+      if (request === recommendationRequest.current) {
+        setRecommendations(answer.recommendations)
+      }
+    } catch (err) {
+      if (request === recommendationRequest.current) {
+        setError(err instanceof ApiError ? err.message : 'не удалось подобрать варианты')
+      }
+    } finally {
+      if (request === recommendationRequest.current) setRecommendationsBusy(false)
+    }
+  }
+
+  const openDialog = () => {
+    setOpen(true)
+    if (!messages.length && !recommendations.length) void loadRecommendations()
+  }
 
   const send = async () => {
     const text = draft.trim()
@@ -74,11 +102,16 @@ export function ReportChat({
     setLastSaid(text)
     setDraft('')
     setError(null)
+    recommendationRequest.current += 1
+    setRecommendationsBusy(false)
+    setRecommendations([])
     setBusy(true)
     try {
       const answer = await chatReport(next, { fields, computed, datasets, definition })
       setMessages([...next, { role: 'assistant', text: answer.reply }])
       setModel(answer.model ?? null)
+      setParserMode(answer.source === 'parser')
+      setRecommendations(answer.recommendations ?? [])
       if (answer.definition) {
         onProposal(answer.definition, answer.title)
         setProposed(true)
@@ -108,6 +141,7 @@ export function ReportChat({
       onProposal(parsed.definition, null)
       setProposed(true)
       setModel(null)
+      setParserMode(true)
       setMessages((prev) => [
         ...prev,
         { role: 'assistant', text: 'Разобрал по словарю, без модели — посмотрите раскладку ниже.' },
@@ -126,18 +160,35 @@ export function ReportChat({
     setMessages((prev) => [...prev, { role: 'assistant', text: 'Вернул прежнюю раскладку.' }])
   }
 
+  const chooseRecommendation = (item: ReportRecommendation) => {
+    recommendationRequest.current += 1
+    onProposal(item.definition, item.title)
+    setProposed(true)
+    setRecommendations([])
+    setMessages((prev) => [
+      ...prev,
+      { role: 'user', text: `Выбираю «${item.title}»` },
+      { role: 'assistant', text: 'Готово — проверьте раскладку и предпросмотр ниже.' },
+    ])
+    setOpen(false)
+  }
+
   return (
     <>
       <section className="mt-3 flex flex-wrap items-center gap-2.5 rounded-card border border-line bg-surface px-3.5 py-3">
         <span className="text-xs font-medium tracking-wide text-fg-muted uppercase">
           Отчёт по описанию
         </span>
-        <Button variant="primary" onClick={() => setOpen(true)}>
-          {messages.length ? 'Доработать в диалоге' : 'Опишите отчёт словами'}
+        <Button variant="primary" onClick={openDialog}>
+          {parserMode && messages.length
+            ? 'Уточнить описание'
+            : messages.length ? 'Доработать в диалоге' : 'Выбрать или описать отчёт'}
         </Button>
         <span className="text-xs text-fg-muted">
           {model
             ? `собеседник — ${model}; выбирает только из вашего словаря`
+            : parserMode
+              ? 'разбор по словарю без модели: назовите показатели и разрезы'
             : 'скажете обычными словами, что нужно, — соберу и покажу; не то соберу — поправите'}
         </span>
         {/* словами можно назвать только то, что есть в словаре, — и он
@@ -156,9 +207,9 @@ export function ReportChat({
       {proposed && (
         <div className="mt-3 flex flex-col gap-2 rounded-card border border-accent bg-accent-soft p-3.5">
           <span className="text-sm">
-            Раскладка ниже — предложение собеседника, предпросмотр показывает её на настоящих
-            данных. Если всё так, сохраните отчёт; если нет — вернитесь в диалог и скажите,
-            что поправить.
+            Раскладка ниже собрана {parserMode ? 'по словарю без модели' : 'собеседником'}.
+            Предпросмотр показывает её на настоящих данных. Проверьте и сохраните отчёт
+            или уточните описание.
           </span>
           <div className="flex flex-wrap items-end gap-2">
             <label className="flex flex-col gap-1 text-xs text-fg-muted">
@@ -181,7 +232,9 @@ export function ReportChat({
                 Раскладка осталась в конструкторе — сохранить отчёт может администратор.
               </span>
             )}
-            <Button onClick={() => setOpen(true)}>Доработать в диалоге</Button>
+            <Button onClick={openDialog}>
+              {parserMode ? 'Уточнить описание' : 'Доработать в диалоге'}
+            </Button>
             <Button variant="ghost" onClick={revert}>
               Вернуть как было
             </Button>
@@ -194,9 +247,8 @@ export function ReportChat({
           <div className="flex flex-col gap-2.5">
             {messages.length === 0 ? (
               <p className="max-w-prose text-sm text-fg-muted">
-                Опишите обычными словами, что хотите видеть. Соберу отчёт целиком — итоги,
-                динамику, разбивки и фильтры, — покажу предпросмотр, а дальше поправим по
-                вашим замечаниям.
+                Выберите один из готовых вариантов ниже или опишите отчёт своими словами.
+                Выбранную раскладку можно проверить и поправить в конструкторе.
               </p>
             ) : (
               <div className="flex max-h-[50vh] flex-col gap-2 overflow-y-auto rounded-control border border-line bg-bg p-2.5">
@@ -222,6 +274,27 @@ export function ReportChat({
               </div>
             )}
 
+            {recommendationsBusy && (
+              <span className="text-sm text-fg-muted">Подбираю варианты из словаря…</span>
+            )}
+
+            {recommendations.length > 0 && (
+              <div className="flex flex-col gap-2">
+                <span className="text-sm font-medium">Варианты из доступных данных</span>
+                <div className="grid max-h-[42vh] gap-2 overflow-y-auto sm:grid-cols-2">
+                  {recommendations.map((item, index) => (
+                    <Card key={`${item.title}-${index}`} className="flex flex-col gap-2 p-3">
+                      <span className="text-sm font-semibold">{item.title}</span>
+                      <span className="text-xs text-fg-muted">{item.description}</span>
+                      <Button onClick={() => chooseRecommendation(item)} disabled={busy}>
+                        Выбрать отчёт
+                      </Button>
+                    </Card>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <Textarea
               autoFocus
               value={draft}
@@ -238,7 +311,9 @@ export function ReportChat({
               rows={3}
               disabled={busy}
               placeholder={
-                messages.length
+                parserMode
+                  ? 'например «выручка по городам столбцами»'
+                  : messages.length
                   ? 'что поправить? например «добавь разбивку по каналам» или «убери таблицу»'
                   : 'отчёт по продажам в разрезе городов'
               }
@@ -261,6 +336,9 @@ export function ReportChat({
             )}
 
             <div className="flex flex-wrap items-center gap-2">
+              <Button onClick={() => void loadRecommendations()} disabled={recommendationsBusy || busy}>
+                Показать варианты
+              </Button>
               <Button variant="primary" onClick={() => void send()} disabled={busy || !draft.trim()}>
                 {busy ? 'Собираю…' : messages.length ? 'Отправить' : 'Собрать отчёт'}
               </Button>

@@ -701,6 +701,145 @@ def _history(messages, limit: int) -> str:
     return '\n'.join(lines)
 
 
+def _recommendations(catalog, metrics: dict, dimensions: dict,
+                     datasets, request: str) -> list[dict]:
+    """Готовые варианты из рабочих полей; источник данных не опрашивается."""
+    dataset_info = getattr(catalog, 'datasets', {})
+    chosen = set(datasets or [])
+    generic = {'отчет', 'отчёт', 'собери', 'сделай', 'покажи', 'хочу', 'нужен'}
+    words = {word for word in phrase._tokens(request)
+             if len(word) >= 4 and word not in generic}
+
+    def matches(title: str) -> int:
+        return sum(any(phrase._similar(word, candidate) >= 0.9
+                       for candidate in phrase._tokens(title)) for word in words)
+
+    candidates = []
+    for metric in metrics.values():
+        if not isinstance(metric.get('slug'), str) or not metric['slug']:
+            continue
+        dataset_slug = metric.get('dataset_slug') or ''
+        if not dataset_slug:
+            # Формула отчёта без её определения не станет самостоятельным
+            # вариантом: она опирается на поля уже собранной раскладки.
+            continue
+        dataset = dataset_info.get(dataset_slug) or {}
+        if metric.get('status') == 'error' or dataset.get('status') == 'error':
+            continue
+        dataset_title = str(dataset.get('title') or dataset_slug or 'Поля отчёта')
+        metric_title = str(metric.get('title') or '')
+        score = (100 if dataset_slug in chosen else 0)
+        score += 20 * matches(dataset_title) + 10 * matches(metric_title)
+        score += 2 if metric.get('status') == 'ok' else 0
+        # Денежные показатели чаще дают понятный обзор, а технические поля
+        # вроде is_return и служебного счётчика строк оставляем ниже.
+        score += 12 if metric.get('format') == 'money' else 0
+        score += 4 if re.search(r'[а-яё]', metric_title, re.IGNORECASE) else 0
+        score -= 4 if '_' in metric_title else 0
+        score -= 8 if metric_title.casefold() in ('строк', 'rows', 'row_count') else 0
+        score -= 5 if metric_title.casefold().startswith('is_') else 0
+        candidates.append((-score, dataset_title.casefold(),
+                           metric_title.casefold(), metric, dataset_title))
+    candidates.sort(key=lambda item: item[:3])
+
+    # Сначала разнообразие датасетов, затем ещё варианты из лучших групп.
+    ordered, seen_datasets = [], set()
+    for item in candidates:
+        dataset_slug = item[3].get('dataset_slug') or ''
+        if dataset_slug not in seen_datasets:
+            ordered.append(item)
+            seen_datasets.add(dataset_slug)
+        if len(ordered) == 6:
+            break
+    if len(ordered) < 6:
+        ordered += [item for item in candidates if item not in ordered][:6 - len(ordered)]
+
+    result = []
+    for _, _, _, metric, dataset_title in ordered:
+        metric_slug = metric['slug']
+        dataset_slug = metric.get('dataset_slug')
+        own_dimensions = [dim for dim in dimensions.values()
+                          if dim.get('dataset_slug') == dataset_slug
+                          and isinstance(dim.get('slug'), str) and dim['slug']]
+        date_dim = next((dim for dim in own_dimensions if dim.get('type') == 'date'), None)
+        category_dim = next((dim for dim in own_dimensions if dim.get('type') == 'string'), None)
+        used_dimensions = [dim for dim in (date_dim, category_dim) if dim]
+        sections = [{'type': 'kpi', 'metrics': [metric_slug], 'by': []}]
+        details = ['итог']
+        if date_dim:
+            sections.append({'type': 'chart', 'kind': 'line', 'metrics': [metric_slug],
+                             'by': [date_dim['slug']], 'grain': 'month'})
+            details.append('динамика по ' + date_dim['title'])
+        if category_dim:
+            sections.append({'type': 'chart', 'kind': 'bar', 'metrics': [metric_slug],
+                             'by': [category_dim['slug']]})
+            details.append('разбивка по ' + category_dim['title'])
+        if used_dimensions:
+            sections.append({'type': 'table', 'metrics': [metric_slug],
+                             'by': [dim['slug'] for dim in used_dimensions]})
+            details.append('таблица')
+        raw = {'sections': sections, 'filters': [
+            {'dimension': dim['slug'],
+             'kind': 'daterange' if dim.get('type') == 'date' else 'select'}
+            for dim in used_dimensions]}
+        definition = _validate(raw, metrics, dimensions)
+        result.append({'title': f"{metric['title']} · {dataset_title}",
+                       'datasetTitle': dataset_title,
+                       'description': ', '.join(details).capitalize(),
+                       'definition': definition})
+    return result
+
+
+def recommend(catalog, fields=None, computed=None, datasets=None,
+              request: str = '') -> dict:
+    """Варианты отчёта по словарю, доступные ещё до первой реплики."""
+    metrics, dimensions = vocabulary_of(catalog, fields, computed)
+    if not metrics:
+        raise DatasetError('в словаре нет ни одного показателя для рекомендаций')
+    return {'recommendations': _recommendations(catalog, metrics, dimensions,
+                                                datasets, request)}
+
+
+def _chat_without_model(said, catalog, fields, computed, datasets,
+                        metrics, dimensions) -> dict:
+    """Разбирает последнюю просьбу по словарю и оставляет место для уточнения."""
+    latest = next((str(item.get('text') or '').strip() for item in reversed(said)
+                   if item.get('role') == 'user'), '')
+    if not latest:
+        return {'reply': 'Опишите, какие показатели нужны и по каким разрезам.',
+                'definition': None, 'title': None, 'notes': [],
+                'source': 'parser', 'model': None}
+
+    vocabularies = []
+    if datasets:
+        preferred = vocabulary_of(catalog, fields, computed, datasets)
+        if preferred[0]:
+            vocabularies.append(preferred)
+    vocabularies.append((metrics, dimensions))
+    for available_metrics, available_dimensions in vocabularies:
+        try:
+            parsed = phrase.parse(latest, _Vocabulary(available_metrics,
+                                                       available_dimensions))
+            checked = _validate(parsed['definition'], available_metrics,
+                                available_dimensions)
+        except DatasetError as exc:
+            continue
+        unmatched = list(dict.fromkeys(
+            word for note in parsed['notes'] for word in note.get('unmatched', [])))
+        reply = 'Разобрал описание по словарю без модели — проверьте раскладку.'
+        if unmatched:
+            reply += ' Не распознал слова: ' + ', '.join(unmatched[:8]) + '.'
+        return {'reply': reply, 'definition': checked, 'title': None,
+                'notes': parsed['notes'], 'source': 'parser', 'model': None}
+
+    recommendations = _recommendations(catalog, metrics, dimensions, datasets, latest)
+    return {'reply': ('Выберите подходящий вариант отчёта из доступных данных.'
+                      if recommendations else
+                      'Сейчас нет доступных показателей для готового отчёта.'),
+            'definition': None, 'title': None, 'notes': [],
+            'recommendations': recommendations, 'source': 'parser', 'model': None}
+
+
 def chat(messages, catalog, fields=None, computed=None, datasets=None,
          definition=None) -> dict:
     """Переписка об отчёте → ответ собеседника и, когда есть что, определение.
@@ -745,10 +884,8 @@ def chat(messages, catalog, fields=None, computed=None, datasets=None,
 
     key = _openrouter_key()
     if not key:
-        raise DatasetError(
-            'модель не настроена, поэтому диалог недоступен — соберите отчёт '
-            'мышью или разберите описание кнопкой «Собрать по описанию»'
-        )
+        return _chat_without_model(said, catalog, fields, computed, datasets,
+                                   metrics, dimensions)
 
     problems: list[str] = []
     for model in _chat_models():

@@ -16,6 +16,7 @@ import uuid
 
 from ..core.database import _conn, utcnow
 from ..datasets import registry as dataset_registry
+from ..datasets import servers as dataset_servers
 from ..datasets.base import DatasetError, sanitize_error
 from ..query import dialects
 
@@ -255,7 +256,11 @@ def validate_link(left_slug: str, right_slug: str) -> None:
     if left['source'] == 'csv':
         raise DatasetError('связи для CSV-датасетов пока не поддерживаются')
     try:
-        if dataset_registry.resolve_dataset_dsn(left) != dataset_registry.resolve_dataset_dsn(right):
+        left_key = (('key', left['connection_key']) if left.get('connection_key') else
+                    ('legacy', dataset_servers.server_key(left['source'], dataset_registry.resolve_dataset_dsn(left))))
+        right_key = (('key', right['connection_key']) if right.get('connection_key') else
+                     ('legacy', dataset_servers.server_key(right['source'], dataset_registry.resolve_dataset_dsn(right))))
+        if left_key != right_key:
             raise DatasetError(
                 'датасеты связи живут на разных серверах — джойн не спускается в SQL'
             )

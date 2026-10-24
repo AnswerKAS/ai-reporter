@@ -1,7 +1,7 @@
 """Реестр датасетов в метабазе + фабрика адаптеров.
 
-Датасет = именованный источник: тип (clickhouse | postgres | oracle | csv), DSN
-(литерал или ссылка env:VAR), таблица/файл, вычитанная схема полей.
+Датасет = именованный источник: тип, ключ подключения из DB_CONNECTIONS,
+таблица/запрос/файл и вычитанная схема полей. Старый DSN читается до миграции.
 """
 
 import json
@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 
 from ..core.database import _conn, utcnow
+from ..core.config import connection as db_connection
 from ..services import storage
 from .base import DatasetAdapter, DatasetError, sanitize_error
 from .clickhouse import ClickHouseAdapter
@@ -76,6 +77,12 @@ def resolve_dataset_dsn(dataset: dict) -> str:
     требовать DSN здесь значит не дать создать адаптер ни одному такому
     датасету. Это же исключение уже сделано в api/datasets.py:_validate_dsn.
     """
+    key = dataset.get('connection_key')
+    if key:
+        try:
+            return db_connection(key, dataset.get('source'))['dsn']
+        except ValueError as exc:
+            raise DatasetError(str(exc)) from exc
     raw = (dataset.get('dsn') or '').strip()
     source = dataset.get('source') or ''
     if source == 'csv':
@@ -128,13 +135,14 @@ def create(
     status: str,
     error: str | None,
     query: str = '',
+    connection_key: str | None = None,
 ) -> dict:
     now = utcnow()
     with _conn() as conn:
         conn.execute(
-            'INSERT INTO datasets (slug, title, description, source, dsn, table_name, query, file, schema, status, error, created_at, updated_at) '
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, '', %s, %s, %s, %s, %s)",
-            (slug, title, description, source, dsn, table_name, query, json.dumps(schema, ensure_ascii=False), status, error, now, now),
+            'INSERT INTO datasets (slug, title, description, source, dsn, connection_key, table_name, query, file, schema, status, error, created_at, updated_at) '
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, '', %s, %s, %s, %s, %s)",
+            (slug, title, description, source, dsn, connection_key, table_name, query, json.dumps(schema, ensure_ascii=False), status, error, now, now),
         )
     return get(slug)
 
@@ -142,11 +150,12 @@ def create(
 def update(slug: str, *, title: str | None = None, description: str | None = None,
            dsn: str | None = None, table_name: str | None = None,
            query: str | None = None,
+           connection_key: str | None = None,
            schema: list[dict] | None = None, status: str | None = None,
            error: str | None = None, clear_error: bool = False) -> dict | None:
     fields, values = ['updated_at = %s'], [utcnow()]
     for column, value in (
-        ('title', title), ('description', description), ('dsn', dsn),
+        ('title', title), ('description', description), ('dsn', dsn), ('connection_key', connection_key),
         ('table_name', table_name), ('query', query),
         ('schema', json.dumps(schema, ensure_ascii=False) if schema is not None else None),
         ('status', status), ('error', error),
@@ -185,7 +194,12 @@ def adapter_for(dataset: dict, reuse: bool = False) -> DatasetAdapter:
     table = dataset.get('table_name') or ''
     query = (dataset.get('query') or '').strip()
     if source == 'clickhouse':
-        return ClickHouseAdapter(dsn=dsn, table=table, query=query, reuse=reuse)
+        adapter = ClickHouseAdapter(dsn=dsn, table=table, query=query, reuse=reuse)
+        if dataset.get('connection_key'):
+            item = db_connection(dataset['connection_key'], source)
+            if 'secure' in item:
+                adapter._cfg.secure = bool(item['secure'])
+        return adapter
     if source == 'postgres':
         return PostgresAdapter(dsn=dsn, table=table, query=query, reuse=reuse)
     if source == 'oracle':
@@ -213,6 +227,12 @@ def ensure_default_datasets() -> None:
     """При пустом реестре регистрирует дефолтные датасеты витрины ClickHouse."""
     if list_all():
         return
+    if os.environ.get('DB_CONNECTIONS'):
+        from ..core.config import connections
+        if 'demo' not in connections():
+            return
+    elif not os.environ.get('DATABASE_URL'):
+        return
     for item in DEFAULT_DATASETS:
         if not get(item['slug']):
             create(
@@ -220,7 +240,8 @@ def ensure_default_datasets() -> None:
                 title=item['title'],
                 description=item['description'],
                 source='clickhouse',
-                dsn='env:DATABASE_URL',
+                dsn='' if os.environ.get('DB_CONNECTIONS') else 'env:DATABASE_URL',
+                connection_key='demo' if os.environ.get('DB_CONNECTIONS') else None,
                 table_name=item['table_name'],
                 schema=[],
                 status='new',

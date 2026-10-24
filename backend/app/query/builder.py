@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from ..datasets import registry as dataset_registry
+from ..datasets import servers as dataset_servers
 from ..datasets.base import DatasetError
 from ..semantic import registry as semantic
 from . import dialects
@@ -522,6 +523,13 @@ class SectionQuery:
                 'секция обращается к разным типам источников — кросс-источниковые '
                 'запросы пока не поддерживаются'
             )
+        connections = {
+            ('key', d['connection_key']) if d.get('connection_key') else
+            ('legacy', dataset_servers.server_key(d['source'], dataset_registry.resolve_dataset_dsn(d)))
+            for d in self.datasets.values()
+        }
+        if len(connections) > 1:
+            raise DatasetError('секция обращается к разным подключениям — джойн невозможен')
         self.dialect = dialects.for_source(next(iter(sources)))
         self.aliases = {slug: f't{i}' for i, slug in enumerate(self.dataset_slugs)}
         self.joined = len(self.dataset_slugs) > 1

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { Dataset, DatasetDetail } from '../types/dataset'
+import type { Dataset, DatasetDetail, DatasetQuestionTurn, DbConnection } from '../types/dataset'
 import type { Dimension, Metric } from '../types/semantic'
 import {
   ApiError,
@@ -9,6 +9,8 @@ import {
   patchDataset,
   refreshDataset,
   uploadDatasetCsv,
+  askDataset,
+  fetchDbConnections,
 } from '../lib/api'
 import { DatasetPreviewTable } from './DatasetPreviewTable'
 import { DatasetSemanticDraft } from './DatasetSemanticDraft'
@@ -21,13 +23,14 @@ import {
   Segmented,
   Skeleton,
   Table,
+  Select,
   Td,
   Textarea,
   Th,
   Tr,
 } from './ui'
 
-type Tab = 'preview' | 'fields' | 'metrics' | 'dimensions' | 'draft' | 'source'
+type Tab = 'preview' | 'questions' | 'fields' | 'metrics' | 'dimensions' | 'draft' | 'source' | 'connection'
 
 /** Показатель считается «по полю», если его выражение упоминает колонку по
     границе слова: `sum(revenue)` — по `revenue`, но `sum(revenue_plan)` — нет.
@@ -74,6 +77,15 @@ export function DatasetModal({
   const [dimensions, setDimensions] = useState<Dimension[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [question, setQuestion] = useState('')
+  const [turns, setTurns] = useState<DatasetQuestionTurn[]>([])
+  const [asking, setAsking] = useState(false)
+  const [questionError, setQuestionError] = useState<string | null>(null)
+  const [connections, setConnections] = useState<DbConnection[]>([])
+  const [nextConnection, setNextConnection] = useState('')
+  useEffect(() => {
+    if (isAdmin && dataset.source !== 'csv') void fetchDbConnections().then(setConnections).catch(() => setConnections([]))
+  }, [isAdmin, dataset.source])
 
   const load = useCallback(async () => {
     const [d, ms, dims] = await Promise.all([fetchDataset(dataset.slug), fetchMetrics(), fetchDimensions()])
@@ -126,11 +138,13 @@ export function DatasetModal({
 
   const tabs: { value: Tab; label: string; count?: number }[] = [
     { value: 'preview', label: 'Превью' },
+    { value: 'questions', label: 'Вопросы по данным' },
     { value: 'fields', label: 'Поля датасета', count: fields.length },
     { value: 'metrics', label: 'Показатели', count: metrics.length },
     { value: 'dimensions', label: 'Разрезы', count: dimensions.length },
     ...(draftable ? [{ value: 'draft' as Tab, label: 'Черновик словаря' }] : []),
     ...(editable ? [{ value: 'source' as Tab, label: 'Источник' }] : []),
+    ...(isAdmin && current.source !== 'csv' ? [{ value: 'connection' as Tab, label: 'Подключение' }] : []),
   ]
 
   return (
@@ -202,6 +216,43 @@ export function DatasetModal({
         ) : (
           <p className="text-sm text-fg-muted">Превью недоступно.</p>
         ))}
+
+      {tab === 'questions' && (
+        <div className="space-y-4">
+          <p className="text-sm text-fg-muted">Спросите о значениях этого датасета. Следующий вопрос может уточнять предыдущий.</p>
+          {turns.map((turn, index) => (
+            <div key={index} className="rounded-card border border-line p-3">
+              <p className="font-medium">{turn.question}</p>
+              <p className="mt-2 text-sm">{turn.answer}</p>
+              {turn.columns.length > 0 && (
+                <div className="mt-2 overflow-x-auto">
+                  <Table><thead><tr>{turn.columns.map((column) => <Th key={column}>{column}</Th>)}</tr></thead>
+                    <tbody>{turn.rows.map((row, rowIndex) => <Tr key={rowIndex}>{row.map((cell, cellIndex) => <Td key={cellIndex}>{cell}</Td>)}</Tr>)}</tbody>
+                  </Table>
+                </div>
+              )}
+              {turn.truncated && <p className="text-xs text-fg-muted">Показана часть результата.</p>}
+              {isAdmin && turn.sql && <pre className="mt-2 overflow-x-auto text-xs text-fg-muted">{turn.sql}{turn.parameters ? `\n${JSON.stringify(turn.parameters)}` : ''}</pre>}
+            </div>
+          ))}
+          {questionError && <Alert>{questionError}</Alert>}
+          <form onSubmit={(event) => {
+            event.preventDefault()
+            const text = question.trim()
+            if (!text || asking) return
+            setAsking(true)
+            setQuestionError(null)
+            void askDataset(current.slug, text, turns).then((reply) => {
+              setTurns((previous) => [...previous, { ...reply, question: text }])
+              setQuestion('')
+            }).catch((err) => setQuestionError(err instanceof ApiError ? err.message : 'не удалось получить ответ'))
+              .finally(() => setAsking(false))
+          }} className="flex gap-2">
+            <Textarea aria-label="Вопрос по датасету" value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="Например: какая выручка по городам?" />
+            <Button type="submit" disabled={asking || !question.trim()}>{asking ? 'Считаю…' : 'Спросить'}</Button>
+          </form>
+        </div>
+      )}
 
       {tab === 'fields' &&
         (fields.length === 0 ? (
@@ -333,6 +384,20 @@ export function DatasetModal({
 
       {tab === 'source' && editable && (
         <DatasetQueryEditor dataset={current} busy={busy} onSaved={() => void run(async () => undefined)} />
+      )}
+      {tab === 'connection' && isAdmin && current.source !== 'csv' && (
+        <div className="space-y-3">
+          <p className="text-sm">Текущее подключение: {current.connectionKey || 'старый DSN — выполните миграцию'}.</p>
+          <Field label="Перенести датасет на подключение">
+            <Select value={nextConnection} onChange={(event) => setNextConnection(event.target.value)}>
+              <option value="">Выберите подключение</option>
+              {connections.filter((item) => item.source === current.source).map((item) =>
+                <option key={item.key} value={item.key}>{item.title}</option>)}
+            </Select>
+          </Field>
+          <Button disabled={!nextConnection || busy || nextConnection === current.connectionKey}
+            onClick={() => void run(() => patchDataset(current.slug, { connectionKey: nextConnection }))}>Сохранить подключение</Button>
+        </div>
       )}
     </Modal>
   )

@@ -26,6 +26,7 @@ export interface Dataset {
   serverId?: string | null
   /** Имя сервера для интерфейса. Адрес в нём виден только администратору. */
   serverTitle?: string | null
+  connectionKey?: string | null
   status: DatasetStatus
   error?: string | null
   createdAt: string
@@ -51,6 +52,7 @@ export interface DatasetCreateInput {
   description?: string
   source: DatasetSource
   dsn?: string
+  connectionKey?: string
   tableName?: string
   query?: string
 }
@@ -59,6 +61,7 @@ export interface DatasetPatchInput {
   title?: string
   description?: string
   dsn?: string
+  connectionKey?: string
   tableName?: string
   query?: string
 }
@@ -68,6 +71,24 @@ export interface DatasetSaveResult {
   dataset: Dataset
   notes?: string[]
   warnings?: string[]
+}
+
+export interface DbConnection {
+  key: string
+  title: string
+  source: Exclude<DatasetSource, 'csv'>
+  address?: string | null
+}
+
+export interface DatasetQuestionTurn {
+  question: string
+  answer: string
+  columns: string[]
+  rows: string[][]
+  plan: Record<string, unknown>
+  truncated: boolean
+  sql?: string
+  parameters?: Record<string, string | number | boolean>
 }
 
 export interface DimensionSuggestion {

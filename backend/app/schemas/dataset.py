@@ -27,6 +27,7 @@ class DatasetMeta(CamelModel):
     # у CSV-датасета сервера нет
     server_id: str | None = None
     server_title: str | None = None
+    connection_key: str | None = None
     status: Literal['new', 'ok', 'error'] = 'new'
     error: str | None = None
     created_at: str
@@ -52,6 +53,7 @@ class DatasetCreate(CamelModel):
     description: str | None = None
     source: Literal['clickhouse', 'postgres', 'oracle', 'csv']
     dsn: str = ''
+    connection_key: str | None = None
     table_name: str = ''
     query: str = ''
 
@@ -60,6 +62,7 @@ class DatasetPatch(CamelModel):
     title: str | None = None
     description: str | None = None
     dsn: str | None = None
+    connection_key: str | None = None
     table_name: str | None = None
     query: str | None = None
 

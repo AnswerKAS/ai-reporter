@@ -27,7 +27,7 @@ cat ~/.ssh/ai-reporter-deploy             # → секрет SSH_PRIVATE_KEY
 После первого успешного деплоя по ключу стоит закрыть парольный вход:
 `PasswordAuthentication no` в `/etc/ssh/sshd_config` + `systemctl reload ssh`.
 
-Сервер хранит своё состояние сам: `backend/.env` (PG*, DATABASE_URL) и `backend/artifacts/` (загруженные CSV) rsync-ом не перетираются — в репо только код.
+Сервер хранит своё состояние сам: `backend/.env` (`DB_CONNECTIONS`) и `backend/artifacts/` (загруженные CSV) rsync-ом не перетираются — в репо только код.
 
 ## Первичная настройка сервера (один раз)
 
@@ -59,7 +59,7 @@ chmod 440 /etc/sudoers.d/ai-reporter
 
 ```bash
 # 5. .env (секреты вручную, в git не попадает)
-nano /home/deploy/ai-reporter/backend/.env    # PGHOST/PGUSER/..., DATABASE_URL
+nano /home/deploy/ai-reporter/backend/.env    # DB_CONNECTIONS: metabase, demo и источники
 
 # 6. Юнит systemd (приедет на сервер rsync-ом при первом деплое)
 sudo cp /home/deploy/ai-reporter/deploy/ai-reporter.service /etc/systemd/system/

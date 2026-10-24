@@ -60,7 +60,7 @@ export function UsersPanel({
     <Panel
       title="Пользователи"
       count={users.length}
-      description="Учётные записи и их роли. Админ видит все отчёты и настройки; обычный пользователь — только назначенные ему отчёты."
+      description="Учётные записи и роли. Доступ к отчёту возникает также у автора и по совпадающей метке."
       actions={
         <Button variant="primary" onClick={() => setCreating(true)}>
           Добавить пользователя
@@ -122,7 +122,7 @@ export function UsersPanel({
                         {u.role === 'admin'
                           ? 'отчёты: все'
                           : userReports
-                            ? `отчётов: ${reports.length}`
+                            ? `назначений отчётов: ${reports.length}`
                             : 'отчёты: считаем…'}
                         {' · '}
                         {inGroups.length > 0 ? `группы: ${inGroups.join(', ')}` : 'без групп'}

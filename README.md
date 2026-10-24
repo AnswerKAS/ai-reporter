@@ -50,7 +50,7 @@ backend/
 вместе с приложением — ставить его отдельно не нужно.
 
 ```bash
-cp backend/.env.example backend/.env    # PG* здесь не нужны: адрес метабазы задаёт compose
+cp backend/.env.example backend/.env    # проверьте DB_CONNECTIONS и пароль метабазы
 docker compose up -d --build            # http://localhost:8080
 ```
 
@@ -61,19 +61,20 @@ docker compose up -d --build            # http://localhost:8080
 | `frontend` | nginx: собранный фронт и прокси `/api` → `backend` — наружу торчит только он |
 | `clickhouse` | демо-витрина, только с `--profile demo` |
 
-Из `backend/.env` compose берёт всё, кроме подключения к метабазе
-(`PG*`) и `ARTIFACTS_DIR` — их он задаёт сам. Загруженные CSV лежат
+Из `backend/.env` приложение берёт `DB_CONNECTIONS` для метабазы и источников;
+`ARTIFACTS_DIR` Compose задаёт сам. Загруженные CSV лежат
 в томе `artifacts`. Порт и пароль метабазы меняются переменными окружения
 или файлом `.env` в корне репозитория: `APP_PORT` (по умолчанию `8080`)
 и `POSTGRES_PASSWORD`. Ключ модели в контейнер из файла opencode не попадёт —
 задайте `OPENROUTER_API_KEY` в `backend/.env`.
+Если меняете `POSTGRES_PASSWORD`, укажите тот же пароль в
+`DB_CONNECTIONS.metabase.dsn`: первая переменная нужна контейнеру PostgreSQL
+для создания базы, вторая — приложению для подключения.
 
 Демо-витрина с тестовыми данными:
 
 ```bash
-# в backend/.env:
-#   DATABASE_URL=clickhouse://default:demo@clickhouse:8123/default
-#   CLICKHOUSE_SECURE=false
+# в backend/.env ключ demo уже включён в DB_CONNECTIONS из примера
 docker compose --profile demo up -d --build
 docker compose exec backend python -m app.reports.seed    # 30 дней данных
 ```
@@ -88,8 +89,8 @@ docker compose down -v                  # остановить и удалить
 ```
 
 Чтобы работать с внешним PostgreSQL, уберите из `docker-compose.yml` сервис
-`postgres`, его `depends_on` у бэкенда и `PG*` из `environment` —
-тогда подключение возьмётся из `backend/.env`. Адрес `localhost` там
+`postgres` и его `depends_on` у бэкенда, затем укажите внешний адрес в
+`DB_CONNECTIONS.metabase`. Адрес `localhost` там
 указывает на сам контейнер, а не на ваш компьютер; до базы на хосте
 достучитесь через `host.docker.internal`.
 
@@ -102,7 +103,7 @@ docker compose down -v                  # остановить и удалить
 cd backend
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-cp .env.example .env        # PG* — метабаза; DATABASE_URL — витрина ClickHouse
+cp .env.example .env        # настройте DB_CONNECTIONS для метабазы и витрины
 
 # опционально: демо-витрина с тестовыми данными (30 дней)
 .venv/bin/python -m app.reports.seed
@@ -130,10 +131,7 @@ npm run dev                 # http://localhost:5173 (/api проксируетс
 
 | Переменная | Назначение |
 |---|---|
-| `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD` | метабаза приложения; `PG_SCHEMA` меняет имя схемы (по умолчанию `ai_reporter`) |
-| `DATABASE_URL` | DSN ClickHouse-витрины: `clickhouse://user:pass@host:port/db`. Пароль может содержать спецсимволы (`@`, `!`) — парсер режет по последнему `@` |
-| `CLICKHOUSE_SECURE` | TLS к ClickHouse (по умолчанию `true`, сертификат — `certifi`) |
-| `ORACLE_DSN` | необязательна: DSN для датасетов Oracle, если ссылаться на него как `env:ORACLE_DSN`. Формат `oracle://user:pass@host:1521/SERVICE` (для SID — `?sid=ORCL`), спецсимволы в пароле percent-encoded |
+| `DB_CONNECTIONS` | JSON всех подключений БД: обязательный `metabase`, необязательный `demo` и именованные источники. У записи — `source`, `dsn`, при необходимости `schema`, `sslmode`, `secure`, `title`. Для старой установки: `cd backend && .venv/bin/python -m app.datasets.migrate_connections`, затем перезапуск. |
 | `OPENROUTER_API_KEY`, `INTERPRET_MODEL` | разбор словесного ТЗ моделью; без ключа разбирает встроенный парсер |
 | `CHAT_MODEL`, `CHAT_FALLBACK_MODEL`, `CHAT_TIMEOUT` | диалог о будущем отчёте в конструкторе: модели и предел ожидания (умолчания — `deepseek/deepseek-v4-flash`, `z-ai/glm-5.3-flash`, 90 с) |
 | `ARTIFACTS_DIR`, `ARTIFACTS_STORAGE` | каталог и режим хранилища загруженных CSV |
@@ -150,15 +148,14 @@ npm run dev                 # http://localhost:5173 (/api проксируетс
    объектов. Такой запрос исполняется на каждую секцию отчёта, на каждый
    список значений фильтра и на детализацию, поэтому тяжёлую агрегацию лучше
    вынести в представление источника и завести датасет на нём. Строка
-   подключения задаётся литеральным DSN — ссылок на переменные окружения и
-   «сервера приложения» источником больше нет. Заводят датасет в админке
+   подключения задаётся ключом из `DB_CONNECTIONS`. Заводят датасет в админке
    (`/admin?tab=datasets`), а `/datasets` — каталог: список сужается поиском
    (название, slug, таблица, имена полей) и фильтрами по источнику и статусу
    подключения — и того и другого можно выбрать несколько сразу; выбранное
    остаётся в адресе (`?source=postgres,csv&status=error`), так что ссылкой на
    выборку можно поделиться. Карточка открывает окно с вкладками: превью
    (с сортировкой и фильтрами по колонкам), поля датасета, показатели,
-   разрезы, а администратору — ещё черновик словаря и правка SQL-запроса.
+   разрезы и диалог вопросов по данным, а администратору — ещё черновик словаря и правка SQL-запроса.
 2. **Модель данных** (`/model`, админ) — словарь: метрика («Выручка» =
    `sum(revenue)`), разрез («Город» = `region`) и связи между датасетами.
    Выражение метрики проверяется на источнике сразу: битая метрика получает

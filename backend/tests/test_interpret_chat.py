@@ -212,11 +212,88 @@ def test_пустой_словарь_отклоняется(model_answer):
         interpret.chat([{'role': 'user', 'text': 'отчёт'}], Empty())
 
 
-def test_без_ключа_диалога_нет(catalog, monkeypatch):
+def test_без_ключа_диалог_разбирает_по_словарю(catalog, monkeypatch):
     monkeypatch.setattr(interpret, '_openrouter_key', lambda: None)
 
-    with pytest.raises(DatasetError, match='модель не настроена'):
-        interpret.chat([{'role': 'user', 'text': 'отчёт'}], catalog)
+    answer = interpret.chat([{'role': 'user', 'text': 'выручка по городам столбцами'}],
+                            catalog)
+
+    assert answer['source'] == 'parser'
+    assert answer['model'] is None
+    assert answer['definition']['sections'][0]['metrics'] == ['revenue']
+    assert answer['definition']['sections'][0]['by'] == ['city']
+    assert answer['notes'][0]['matchedMetrics'] == ['Выручка']
+
+
+def test_без_ключа_неясная_реплика_предлагает_готовые_отчёты(catalog, monkeypatch):
+    monkeypatch.setattr(interpret, '_openrouter_key', lambda: None)
+
+    answer = interpret.chat([{'role': 'user', 'text': 'отчёт'}], catalog,
+                            definition=TABLE)
+
+    assert answer['source'] == 'parser'
+    assert answer['definition'] is None
+    assert 'Выберите' in answer['reply']
+    assert len(answer['recommendations']) == 2
+    recommendation = answer['recommendations'][0]
+    chosen_metric = recommendation['definition']['sections'][0]['metrics'][0]
+    assert recommendation['definition']['sections'][0]['type'] == 'kpi'
+    assert chosen_metric in {'revenue', 'orders'}
+    assert {'day', 'city'} == {
+        item['dimension'] for item in recommendation['definition']['filters']}
+    assert all(section['metrics'] == [chosen_metric]
+               for section in recommendation['definition']['sections'])
+
+
+def test_рекомендации_предпочитают_выбранный_датасет_и_исключают_ошибки(
+        catalog, monkeypatch):
+    monkeypatch.setattr(interpret, '_openrouter_key', lambda: None)
+    catalog.metrics['margin'] = {'slug': 'margin', 'title': 'Маржа',
+                                 'dataset_slug': 'other', 'status': 'ok'}
+    catalog.metrics['broken'] = {'slug': 'broken', 'title': 'Сломанный',
+                                 'dataset_slug': 'sales', 'status': 'error'}
+
+    answer = interpret.chat([{'role': 'user', 'text': 'отчёт'}], catalog,
+                            datasets=['sales'])
+
+    titles = [item['title'] for item in answer['recommendations']]
+    assert titles[0] != 'Маржа · other'
+    assert 'Маржа · other' in titles
+    assert not any('Сломанный' in title for title in titles)
+
+
+def test_рекомендации_ограничены_шестью_и_охватывают_разные_датасеты(
+        catalog, monkeypatch):
+    monkeypatch.setattr(interpret, '_openrouter_key', lambda: None)
+    for i in range(10):
+        catalog.metrics[f'm_{i}'] = {'slug': f'm_{i}', 'title': f'Показатель {i}',
+                                      'dataset_slug': f'ds_{i}', 'status': 'ok'}
+
+    answer = interpret.chat([{'role': 'user', 'text': 'отчёт'}], catalog)
+
+    assert len(answer['recommendations']) == 6
+    assert len({item['datasetTitle'] for item in answer['recommendations']}) == 6
+
+
+def test_понятный_денежный_показатель_выше_технического(catalog):
+    catalog.metrics['revenue']['format'] = 'money'
+    catalog.metrics['technical'] = {'slug': 'technical', 'title': 'is_internal (сумма)',
+                                    'dataset_slug': 'sales', 'status': 'ok'}
+
+    variants = interpret.recommend(catalog)['recommendations']
+
+    assert variants[0]['title'].startswith('Выручка')
+
+
+def test_без_ключа_ищет_за_пределами_выбранного_датасета(catalog, monkeypatch):
+    monkeypatch.setattr(interpret, '_openrouter_key', lambda: None)
+    catalog.metrics['margin'] = {'slug': 'margin', 'title': 'Маржа',
+                                 'dataset_slug': 'other'}
+
+    answer = interpret.chat([{'role': 'user', 'text': 'маржа'}], catalog,
+                            datasets=['sales'])
+
+    assert answer['definition']['sections'][0]['metrics'] == ['margin']
 
 
 def test_обрыв_основной_модели_уводит_к_запасной(catalog, model_answer, monkeypatch):
@@ -271,6 +348,34 @@ def test_метод_на_пустой_переписке_422(client, model, user
 
     assert answer.status_code == 422
     assert 'обычными словами' in answer.json()['detail']
+
+
+def test_метод_без_модели_возвращает_варианты(client, model, user_headers,
+                                             monkeypatch):
+    monkeypatch.setattr(interpret, '_openrouter_key', lambda: None)
+
+    response = client.post('/api/reports/chat',
+                           json={'messages': [{'role': 'user', 'text': 'собери отчёт'}]},
+                           headers=user_headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body['source'] == 'parser'
+    assert body['definition'] is None
+    assert body['recommendations']
+    assert body['recommendations'][0]['definition']['sections']
+
+
+def test_рекомендации_доступны_без_реплики_и_модели(client, model, user_headers,
+                                                  monkeypatch):
+    monkeypatch.setattr(interpret, '_openrouter_key', lambda: None)
+
+    assert client.post('/api/reports/recommendations', json={}).status_code == 401
+    response = client.post('/api/reports/recommendations', json={},
+                           headers=user_headers)
+
+    assert response.status_code == 200
+    assert response.json()['recommendations'][0]['definition']['sections']
 
 
 # --- вид фильтра -------------------------------------------------------------

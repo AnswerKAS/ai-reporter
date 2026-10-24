@@ -19,6 +19,8 @@ import type {
   DatasetSemanticInput,
   DatasetSemanticResult,
   DatasetSuggestions,
+  DbConnection,
+  DatasetQuestionTurn,
 } from '../types/dataset'
 import type {
   ComputedField,
@@ -154,6 +156,28 @@ export async function changePassword(password: string): Promise<void> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ password }),
   })
+}
+
+export async function adminGetAccessTags(kind: 'user' | 'group', id: string): Promise<string[]> {
+  const json = await request<{ tags: string[] }>(`/admin/access-tags/${kind}/${encodeURIComponent(id)}`)
+  return json.tags
+}
+
+export async function adminSetAccessTags(kind: 'user' | 'group', id: string, tags: string[]): Promise<string[]> {
+  const json = await request<{ tags: string[] }>(`/admin/access-tags/${kind}/${encodeURIComponent(id)}`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tags }),
+  })
+  return json.tags
+}
+
+export async function adminEffectiveAccess(slug: string): Promise<{ userId: string; username: string; reasons: string[] }[]> {
+  const json = await request<{ users: { userId: string; username: string; reasons: string[] }[] }>(`/admin/access/${slug}/effective`)
+  return json.users
+}
+
+export async function adminUserAccessibleReports(id: string): Promise<{ slug: string; title: string; reasons: string[] }[]> {
+  const json = await request<{ reports: { slug: string; title: string; reasons: string[] }[] }>(`/admin/users/${id}/accessible-reports`)
+  return json.reports
 }
 
 // --- отчёты ---
@@ -350,6 +374,24 @@ export async function fetchDatasets(): Promise<Dataset[]> {
 
 export async function fetchDataset(slug: string): Promise<DatasetDetail> {
   return await request<DatasetDetail>(`/datasets/${slug}`)
+}
+
+export async function fetchDbConnections(): Promise<DbConnection[]> {
+  const json = await request<{ connections: DbConnection[] }>('/datasets/connections')
+  return json.connections
+}
+
+export async function testDbConnection(key: string): Promise<void> {
+  await request(`/datasets/connections/${encodeURIComponent(key)}/test`, { method: 'POST' })
+}
+
+export async function askDataset(slug: string, question: string,
+                                 history: DatasetQuestionTurn[]): Promise<DatasetQuestionTurn> {
+  return await request<DatasetQuestionTurn>(`/datasets/${slug}/ask`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ question, history: history.map(({ question, plan }) => ({ question, plan })) }),
+  })
 }
 
 export async function createDataset(input: DatasetCreateInput): Promise<DatasetSaveResult> {
@@ -715,6 +757,28 @@ export interface ChatMessage {
   text: string
 }
 
+export interface ReportRecommendation {
+  title: string
+  datasetTitle: string
+  description: string
+  definition: ReportDefinition
+}
+
+/** Готовые варианты из словаря до первой реплики. */
+export async function recommendReports(
+  context: { fields?: ReportField[]; computed?: ComputedField[]; datasets?: string[] } = {},
+): Promise<{ recommendations: ReportRecommendation[] }> {
+  return request('/reports/recommendations', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      fields: context.fields ?? [],
+      computed: context.computed ?? [],
+      datasets: context.datasets ?? [],
+    }),
+  })
+}
+
 export interface ChatAnswer {
   /** Ответ собеседника по-русски — его и показываем в переписке. */
   reply: string
@@ -723,6 +787,8 @@ export interface ChatAnswer {
   /** Название, предложенное моделью, — подставляется в пустое поле. */
   title?: string | null
   notes: ParseNote[]
+  /** Готовые варианты из словаря, если описание не назвало показатель. */
+  recommendations?: ReportRecommendation[]
   source?: 'llm' | 'parser'
   /** Какая модель ответила: у диалога и разбора они разные. */
   model?: string

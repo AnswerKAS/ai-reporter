@@ -61,3 +61,7 @@ class AccessPatch(CamelModel):
     report_slug: str
     user_id: str | None = None
     group_id: str | None = None
+
+
+class AccessTagsPatch(CamelModel):
+    tags: list[str]

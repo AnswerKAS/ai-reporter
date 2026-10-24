@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import type { Dataset, DatasetSource } from '../../types/dataset'
-import { ApiError, createDataset, deleteDataset, fetchDatasets } from '../../lib/api'
+import type { Dataset, DatasetSource, DbConnection } from '../../types/dataset'
+import { ApiError, createDataset, deleteDataset, fetchDatasets, fetchDbConnections } from '../../lib/api'
 import { DatasetModal } from '../DatasetModal'
 import {
   Alert,
@@ -23,15 +23,6 @@ const SOURCE_LABELS: Record<DatasetSource, string> = {
   postgres: 'PostgreSQL',
   oracle: 'Oracle',
   csv: 'CSV-файл',
-}
-
-/** Примеры — только настоящие строки подключения: ссылки на переменную
-    окружения и «сервер приложения» источником больше не назначаются. */
-const DSN_PLACEHOLDERS: Record<DatasetSource, string> = {
-  clickhouse: 'clickhouse://user:pass@host:8123/db',
-  postgres: 'postgresql://user:pass@host:5432/db',
-  oracle: 'oracle://user:pass@host:1521/SERVICE',
-  csv: '',
 }
 
 /** Имя объекта Oracle без кавычек сервер сворачивает в верхний регистр. */
@@ -186,7 +177,9 @@ function DatasetCreateModal({
   const [slug, setSlug] = useState('')
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
-  const [dsn, setDsn] = useState('')
+  const [connectionKey, setConnectionKey] = useState('')
+  const [connections, setConnections] = useState<DbConnection[]>([])
+  useEffect(() => { void fetchDbConnections().then(setConnections).catch(() => setConnections([])) }, [])
   const [tableName, setTableName] = useState('')
   const [query, setQuery] = useState('')
   const [busy, setBusy] = useState(false)
@@ -194,7 +187,7 @@ function DatasetCreateModal({
 
   const asQuery = source !== 'csv' && mode === 'query'
   const incomplete =
-    !slug || !title || (source !== 'csv' && !dsn.trim()) ||
+    !slug || !title || (source !== 'csv' && !connectionKey) ||
     (asQuery ? !query.trim() : source !== 'csv' && !tableName.trim())
 
   const submit = async () => {
@@ -202,7 +195,7 @@ function DatasetCreateModal({
     setError(null)
     try {
       const { dataset } = await createDataset({
-        slug, title, description: description || undefined, source, dsn,
+        slug, title, description: description || undefined, source, connectionKey,
         tableName: asQuery ? '' : tableName,
         query: asQuery ? query : '',
       })
@@ -263,16 +256,11 @@ function DatasetCreateModal({
         </Field>
         {source !== 'csv' && (
           <>
-            <Field
-              label="DSN"
-              className="col-span-full"
-              hint="Строка подключения целиком. Заводите под неё пользователя с правами только на чтение: защита источника — это он, а не проверки в интерфейсе."
-            >
-              <Input
-                value={dsn}
-                onChange={(e) => setDsn(e.target.value)}
-                placeholder={DSN_PLACEHOLDERS[source]}
-              />
+            <Field label="Подключение" className="col-span-full" hint="Подключения задаются в DB_CONNECTIONS файла backend/.env и применяются после перезапуска.">
+              <Select value={connectionKey} onChange={(e) => setConnectionKey(e.target.value)}>
+                <option value="">Выберите подключение</option>
+                {connections.filter((c) => c.source === source).map((c) => <option key={c.key} value={c.key}>{c.title}</option>)}
+              </Select>
             </Field>
             {asQuery ? (
               <Field

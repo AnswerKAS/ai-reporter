@@ -197,6 +197,8 @@ def init_db() -> None:
             )
             '''
         )
+        conn.execute('CREATE TABLE IF NOT EXISTS user_access_tags (user_id TEXT NOT NULL, tag TEXT NOT NULL, PRIMARY KEY (user_id, tag))')
+        conn.execute('CREATE TABLE IF NOT EXISTS group_access_tags (group_id TEXT NOT NULL, tag TEXT NOT NULL, PRIMARY KEY (group_id, tag))')
         conn.execute(
             '''
             CREATE TABLE IF NOT EXISTS report_access (
@@ -225,6 +227,9 @@ def init_db() -> None:
             )
             '''
         )
+        conn.execute('CREATE INDEX IF NOT EXISTS report_tags_tag_idx ON report_tags (tag)')
+        conn.execute('CREATE INDEX IF NOT EXISTS report_access_user_idx ON report_access (user_id)')
+        conn.execute('CREATE INDEX IF NOT EXISTS report_access_group_idx ON report_access (group_id)')
         conn.execute(
             '''
             CREATE TABLE IF NOT EXISTS sessions (
@@ -242,6 +247,7 @@ def init_db() -> None:
                 description TEXT,
                 source TEXT NOT NULL,
                 dsn TEXT,
+                connection_key TEXT,
                 table_name TEXT,
                 query TEXT,
                 file TEXT,
@@ -366,6 +372,7 @@ def init_db() -> None:
         _backfill_search_text(conn)
         # источник датасета: имя таблицы ИЛИ SQL-запрос (у старых записей NULL)
         conn.execute('ALTER TABLE datasets ADD COLUMN IF NOT EXISTS query TEXT')
+        conn.execute('ALTER TABLE datasets ADD COLUMN IF NOT EXISTS connection_key TEXT')
         drop_skill_stack(conn)
 
 
@@ -629,11 +636,14 @@ def _access_sql(user: dict) -> tuple[str, list]:
     if user.get('role') == 'admin':
         return '', []
     uid = user['id']
+    groups, tags = access_attributes(uid)
+    group_clause = (' OR ra.group_id = ANY(%s)' if groups else '')
+    tag_clause = (' OR r.slug IN (SELECT report_slug FROM report_tags WHERE tag = ANY(%s))'
+                  if tags else '')
     return (
-        'r.slug IN (SELECT ra.report_slug FROM report_access ra '
-        'LEFT JOIN group_members gm ON gm.group_id = ra.group_id '
-        'WHERE ra.user_id = %s OR gm.user_id = %s)',
-        [uid, uid],
+        '(r.created_by = %s OR r.slug IN (SELECT ra.report_slug FROM report_access ra '
+        f'WHERE ra.user_id = %s{group_clause}){tag_clause})',
+        [uid, uid, *([list(groups)] if groups else []), *([list(tags)] if tags else [])],
     )
 
 
@@ -987,6 +997,7 @@ def delete_user(user_id: str) -> None:
         conn.execute('DELETE FROM users WHERE id = %s', (user_id,))
         conn.execute('DELETE FROM group_members WHERE user_id = %s', (user_id,))
         conn.execute('DELETE FROM report_access WHERE user_id = %s', (user_id,))
+        conn.execute('DELETE FROM user_access_tags WHERE user_id = %s', (user_id,))
         conn.execute('DELETE FROM sessions WHERE user_id = %s', (user_id,))
 
 
@@ -1025,6 +1036,7 @@ def delete_group(group_id: str) -> None:
         conn.execute('DELETE FROM groups WHERE id = %s', (group_id,))
         conn.execute('DELETE FROM group_members WHERE group_id = %s', (group_id,))
         conn.execute('DELETE FROM report_access WHERE group_id = %s', (group_id,))
+        conn.execute('DELETE FROM group_access_tags WHERE group_id = %s', (group_id,))
 
 
 def add_group_member(group_id: str, user_id: str) -> None:
@@ -1074,18 +1086,53 @@ def list_access(report_slug: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def report_tags(slug: str) -> list[str]:
+    with _conn() as conn:
+        rows = conn.execute('SELECT tag FROM report_tags WHERE report_slug = %s', (slug,)).fetchall()
+    return [row['tag'] for row in rows]
+
+
+def access_attributes(user_id: str) -> tuple[set[str], set[str]]:
+    """Группы пользователя и объединение его меток с метками групп."""
+    with _conn() as conn:
+        groups = {row['group_id'] for row in conn.execute(
+            'SELECT group_id FROM group_members WHERE user_id = %s', (user_id,)
+        ).fetchall()}
+        direct = {row['tag'] for row in conn.execute(
+            'SELECT tag FROM user_access_tags WHERE user_id = %s', (user_id,)
+        ).fetchall()}
+        inherited = {row['tag'] for row in conn.execute(
+            'SELECT gat.tag FROM group_access_tags gat JOIN group_members gm '
+            'ON gm.group_id = gat.group_id WHERE gm.user_id = %s', (user_id,)
+        ).fetchall()}
+    return groups, direct | inherited
+
+
+def get_access_tags(kind: str, identifier: str) -> list[str]:
+    table, column = ('user_access_tags', 'user_id') if kind == 'user' else ('group_access_tags', 'group_id')
+    with _conn() as conn:
+        rows = conn.execute(f'SELECT tag FROM {table} WHERE {column} = %s ORDER BY tag',
+                            (identifier,)).fetchall()
+    return [row['tag'] for row in rows]
+
+
+def set_access_tags(kind: str, identifier: str, tags: list[str]) -> None:
+    table, column = ('user_access_tags', 'user_id') if kind == 'user' else ('group_access_tags', 'group_id')
+    with _conn() as conn:
+        conn.execute(f'DELETE FROM {table} WHERE {column} = %s', (identifier,))
+        for tag in sorted(set(tags)):
+            conn.execute(f'INSERT INTO {table} ({column}, tag) VALUES (%s, %s)',
+                         (identifier, tag))
+
+
 def accessible_slugs(user: dict) -> set[str] | None:
     """slug'и отчётов, доступные пользователю. None = все (админ)."""
     if user.get('role') == 'admin':
         return None
+    condition, params = _access_sql(user)
     with _conn() as conn:
-        rows = conn.execute(
-            'SELECT DISTINCT ra.report_slug FROM report_access ra '
-            'LEFT JOIN group_members gm ON gm.group_id = ra.group_id '
-            'WHERE ra.user_id = %s OR gm.user_id = %s',
-            (user['id'], user['id']),
-        ).fetchall()
-    return {r['report_slug'] for r in rows}
+        rows = conn.execute(f'SELECT r.slug FROM reports r WHERE {condition}', tuple(params)).fetchall()
+    return {r['slug'] for r in rows}
 
 
 # --- сессии -------------------------------------------------------------

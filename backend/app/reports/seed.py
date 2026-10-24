@@ -18,7 +18,7 @@ def main() -> int:
     args = parser.parse_args()
 
     if not DB.configured:
-        print('DATABASE_URL не задан в backend/.env — нечего заполнять', file=sys.stderr)
+        print('подключение demo не задано в DB_CONNECTIONS файла backend/.env', file=sys.stderr)
         return 2
 
     print(f'Подключение: {DB}')

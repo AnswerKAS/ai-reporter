@@ -15,6 +15,10 @@ import pytest
 BACKEND = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND))
 os.environ.setdefault('ARTIFACTS_DIR', '/tmp/ai-reporter-tests')
+# Рабочий backend/.env не должен менять режим API и конфигурацию метабазы
+# в тестах. Нужные подключения отдельные тесты задают через monkeypatch.
+os.environ['DB_CONNECTIONS'] = ''
+os.environ.setdefault('DATABASE_URL', 'clickhouse://test:test@localhost:8123/default')
 
 from fastapi.testclient import TestClient  # noqa: E402
 

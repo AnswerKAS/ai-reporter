@@ -1,8 +1,8 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { ReportMeta } from '../../types/report'
 import type { AccessEntry, Group, User } from '../../types/user'
-import { adminGrantAccess, adminRevokeAccess } from '../../lib/api'
+import { adminEffectiveAccess, adminGrantAccess, adminRevokeAccess, adminUserAccessibleReports } from '../../lib/api'
 import { cn } from '../../lib/cn'
 import { Badge, Button, EmptyState, Input, Panel, PanelRow, Segmented, Select } from '../ui'
 import { Avatar } from './Avatar'
@@ -37,7 +37,12 @@ export function AccessPanel({
   const [query, setQuery] = useState('')
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null)
   const [selectedSubject, setSelectedSubject] = useState<SubjectKey | null>(null)
+  const [effectiveSubject, setEffectiveSubject] = useState<{ slug: string; title: string; reasons: string[] }[]>([])
   const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    if (!selectedSubject?.startsWith('u:')) { setEffectiveSubject([]); return }
+    void adminUserAccessibleReports(selectedSubject.slice(2)).then(setEffectiveSubject).catch(() => setEffectiveSubject([]))
+  }, [selectedSubject, access])
 
   const grantsOf = (slug: string) => access[slug] ?? []
 
@@ -192,6 +197,7 @@ export function AccessPanel({
               reports={reports}
               slugs={bySubject[selectedSubject] ?? []}
               bySubject={bySubject}
+              effectiveReports={effectiveSubject}
               busy={busy}
               run={run}
             />
@@ -224,6 +230,8 @@ function ReportAccess({
   run: (action: () => Promise<unknown>) => Promise<void>
 }) {
   const [target, setTarget] = useState('')
+  const [effective, setEffective] = useState<{ userId: string; username: string; reasons: string[] }[]>([])
+  useEffect(() => { void adminEffectiveAccess(report.slug).then(setEffective).catch(() => setEffective([])) }, [report.slug, entries])
   const grantedUsers = new Set(entries.map((e) => e.userId).filter(Boolean))
   const grantedGroups = new Set(entries.map((e) => e.groupId).filter(Boolean))
 
@@ -255,9 +263,14 @@ function ReportAccess({
         </Link>
       </header>
       <p className="text-xs text-fg-muted">
-        По назначениям отчёт видят {reach.size} чел.; администраторы ({admins}) видят его без
-        назначений.
+        По назначениям отчёт видят {reach.size} чел.; администраторы ({admins}) видят его без назначений.
       </p>
+      <div className="text-xs text-fg-muted">
+        <strong>Фактический доступ: {effective.length} чел.</strong>
+        {effective.length > 0 && <ul className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
+          {effective.map((person) => <li key={person.userId}>{person.username}: {person.reasons.join(', ')}</li>)}
+        </ul>}
+      </div>
 
       <div className="flex flex-wrap items-center gap-2">
         <Select
@@ -303,7 +316,7 @@ function ReportAccess({
 
       {entries.length === 0 ? (
         <p className="text-sm text-fg-muted">
-          Доступ никому не назначен: отчёт открыт только администраторам.
+          Прямых назначений нет. Автор и люди с подходящими метками также могут видеть отчёт.
         </p>
       ) : (
         <ul className="flex flex-col gap-1.5">
@@ -347,6 +360,7 @@ function SubjectAccess({
   reports,
   slugs,
   bySubject,
+  effectiveReports,
   busy,
   run,
 }: {
@@ -357,6 +371,7 @@ function SubjectAccess({
   /** отчёты, назначенные субъекту напрямую */
   slugs: string[]
   bySubject: Record<string, string[]>
+  effectiveReports: { slug: string; title: string; reasons: string[] }[]
   busy: boolean
   run: (action: () => Promise<unknown>) => Promise<void>
 }) {
@@ -378,6 +393,7 @@ function SubjectAccess({
 
   const titleOf = (slug: string) => reports.find((r) => r.slug === slug)?.title ?? slug
   const taken = new Set([...slugs, ...inherited.map((r) => r.slug)])
+  const additional = isUser ? effectiveReports.filter((item) => !taken.has(item.slug)) : []
   const candidates = reports.filter((r) => !taken.has(r.slug))
 
   return (
@@ -422,10 +438,10 @@ function SubjectAccess({
             </Button>
           </div>
 
-          {slugs.length === 0 && inherited.length === 0 ? (
+          {slugs.length === 0 && inherited.length === 0 && additional.length === 0 ? (
             <p className="text-sm text-fg-muted">
               {isUser
-                ? 'Пользователь не видит ни одного отчёта.'
+                ? 'У пользователя нет доступных отчётов.'
                 : 'Группе не назначено ни одного отчёта.'}
             </p>
           ) : (
@@ -455,6 +471,12 @@ function SubjectAccess({
                   </PanelRow>
                 </li>
               ))}
+              {additional.map((item) => <li key={item.slug}>
+                <PanelRow className={cn('border-dashed')}>
+                  <span className="min-w-0 flex-1 truncate">{item.title}</span>
+                  <Badge>{item.reasons.join(', ')}</Badge>
+                </PanelRow>
+              </li>)}
             </ul>
           )}
         </>

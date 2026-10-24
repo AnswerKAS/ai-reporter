@@ -5,6 +5,7 @@ __pycache__/
 *.pyc
 *.db
 .env
+.env.before-db-connections
 .DS_Store
 # локальное состояние инструментов; внутри бывают рабочие копии репозитория
 .claude/
