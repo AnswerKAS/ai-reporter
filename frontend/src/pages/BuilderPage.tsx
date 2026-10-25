@@ -801,6 +801,9 @@ function Builder({ embedded, suggestedPrompt }: {
       next.splice(to, 0, moved)
       return next
     })
+    setActiveSection((current) => current === from ? to
+      : from < current && current <= to ? current - 1
+        : to <= current && current < from ? current + 1 : current)
   }
 
   const onDropToSection = (event: DragEvent, index: number) => {
@@ -809,8 +812,14 @@ function Builder({ embedded, suggestedPrompt }: {
     setDragging(null)
     const payload = readDrag(event)
     if (!payload) return
-    if (payload.kind === 'metric') return addMetric(index, payload.slug)
-    if (payload.kind === 'dimension') return setDimension(index, payload.slug, true)
+    if (payload.kind === 'metric') {
+      setActiveSection(index)
+      return addMetric(index, payload.slug)
+    }
+    if (payload.kind === 'dimension') {
+      setActiveSection(index)
+      return setDimension(index, payload.slug, true)
+    }
     moveSection(payload.index, index)
   }
 
@@ -961,11 +970,11 @@ function Builder({ embedded, suggestedPrompt }: {
 
   return (
     <BuilderFrame embedded={embedded}>
-      <div className="flex flex-wrap items-start justify-between gap-4 border-b border-line pb-5">
+      <div className={cn('flex flex-wrap items-center justify-between gap-3 border-b border-line', embedded ? 'pb-3' : 'pb-5')}>
         <div>
-          <p className="text-[11px] font-semibold tracking-[0.14em] text-accent uppercase">Редактор</p>
-          <h2 className="mt-1 text-2xl font-semibold tracking-tight">{editing ? 'Правка отчёта' : 'Новый отчёт'}</h2>
-          <ol className="mt-2 flex list-none items-center gap-1.5 p-0">
+          {!embedded && <p className="text-[11px] font-semibold tracking-[0.14em] text-accent uppercase">Редактор</p>}
+          <h2 className={cn('font-semibold tracking-tight', embedded ? 'text-lg' : 'mt-1 text-2xl')}>{editing ? 'Правка отчёта' : 'Новый отчёт'}</h2>
+          <ol className={cn('flex list-none items-center gap-1.5 p-0', embedded ? 'mt-0.5' : 'mt-2')}>
             <StepLink n={1} label="Данные" current={step === 1} done={step > 1} onClick={() => setStep(1)} />
             <li aria-hidden="true" className="text-fg-muted">
               →
@@ -1005,6 +1014,7 @@ function Builder({ embedded, suggestedPrompt }: {
         onRevert={revertProposal}
         onSave={onSave}
         onVocabulary={() => setVocabularyOpen(true)}
+        compact={embedded && step === 2}
       />
 
       {step === 1 ? (
@@ -1028,36 +1038,42 @@ function Builder({ embedded, suggestedPrompt }: {
         />
       ) : (
         <>
-          <div className="my-4 flex flex-wrap gap-4">
-            <Field label="Название">              <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Продажи по городам" /></Field>
-            <Field label="Описание">              <Input
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                placeholder="для кого и о чём отчёт"
-              /></Field>
-            {!editing && (
-              <Field label="Адрес (необязательно)">                <Input value={reportSlug} onChange={(e) => setReportSlug(e.target.value)} placeholder="sales-by-city" /></Field>
-            )}
-            {/* детализация даёт читателю сырые строки источника — это решение
-                автора отчёта, а не настройка по умолчанию */}
-            <label className="flex max-w-72 cursor-pointer items-start gap-2 self-end pb-1.5 text-sm">
-              <input
-                type="checkbox"
-                className="mt-0.5 cursor-pointer"
-                checked={drilldown}
-                onChange={(e) => setDrilldown(e.target.checked)}
-              />
-              <span>
-                Детализация
-                <span className="block text-xs text-fg-muted">
-                  кнопка сырых строк и раскрытие по клику на карточку, график или строку
-                </span>
-              </span>
-            </label>
+          <div className="my-3 flex flex-wrap items-end gap-3">
+            <Field label="Название" className="min-w-48 flex-1">
+              <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Продажи по городам" />
+            </Field>
+            <details className="min-w-0 w-full rounded-control border border-line px-3 py-2 text-sm sm:w-auto">
+              <summary className="cursor-pointer font-medium">Параметры отчёта</summary>
+              <div className="mt-3 flex flex-wrap items-end gap-3">
+                <Field label="Описание">
+                  <Input value={description} onChange={(e) => setDescription(e.target.value)}
+                    placeholder="для кого и о чём отчёт" />
+                </Field>
+                {!editing && (
+                  <Field label="Адрес (необязательно)">
+                    <Input value={reportSlug} onChange={(e) => setReportSlug(e.target.value)} placeholder="sales-by-city" />
+                  </Field>
+                )}
+                {/* Детализация даёт читателю сырые строки источника. */}
+                <label className="flex max-w-72 cursor-pointer items-start gap-2 self-end pb-1.5 text-sm">
+                  <input type="checkbox" className="mt-0.5 cursor-pointer"
+                    checked={drilldown} onChange={(e) => setDrilldown(e.target.checked)} />
+                  <span>Детализация
+                    <span className="block text-xs text-fg-muted">
+                      кнопка сырых строк и раскрытие по клику на карточку, график или строку
+                    </span>
+                  </span>
+                </label>
+              </div>
+            </details>
           </div>
 
-          <div className="mt-4 grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(190px,230px)_minmax(0,1fr)] xl:grid-cols-[minmax(190px,230px)_minmax(300px,380px)_minmax(0,1fr)]">
-            <aside className="sticky top-4 flex flex-col gap-2.5 rounded-card border border-line bg-surface p-3.5">
+          <div className="mt-3 grid grid-cols-1 items-start gap-4 xl:grid-cols-2">
+            <details className="min-w-0 rounded-card border border-line bg-surface px-4 py-3 xl:col-span-2">
+              <summary className="cursor-pointer text-sm font-semibold">
+                Поля и фильтры · {palette.reduce((count, group) => count + group.metrics.length + group.dimensions.length, 0) + computed.length} полей · {filters.length} фильтров
+              </summary>
+              <div className="mt-3 grid gap-4 border-t border-line pt-3 md:grid-cols-2 xl:grid-cols-3">
               {/* поля датасета делятся на два вида, и раскладка обязана это
                   проговаривать: без подписей чипы читаются одинаково, а
                   разрезы, не отмеченные на шаге «Данные», выглядели так, будто
@@ -1235,7 +1251,8 @@ function Builder({ embedded, suggestedPrompt }: {
               <Button variant="ghost" size="sm" className="mt-2.5" onClick={() => setStep(1)}>
                 ← изменить набор данных
               </Button>
-            </aside>
+              </div>
+            </details>
 
             <div className="flex flex-col gap-3">
               {sections.map((section, index) => {
@@ -1350,13 +1367,18 @@ function Builder({ embedded, suggestedPrompt }: {
                           variant="ghost"
                           size="sm"
                           className="ml-auto"
-                          onClick={() => setSections((prev) => prev.filter((_, i) => i !== index))}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            setSections((prev) => prev.filter((_, i) => i !== index))
+                            setActiveSection((current) => Math.min(current > index ? current - 1 : current, sections.length - 2))
+                          }}
                         >
                           удалить
                         </Button>
                       )}
                     </div>
 
+                    {index === activeSection ? <>
                     {section.type === 'chart' && (
                       <ChartKindPicker value={section.kind ?? 'bar'}
                         onChange={(kind) => patchSection(index, { kind })} />
@@ -1492,6 +1514,13 @@ function Builder({ embedded, suggestedPrompt }: {
                           /></Field>
                       </div>
                     )}
+                    </> : (
+                      <button type="button" onClick={() => setActiveSection(index)}
+                        className="cursor-pointer rounded-control border border-dashed border-line px-3 py-2 text-left text-xs text-fg-muted hover:border-accent hover:text-fg">
+                        <span className="font-medium text-fg">{section.metrics.length ? section.metrics.map(fieldTitle).join(', ') : 'Показатели не выбраны'}</span>
+                        {section.by.length > 0 && <span className="block mt-1">По: {section.by.map((key) => dimensionInfo(key)?.title ?? key).join(', ')}</span>}
+                      </button>
+                    )}
                   </section>
                 )
               })}
@@ -1507,7 +1536,7 @@ function Builder({ embedded, suggestedPrompt }: {
               </Button>
             </div>
 
-            <div className="min-h-50 rounded-card border border-line bg-surface p-4">
+            <div className="min-h-50 min-w-0 rounded-card border border-line bg-surface p-4 xl:sticky xl:top-4">
               <div className="mb-3 flex items-center gap-2.5">
                 <span className="text-xs font-medium tracking-wide text-fg-muted uppercase">Предпросмотр</span>
                 {preview && <span className="inline-flex items-center rounded-full border border-good/30 bg-good-soft px-2.5 py-0.5 text-xs font-semibold text-good">живые данные</span>}

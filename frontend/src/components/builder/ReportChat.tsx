@@ -35,6 +35,7 @@ export function ReportChat({
   onRevert,
   onSave,
   onVocabulary,
+  compact = false,
 }: {
   fields: ReportField[]
   computed: ComputedField[]
@@ -51,6 +52,7 @@ export function ReportChat({
   onSave: () => void
   /** Показать словарь отчёта: словами можно назвать только то, что в нём есть. */
   onVocabulary: () => void
+  compact?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const [dataOpen, setDataOpen] = useState(false)
@@ -187,18 +189,18 @@ export function ReportChat({
 
   return (
     <>
-      <section className="mt-6 rounded-card border border-line bg-surface p-5 shadow-card sm:p-6">
-        <p className="text-[11px] font-semibold tracking-[0.14em] text-accent uppercase">02 · Отчёт по данным</p>
-        <div className="mt-2 flex flex-wrap items-start justify-between gap-4">
+      <section className={cn('rounded-card border border-line bg-surface', compact ? 'mt-3 px-4 py-3' : 'mt-6 p-5 shadow-card sm:p-6')}>
+        {!compact && <p className="text-[11px] font-semibold tracking-[0.14em] text-accent uppercase">02 · Отчёт по данным</p>}
+        <div className={cn('flex flex-wrap items-center justify-between gap-3', !compact && 'mt-2 items-start gap-4')}>
           <div className="max-w-2xl">
-            <h2 className="text-xl font-semibold tracking-tight">Соберите отчёт из выбранных данных</h2>
-            <p className="mt-2 text-sm text-fg-muted">
+            <h2 className={cn('font-semibold tracking-tight', compact ? 'text-sm' : 'text-xl')}>{compact ? 'Доработать отчёт' : 'Соберите отчёт из выбранных данных'}</h2>
+            {!compact && <p className="mt-2 text-sm text-fg-muted">
               {model
                 ? `Опишите результат своими словами. Собеседник ${model} выбирает только доступные поля.`
                 : parserMode
                   ? 'Разбор по словарю работает без модели: назовите показатель и разрез.'
                   : 'Выберите предложенный вариант или опишите результат своими словами. Раскладку можно проверить перед сохранением.'}
-            </p>
+            </p>}
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Button variant="primary" onClick={openDialog}>
@@ -218,14 +220,11 @@ export function ReportChat({
         onClose={() => setDataOpen(false)} />}
 
       {proposed && (
-        <div className="mt-3 flex flex-col gap-2 rounded-card border border-accent bg-accent-soft p-3.5">
-          <span className="text-sm">
-            Раскладка ниже собрана {parserMode ? 'по словарю без модели' : 'собеседником'}.
-            Предпросмотр показывает её на настоящих данных. Проверьте и сохраните отчёт
-            или уточните описание.
-          </span>
+        <div className={cn('mt-3 flex gap-2 rounded-card border border-accent bg-accent-soft p-3.5', compact ? 'flex-wrap items-center justify-between' : 'flex-col')}>
+          <span className="text-sm">{compact ? 'Предложенная раскладка готова к проверке.' :
+            `Раскладка ниже собрана ${parserMode ? 'по словарю без модели' : 'собеседником'}. Предпросмотр показывает её на настоящих данных. Проверьте и сохраните отчёт или уточните описание.`}</span>
           <div className="flex flex-wrap items-end gap-2">
-            <label className="flex flex-col gap-1 text-xs text-fg-muted">
+            {!compact && <label className="flex flex-col gap-1 text-xs text-fg-muted">
               Название отчёта
               <Input
                 className="min-w-64"
@@ -233,10 +232,10 @@ export function ReportChat({
                 onChange={(e) => onTitle(e.target.value)}
                 placeholder="Продажи по городам"
               />
-            </label>
-            <Button variant="primary" onClick={onSave} disabled={saving || !title.trim()}>
+            </label>}
+            {!compact && <Button variant="primary" onClick={onSave} disabled={saving || !title.trim()}>
               {saving ? 'Сохранение…' : 'Сохранить отчёт'}
-            </Button>
+            </Button>}
             <Button onClick={openDialog}>
               {parserMode ? 'Уточнить описание' : 'Доработать в диалоге'}
             </Button>

@@ -83,9 +83,10 @@ export function WorkspacePage() {
     <Page className="max-w-none">
       <PageHeader
         title="Рабочее окно"
-        subtitle="Один источник для вопроса и отчёта. Выберите данные, получите ответ и при необходимости сохраните его как отчёт."
+        subtitle={mode === 'question' ? 'Выберите данные, задайте вопрос и при необходимости соберите отчёт.' : undefined}
+        compact={mode === 'report'}
       >
-        <Segmented className="mt-4" ariaLabel="Режим рабочего окна" value={mode}
+        <Segmented className={mode === 'question' ? 'mt-4' : 'mt-2'} ariaLabel="Режим рабочего окна" value={mode}
           onChange={selectMode} options={[
             { value: 'question', label: 'Вопрос по данным' },
             { value: 'report', label: reportSlug ? 'Правка отчёта' : 'Собрать отчёт' },
@@ -93,12 +94,14 @@ export function WorkspacePage() {
       </PageHeader>
 
       {error && <Alert className="mb-4">{error}</Alert>}
-      <div className={cn('gap-6', mode === 'question' ? 'grid items-start xl:grid-cols-[280px_minmax(0,1fr)]' : 'flex flex-col')}>
-        <Card className={cn('min-w-0 p-4 sm:p-5', mode === 'question' && 'xl:sticky xl:top-6')}>
+      <div className={cn(mode === 'question' ? 'grid items-start gap-6 xl:grid-cols-[280px_minmax(0,1fr)]' : 'flex flex-col gap-3')}>
+        {!(mode === 'report' && reportSlug) && <Card className={cn('min-w-0', mode === 'question' ? 'p-4 sm:p-5 xl:sticky xl:top-6' : 'px-4 py-3')}>
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div>
-              <p className="text-[11px] font-semibold tracking-[0.14em] text-accent uppercase">01 · Источник</p>
-              <h2 className="mt-1 text-lg font-semibold">{mode === 'question' ? 'Данные для работы' : 'Данные отчёта'}</h2>
+              {mode === 'question' && <p className="text-[11px] font-semibold tracking-[0.14em] text-accent uppercase">01 · Источник</p>}
+              <h2 className={cn('font-semibold', mode === 'question' ? 'mt-1 text-lg' : 'text-sm')}>
+                {mode === 'question' ? 'Данные для работы' : selected ? `Данные отчёта · ${selected.title}` : 'Данные отчёта · не выбраны'}
+              </h2>
             </div>
             {mode === 'report' ? (
               <button type="button" onClick={() => setSourcesOpen((open) => !open)}
@@ -137,7 +140,7 @@ export function WorkspacePage() {
               {(mode === 'question' || sourcesOpen) && matches.total > matches.visible.length && (
                 <p className="mt-2 text-xs text-fg-muted">Показаны {matches.visible.length} из {matches.total}. Уточните поиск.</p>
               )}
-              {selected && <div className={cn('text-sm', mode === 'question' || sourcesOpen ? 'mt-4 border-t border-line pt-4' : 'mt-3')}>
+              {selected && (mode === 'question' || sourcesOpen) && <div className="mt-4 border-t border-line pt-4 text-sm">
                 <p className="text-xs text-fg-muted">Выбранный источник</p>
                 <p className="mt-1 font-semibold">{selected.title}</p>
                 <p className="mt-1 text-xs text-fg-muted">{selected.description || selected.tableName || 'Подготовленный датасет'}</p>
@@ -145,7 +148,7 @@ export function WorkspacePage() {
               {mode === 'report' && !selected && !sourcesOpen && <p className="mt-3 text-sm text-fg-muted">Выберите датасет здесь или на шаге «Данные» ниже.</p>}
             </>
           )}
-        </Card>
+        </Card>}
 
         <div className="min-w-0">
           <div className={mode === 'question' ? '' : 'hidden'}>
