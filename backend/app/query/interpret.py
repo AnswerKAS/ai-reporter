@@ -756,47 +756,82 @@ def _schema_fields(catalog, metrics: dict, dimensions: dict,
         slug = dataset.get('slug')
         if not slug or dataset.get('status') == 'error' or not dataset.get('schema'):
             continue
-        if any(m.get('dataset_slug') == slug and m.get('status') != 'error'
-               for m in metrics.values()):
-            continue
+        has_shared_metrics = any(
+            m.get('dataset_slug') == slug and m.get('status') != 'error'
+            for m in metrics.values())
         draft = suggest_for_dataset(dataset, metrics=[], dimensions=[])
-        for item in draft['dimensions']:
-            key = f"field_{item['slug']}"
-            if key in taken:
-                continue
-            taken.add(key)
-            report_field = {'key': key, 'title': item['title'],
-                            'datasetSlug': slug, 'field': item['column'],
-                            'role': 'dimension', 'type': item['type'],
-                            'format': 'number'}
-            entry = {'slug': key, 'title': item['title'],
-                     'dataset_slug': slug, 'type': item['type'],
-                     '_report_field': report_field}
-            extra_dimensions[key] = entry
+        settings = dataset.get('field_settings') or {}
         metric_count = 0
-        for item in draft['metrics']:
-            if not item.get('selected') or not item.get('column'):
+        for item in draft['dimensions']:
+            setting = settings.get(item['column']) or {}
+            if has_shared_metrics and not setting:
+                continue
+            role = setting.get('role') or 'dimension'
+            if role == 'ignore':
                 continue
             key = f"field_{item['slug']}"
             if key in taken:
                 continue
             taken.add(key)
-            report_field = {'key': key, 'title': item['title'],
-                            'datasetSlug': slug, 'field': item['column'],
-                            'role': 'metric', 'agg': 'sum', 'type': 'number',
-                            'format': item['format']}
-            extra_metrics[key] = {'slug': key, 'title': item['title'],
-                                  'dataset_slug': slug, 'status': 'ok',
-                                  'format': item['format'],
-                                  '_report_field': report_field}
-            metric_count += 1
-        if metric_count == 0:
+            title = setting.get('title') or item['title']
+            if role == 'metric':
+                agg = setting.get('agg') or 'count'
+                fmt = setting.get('format') or 'number'
+                report_field = {'key': key, 'title': title, 'datasetSlug': slug,
+                                'field': item['column'], 'role': 'metric',
+                                'agg': agg, 'type': 'number', 'format': fmt}
+                extra_metrics[key] = {'slug': key, 'title': title,
+                                      'dataset_slug': slug, 'status': 'ok',
+                                      'format': fmt, '_report_field': report_field}
+                metric_count += 1
+            else:
+                report_field = {'key': key, 'title': title,
+                                'datasetSlug': slug, 'field': item['column'],
+                                'role': 'dimension', 'type': item['type'],
+                                'format': 'number'}
+                extra_dimensions[key] = {'slug': key, 'title': title,
+                                         'dataset_slug': slug, 'type': item['type'],
+                                         '_report_field': report_field}
+        for item in draft['metrics']:
+            if not item.get('column'):
+                continue
+            setting = settings.get(item['column']) or {}
+            if has_shared_metrics and not setting:
+                continue
+            role = setting.get('role') or 'metric'
+            if role == 'ignore' or (not setting and not item.get('selected')):
+                continue
+            key = f"field_{item['slug']}"
+            if key in taken:
+                continue
+            taken.add(key)
+            title = setting.get('title') or item['title']
+            if role == 'dimension':
+                report_field = {'key': key, 'title': title, 'datasetSlug': slug,
+                                'field': item['column'], 'role': 'dimension',
+                                'type': 'number', 'format': 'number'}
+                extra_dimensions[key] = {'slug': key, 'title': title,
+                                         'dataset_slug': slug, 'type': 'number',
+                                         '_report_field': report_field}
+            else:
+                agg = setting.get('agg') or 'sum'
+                fmt = setting.get('format') or item['format']
+                report_field = {'key': key, 'title': title,
+                                'datasetSlug': slug, 'field': item['column'],
+                                'role': 'metric', 'agg': agg, 'type': 'number',
+                                'format': fmt}
+                extra_metrics[key] = {'slug': key, 'title': title,
+                                      'dataset_slug': slug, 'status': 'ok',
+                                      'format': fmt, '_report_field': report_field}
+                metric_count += 1
+        if metric_count == 0 and not has_shared_metrics:
             # У справочника могут быть только текстовые колонки. Считаем
             # заполненные значения, а не обещаем число всех строк источника:
             # count(column) пропускает NULL.
             first = next((item for item in dataset['schema']
-                          if item.get('name') and field_kind(
-                              item.get('type') or '', dataset['source']) != 'other'), None)
+                          if item.get('name') and item['name'] not in settings
+                          and field_kind(item.get('type') or '',
+                                         dataset['source']) != 'other'), None)
             if first:
                 key = f'field_{slug}_values'
                 if key not in taken:

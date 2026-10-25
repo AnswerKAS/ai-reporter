@@ -12,8 +12,10 @@ import {
   uploadDatasetCsv,
   askDataset,
   fetchDbConnections,
+  putDatasetFields,
 } from '../lib/api'
 import { DatasetPreviewTable } from './DatasetPreviewTable'
+import { DatasetFieldSettingsEditor } from './DatasetFieldSettingsEditor'
 import { DatasetSemanticDraft } from './DatasetSemanticDraft'
 import {
   Alert,
@@ -100,6 +102,7 @@ export function DatasetModal({
     load().catch((err) => setError(err instanceof ApiError ? err.message : 'не удалось открыть датасет'))
   }, [load])
 
+  /** Выполняет административное действие и перечитывает карточку датасета. */
   const run = async (action: () => Promise<unknown>) => {
     setBusy(true)
     setError(null)
@@ -298,13 +301,23 @@ export function DatasetModal({
           <p className="text-sm text-fg-muted">
             Схема не вычитана{isAdmin ? ' — выполните «Проверить и вычитать схему».' : '.'}
           </p>
+        ) : isAdmin ? (
+          <DatasetFieldSettingsEditor
+            key={`${current.slug}:${current.updatedAt}`}
+            dataset={current}
+            busy={busy}
+            onSave={async (settings) => {
+              await run(() => putDatasetFields(current.slug, settings))
+            }}
+          />
         ) : (
           <Table>
             <thead>
               <tr>
                 <Th>Поле</Th>
                 <Th>Тип</Th>
-                <Th>Комментарий в источнике</Th>
+                <Th>Название</Th>
+                <Th>Роль</Th>
               </tr>
             </thead>
             <tbody>
@@ -312,7 +325,13 @@ export function DatasetModal({
                 <Tr key={f.name}>
                   <Td>{f.name}</Td>
                   <Td className="text-fg-muted">{f.type}</Td>
-                  <Td className="text-fg-muted">{f.comment || '—'}</Td>
+                  <Td>{current.fieldSettings?.[f.name]?.title || f.comment || f.name}</Td>
+                  <Td className="text-fg-muted">{
+                    current.fieldSettings?.[f.name]?.role === 'metric' ? 'Показатель'
+                      : current.fieldSettings?.[f.name]?.role === 'dimension' ? 'Разрез'
+                        : current.fieldSettings?.[f.name]?.role === 'ignore' ? 'Не используется'
+                          : 'Автоматически'
+                  }</Td>
                 </Tr>
               ))}
             </tbody>
@@ -322,8 +341,8 @@ export function DatasetModal({
       {tab === 'metrics' &&
         (metrics.length === 0 ? (
           <p className="text-sm text-fg-muted">
-            По этому датасету не заведено ни одного показателя — в конструкторе он пока бесполезен.
-            {isAdmin && ' Черновик по колонкам схемы предлагается на вкладке «Поля датасета».'}
+            В общем словаре этого датасета нет показателей. Конструктор может предложить отчёт по его полям.
+            {isAdmin && ' Их названия и операции настраиваются на вкладке «Поля датасета».'}
           </p>
         ) : (
           <Table>

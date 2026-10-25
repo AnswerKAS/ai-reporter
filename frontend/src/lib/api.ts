@@ -14,6 +14,7 @@ import type {
   Dataset,
   DatasetCreateInput,
   DatasetDetail,
+  DatasetFieldSetting,
   DatasetPatchInput,
   DatasetSaveResult,
   DatasetSemanticInput,
@@ -413,6 +414,18 @@ export async function patchDataset(slug: string, patch: DatasetPatchInput): Prom
 export async function refreshDataset(slug: string): Promise<DatasetSaveResult> {
   return await request<DatasetSaveResult>(`/datasets/${slug}/refresh`, {
     method: 'POST',
+  })
+}
+
+/** Сохраняет ручные настройки текущих колонок подготовленного датасета. */
+export async function putDatasetFields(
+  slug: string,
+  fields: Record<string, DatasetFieldSetting>,
+): Promise<{ dataset: Dataset }> {
+  return await request<{ dataset: Dataset }>(`/datasets/${encodeURIComponent(slug)}/fields`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fields }),
   })
 }
 

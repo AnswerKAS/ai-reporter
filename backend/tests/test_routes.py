@@ -42,6 +42,7 @@ COVERED = {
     ('POST', '/api/datasets/{slug}/ask'): 'test_dataset_questions.py',
     ('POST', '/api/datasets'): 'test_api_datasets.py',
     ('PATCH', '/api/datasets/{slug}'): 'test_api_datasets.py',
+    ('PUT', '/api/datasets/{slug}/fields'): 'test_dataset_field_settings.py',
     ('DELETE', '/api/datasets/{slug}'): 'test_api_datasets.py',
     ('POST', '/api/datasets/{slug}/refresh'): 'test_api_datasets.py',
     ('GET', '/api/datasets/{slug}/suggest'): 'test_api_datasets.py',

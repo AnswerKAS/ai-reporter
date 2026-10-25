@@ -11,6 +11,21 @@ class DatasetField(CamelModel):
     comment: str | None = None
 
 
+class DatasetFieldSetting(CamelModel):
+    """Ручная интерпретация одной колонки подготовленного датасета."""
+
+    title: str
+    role: Literal['metric', 'dimension', 'ignore']
+    agg: Literal['sum', 'count', 'count_distinct', 'avg', 'min', 'max'] | None = None
+    format: Literal['number', 'money', 'percent'] = 'number'
+
+
+class DatasetFieldsPatch(CamelModel):
+    """Полная карта ручных настроек колонок датасета."""
+
+    fields: dict[str, DatasetFieldSetting]
+
+
 class DatasetMeta(CamelModel):
     slug: str
     title: str
@@ -22,6 +37,7 @@ class DatasetMeta(CamelModel):
     is_query: bool = False
     file: str | None = None
     fields: list[DatasetField] = []
+    field_settings: dict[str, DatasetFieldSetting] = {}
     # сервер, на котором лежит датасет: тождество для отбора и имя для
     # интерфейса. Адрес в имени — только администратору (datasets/servers.py);
     # у CSV-датасета сервера нет

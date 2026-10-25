@@ -15,6 +15,7 @@ from ..datasets.base import DatasetError, sanitize_error
 from ..schemas.dataset import (
     DatasetCreate,
     DatasetDetail,
+    DatasetFieldsPatch,
     DatasetMeta,
     DatasetPatch,
     DatasetPreview,
@@ -328,6 +329,38 @@ def refresh_dataset(slug: str, user: dict = Depends(require_admin)) -> dict:
                 'notes': sqlsource.query_notes(dataset['query']) if dataset.get('query') else []}
     except DatasetError as exc:
         raise HTTPException(502, sanitize_error(str(exc)))
+
+
+@router.put('/{slug}/fields')
+def set_dataset_fields(slug: str, patch: DatasetFieldsPatch,
+                       user: dict = Depends(require_admin)) -> dict:
+    """Сохраняет настройки текущих колонок, не удаляя временно исчезнувшие."""
+    dataset = _get_or_404(slug)
+    schema = {item['name']: item for item in dataset.get('schema') or []}
+    orphaned = {name: setting for name, setting in
+                (dataset.get('field_settings') or {}).items() if name not in schema}
+    settings = dict(orphaned)
+    for name, setting in patch.fields.items():
+        field = schema.get(name)
+        if field is None:
+            raise HTTPException(422, f'колонки {name} нет в текущей схеме датасета')
+        title = setting.title.strip()
+        if not title or len(title) > 120:
+            raise HTTPException(422, f'название колонки {name} должно быть от 1 до 120 символов')
+        kind = semantic_suggest.field_kind(field.get('type') or '', dataset['source'])
+        if kind == 'other' and setting.role != 'ignore':
+            raise HTTPException(422, f'тип колонки {name} не подходит для отчёта')
+        agg = setting.agg
+        if setting.role == 'metric':
+            agg = agg or ('sum' if kind == 'number' else 'count')
+            if agg in ('sum', 'avg') and kind != 'number':
+                raise HTTPException(422, f'для колонки {name} нельзя выбрать {agg}')
+        else:
+            agg = None
+        settings[name] = {'title': title, 'role': setting.role,
+                          'agg': agg, 'format': setting.format}
+    updated = ds_registry.update(slug, field_settings=settings)
+    return {'dataset': _meta(updated, reveal_query=True)}
 
 
 @router.get('/{slug}/suggest')

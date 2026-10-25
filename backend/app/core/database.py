@@ -147,6 +147,7 @@ def _conn():
 
 
 def init_db() -> None:
+    """Создаёт таблицы метабазы и применяет совместимые миграции при запуске."""
     with psycopg.connect(
         PG.conninfo, cursor_factory=psycopg.ClientCursor, **PG.connect_kwargs
     ) as conn:
@@ -252,6 +253,7 @@ def init_db() -> None:
                 query TEXT,
                 file TEXT,
                 schema TEXT NOT NULL DEFAULT '[]',
+                field_settings TEXT NOT NULL DEFAULT '{}',
                 status TEXT NOT NULL DEFAULT 'new',
                 error TEXT,
                 created_at TEXT NOT NULL,
@@ -373,6 +375,7 @@ def init_db() -> None:
         # источник датасета: имя таблицы ИЛИ SQL-запрос (у старых записей NULL)
         conn.execute('ALTER TABLE datasets ADD COLUMN IF NOT EXISTS query TEXT')
         conn.execute('ALTER TABLE datasets ADD COLUMN IF NOT EXISTS connection_key TEXT')
+        conn.execute("ALTER TABLE datasets ADD COLUMN IF NOT EXISTS field_settings TEXT NOT NULL DEFAULT '{}'")
         drop_skill_stack(conn)
 
 

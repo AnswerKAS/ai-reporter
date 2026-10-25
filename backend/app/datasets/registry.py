@@ -103,8 +103,10 @@ def resolve_dataset_dsn(dataset: dict) -> str:
 # --- CRUD ----------------------------------------------------------------
 
 def _row_to_dict(row) -> dict:
+    """Декодирует JSON датасета и очищает старые тексты ошибок от секретов."""
     data = dict(row)
     data['schema'] = json.loads(data.pop('schema') or '[]')
+    data['field_settings'] = json.loads(data.get('field_settings') or '{}')
     # страховка: в текстах ошибок не должно быть DSN/кредов (лечит и старые записи)
     if data.get('error'):
         data['error'] = sanitize_error(str(data['error']))
@@ -152,12 +154,16 @@ def update(slug: str, *, title: str | None = None, description: str | None = Non
            query: str | None = None,
            connection_key: str | None = None,
            schema: list[dict] | None = None, status: str | None = None,
-           error: str | None = None, clear_error: bool = False) -> dict | None:
+           error: str | None = None, clear_error: bool = False,
+           field_settings: dict | None = None) -> dict | None:
+    """Обновляет указанные атрибуты датасета, сохраняя остальные значения."""
     fields, values = ['updated_at = %s'], [utcnow()]
     for column, value in (
         ('title', title), ('description', description), ('dsn', dsn), ('connection_key', connection_key),
         ('table_name', table_name), ('query', query),
         ('schema', json.dumps(schema, ensure_ascii=False) if schema is not None else None),
+        ('field_settings', json.dumps(field_settings, ensure_ascii=False)
+         if field_settings is not None else None),
         ('status', status), ('error', error),
     ):
         if value is not None:

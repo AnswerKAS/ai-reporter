@@ -10,6 +10,13 @@ export interface DatasetField {
   comment?: string | null
 }
 
+export interface DatasetFieldSetting {
+  title: string
+  role: 'metric' | 'dimension' | 'ignore'
+  agg?: 'sum' | 'count' | 'count_distinct' | 'avg' | 'min' | 'max' | null
+  format: 'number' | 'money' | 'percent'
+}
+
 export interface Dataset {
   slug: string
   title: string
@@ -22,6 +29,7 @@ export interface Dataset {
   isQuery: boolean
   file?: string | null
   fields: DatasetField[]
+  fieldSettings: Record<string, DatasetFieldSetting>
   /** Сервер, на котором лежит датасет: тождество для отбора. У CSV его нет. */
   serverId?: string | null
   /** Имя сервера для интерфейса. Адрес в нём виден только администратору. */
