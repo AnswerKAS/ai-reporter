@@ -13,6 +13,9 @@ MAX_ROWS = 100
 MAX_HISTORY = 8
 OPS = {'eq': '=', 'ne': '<>', 'gt': '>', 'gte': '>=', 'lt': '<', 'lte': '<='}
 AGGS = {'count': 'COUNT', 'sum': 'SUM', 'avg': 'AVG', 'min': 'MIN', 'max': 'MAX'}
+FILTER_LABELS = {'eq': 'равно', 'ne': 'не равно', 'gt': 'больше',
+                 'gte': 'не меньше', 'lt': 'меньше', 'lte': 'не больше',
+                 'contains': 'содержит'}
 
 
 def _json(raw: str) -> dict:
@@ -138,9 +141,63 @@ def compile_plan(dataset: dict, plan: dict) -> tuple[str, dict, dict]:
     limit = plan.get('limit', MAX_ROWS)
     if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
         raise DatasetError('некорректный предел строк')
-    sql += ' ' + dialect.limit_offset(min(limit, MAX_ROWS))
+    visible_limit = min(limit, MAX_ROWS)
+    # Дополнительная строка показывает, что выдача неполная, не считая весь
+    # результат вторым запросом. Клиенту она не отдаётся.
+    sql += ' ' + dialect.limit_offset(visible_limit + 1)
     return sql, params, {'select': select, 'groupBy': groups, 'filters': filters,
-                         'orderBy': order, 'limit': min(limit, MAX_ROWS)}
+                         'orderBy': order, 'limit': visible_limit}
+
+
+def explain_plan(dataset: dict, plan: dict, *, shown: int,
+                 total: int | None, has_more: bool) -> dict:
+    """Объяснение только из проверенного плана и реального объёма выдачи."""
+    fields = {item['name']: item for item in dataset.get('schema') or []}
+
+    def title(name: str) -> str:
+        if name == '*':
+            return 'все строки'
+        item = fields.get(name) or {}
+        return str(item.get('comment') or name)
+
+    def calculation(item: dict) -> str:
+        name = item['field']
+        field = f'«{title(name)}»'
+        return {
+            'count': ('Количество строк' if name == '*'
+                      else f'Количество непустых значений {field}'),
+            'sum': f'Сумма значений {field}',
+            'avg': f'Среднее значение {field}',
+            'min': f'Минимум {field}',
+            'max': f'Максимум {field}',
+            '': f'Поле {field}',
+        }[item.get('agg') or '']
+
+    selected = plan['select']
+    order = plan.get('orderBy')
+    ordered = next((item for item in selected
+                    if order and item['field'] == order['field']), None)
+    filters = [
+        f"«{title(item['field'])}» {FILTER_LABELS[item['op']]} «{item['value']}»"
+        for item in plan['filters']
+    ]
+    return {
+        'source': str(dataset.get('title') or dataset.get('slug') or 'Датасет'),
+        'calculations': [calculation(item) for item in selected],
+        'groupBy': [title(name) for name in plan['groupBy']],
+        'filters': filters,
+        'orderBy': (f"{calculation(ordered) if ordered else title(order['field'])} — "
+                    + ('по возрастанию' if order['direction'] == 'asc'
+                       else 'по убыванию')) if order else None,
+        'scope': ('Операции выполнены по всем строкам, подходящим под условия; '
+                  'лимит относится только к строкам ответа.'
+                  if any(item.get('agg') for item in selected)
+                  else 'Показаны строки датасета, подходящие под условия.'),
+        'limit': plan['limit'],
+        'shownRows': shown,
+        'totalRows': total,
+        'hasMore': has_more,
+    }
 
 
 def answer(dataset: dict, question: str, history: list[dict], *, reveal_sql: bool) -> dict:
@@ -163,18 +220,25 @@ def answer(dataset: dict, question: str, history: list[dict], *, reveal_sql: boo
         raise DatasetError(sanitize_error(str(exc))) from exc
     finally:
         adapter.close()
+    visible_limit = clean_plan['limit']
     safe_rows = [[str(value) if value is not None else '' for value in row]
-                 for row in rows[:MAX_ROWS]]
+                 for row in rows[:visible_limit]]
+    truncated = len(rows) > visible_limit
     if not safe_rows:
         summary = 'По этому вопросу данных не найдено.'
-    elif len(safe_rows) == 1 and len(safe_rows[0]) == 1:
+    elif len(safe_rows) == 1 and len(safe_rows[0]) == 1 and not truncated:
         summary = f'{safe_rows[0][0]}'
     else:
-        summary = f'Найдено строк: {len(safe_rows)}.'
+        summary = f'Показано строк: {len(safe_rows)}.'
+        if truncated:
+            summary += ' Есть ещё строки.'
     labels = [f'{item.get("agg") or ""} {item["field"]}'.strip()
               for item in clean_plan['select']]
     result = {'answer': summary, 'columns': labels, 'rows': safe_rows,
-              'plan': clean_plan, 'truncated': len(rows) > MAX_ROWS}
+              'plan': clean_plan, 'truncated': truncated,
+              'explanation': explain_plan(dataset, clean_plan,
+                                          shown=len(safe_rows), total=None,
+                                          has_more=truncated)}
     if reveal_sql:
         result['sql'] = sql
         result['parameters'] = params
@@ -280,9 +344,14 @@ def _answer_csv(dataset: dict, plan: dict) -> dict:
         raise DatasetError('некорректный предел строк')
     visible = output[:min(limit, MAX_ROWS)]
     columns = [f'{item.get("agg") or ""} {item["field"]}'.strip() for item in select]
+    truncated = len(output) > len(visible)
     summary = ('По этому вопросу данных не найдено.' if not visible else
-               visible[0][0] if len(visible) == 1 and len(visible[0]) == 1 else
-               f'Найдено строк: {len(output)}.')
+               visible[0][0] if len(visible) == 1 and len(visible[0]) == 1 and not truncated else
+               f'Показано {len(visible)} из {len(output)} строк.')
+    clean_plan = {'select': select, 'groupBy': groups, 'filters': filters,
+                  'orderBy': order, 'limit': min(limit, MAX_ROWS)}
     return {'answer': summary, 'columns': columns, 'rows': visible,
-            'plan': {'select': select, 'groupBy': groups, 'filters': filters,
-                     'orderBy': order, 'limit': min(limit, MAX_ROWS)}, 'truncated': len(output) > len(visible)}
+            'plan': clean_plan,
+            'truncated': truncated,
+            'explanation': explain_plan(dataset, clean_plan, shown=len(visible),
+                                        total=len(output), has_more=truncated)}

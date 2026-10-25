@@ -80,6 +80,19 @@ export interface DbConnection {
   address?: string | null
 }
 
+export interface DatasetAnswerExplanation {
+  source: string
+  calculations: string[]
+  groupBy: string[]
+  filters: string[]
+  orderBy: string | null
+  scope: string
+  limit: number
+  shownRows: number
+  totalRows: number | null
+  hasMore: boolean
+}
+
 export interface DatasetQuestionTurn {
   question: string
   answer: string
@@ -87,6 +100,7 @@ export interface DatasetQuestionTurn {
   rows: string[][]
   plan: Record<string, unknown>
   truncated: boolean
+  explanation: DatasetAnswerExplanation
   sql?: string
   parameters?: Record<string, string | number | boolean>
 }

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import type { Dataset, DatasetDetail, DatasetQuestionTurn, DbConnection } from '../types/dataset'
 import type { Dimension, Metric } from '../types/semantic'
 import {
@@ -71,6 +72,7 @@ export function DatasetModal({
   onChanged: () => void
   onDelete: () => void
 }) {
+  const navigate = useNavigate()
   const [tab, setTab] = useState<Tab>('preview')
   const [detail, setDetail] = useState<DatasetDetail | null>(null)
   const [metrics, setMetrics] = useState<Metric[]>([])
@@ -187,14 +189,22 @@ export function DatasetModal({
             <Button variant="danger" disabled={busy} onClick={onDelete}>
               Удалить
             </Button>
+            <Button variant="primary" onClick={() => navigate(`/builder?dataset=${encodeURIComponent(current.slug)}`)}>
+              Собрать отчёт
+            </Button>
             <Button variant="ghost" className="ml-auto" onClick={onClose}>
               Закрыть
             </Button>
           </>
         ) : (
-          <Button variant="ghost" className="ml-auto" onClick={onClose}>
-            Закрыть
-          </Button>
+          <>
+            <Button variant="primary" onClick={() => navigate(`/builder?dataset=${encodeURIComponent(current.slug)}`)}>
+              Собрать отчёт
+            </Button>
+            <Button variant="ghost" className="ml-auto" onClick={onClose}>
+              Закрыть
+            </Button>
+          </>
         )
       }
     >
@@ -231,8 +241,37 @@ export function DatasetModal({
                   </Table>
                 </div>
               )}
-              {turn.truncated && <p className="text-xs text-fg-muted">Показана часть результата.</p>}
-              {isAdmin && turn.sql && <pre className="mt-2 overflow-x-auto text-xs text-fg-muted">{turn.sql}{turn.parameters ? `\n${JSON.stringify(turn.parameters)}` : ''}</pre>}
+              {turn.explanation && (
+                <section className="mt-3 space-y-1 rounded-control bg-surface-sunken p-3 text-sm" aria-label="Как посчитано">
+                  <h4 className="font-medium">Как посчитано</h4>
+                  <p><span className="text-fg-muted">Источник:</span> {turn.explanation.source}</p>
+                  <p><span className="text-fg-muted">Расчёт:</span> {turn.explanation.calculations.join('; ')}</p>
+                  {turn.explanation.groupBy.length > 0 && (
+                    <p><span className="text-fg-muted">Группировка:</span> {turn.explanation.groupBy.join(', ')}</p>
+                  )}
+                  {turn.explanation.filters.length > 0 && (
+                    <p><span className="text-fg-muted">Условия:</span> {turn.explanation.filters.join('; ')}</p>
+                  )}
+                  {turn.explanation.orderBy && (
+                    <p><span className="text-fg-muted">Сортировка:</span> {turn.explanation.orderBy}</p>
+                  )}
+                  <p>{turn.explanation.scope}</p>
+                  <p className="text-fg-muted">
+                    Показано строк результата: {turn.explanation.shownRows}
+                    {turn.explanation.totalRows !== null && ` из ${turn.explanation.totalRows}`}.
+                    {' '}Предел вывода: {turn.explanation.limit}.
+                    {turn.explanation.hasMore && ' Есть ещё строки.'}
+                  </p>
+                </section>
+              )}
+              {isAdmin && turn.sql && (
+                <details className="mt-3 rounded-control border border-line p-3 text-sm">
+                  <summary className="cursor-pointer font-medium">Показать SQL-запрос</summary>
+                  <pre className="mt-2 overflow-x-auto text-xs text-fg-muted">
+                    {turn.sql}{turn.parameters ? `\n${JSON.stringify(turn.parameters)}` : ''}
+                  </pre>
+                </details>
+              )}
             </div>
           ))}
           {questionError && <Alert>{questionError}</Alert>}

@@ -18,6 +18,11 @@ def test_вопрос_считает_по_выбранному_датасету(
     assert response.status_code == 200, response.text
     body = response.json()
     assert 'sql' not in body
+    assert body['explanation']['source'] == 'Продажи'
+    assert body['explanation']['calculations'] == ['Сумма значений «revenue»']
+    assert body['explanation']['filters'] == ['«city» равно «Москва»']
+    assert 'лимит относится только к строкам ответа' in body['explanation']['scope']
+    assert body['explanation']['totalRows'] is None
     sql, params = sources.specs['sales'].queries[-1]
     assert 'SUM(' in sql and 'sales_orders' in sql
     assert params == {'q0': 'Москва'}
@@ -76,6 +81,51 @@ def test_уточнение_передаёт_историю(client, dataset, use
                            json={'question': 'А за вчера?', 'history': history})
     assert response.status_code == 200
     assert seen == [('А за вчера?', history)]
+    assert response.json()['explanation']['calculations'] == ['Количество строк']
+
+
+def test_объяснение_группировки_и_неполной_выдачи(client, dataset, sources,
+                                                user_headers, admin_headers, monkeypatch):
+    sources.specs['sales'].result = (['c0', 'c1'], [
+        ['Москва', 100], ['Тверь', 80], ['Казань', 60],
+    ])
+    monkeypatch.setattr(answer, 'propose', lambda *_: {
+        'select': [{'field': 'city'}, {'field': 'revenue', 'agg': 'sum'}],
+        'groupBy': ['city'], 'filters': [],
+        'orderBy': {'field': 'revenue', 'direction': 'desc'}, 'limit': 2,
+    })
+
+    employee = client.post('/api/datasets/sales/ask', headers=user_headers,
+                           json={'question': 'Продажи по городам'}).json()
+    assert employee['rows'] == [['Москва', '100'], ['Тверь', '80']]
+    assert employee['truncated'] is True
+    assert employee['answer'] == 'Показано строк: 2. Есть ещё строки.'
+    assert employee['explanation']['groupBy'] == ['city']
+    assert employee['explanation']['orderBy'] == 'Сумма значений «revenue» — по убыванию'
+    assert employee['explanation']['shownRows'] == 2
+    assert employee['explanation']['hasMore'] is True
+    assert employee['explanation']['totalRows'] is None
+    assert 'sql' not in employee and 'parameters' not in employee
+    assert 'LIMIT 3' in sources.specs['sales'].queries[-1][0]
+
+    admin = client.post('/api/datasets/sales/ask', headers=admin_headers,
+                        json={'question': 'Продажи по городам'}).json()
+    assert 'sql' in admin and 'parameters' in admin
+    assert admin['explanation'] == employee['explanation']
+
+
+def test_пустой_ответ_тоже_объясняется(client, dataset, sources, user_headers,
+                                     monkeypatch):
+    sources.specs['sales'].result = (['c0'], [])
+    monkeypatch.setattr(answer, 'propose', lambda *_: {
+        'select': [{'field': 'revenue', 'agg': 'sum'}], 'limit': 5,
+    })
+
+    body = client.post('/api/datasets/sales/ask', headers=user_headers,
+                       json={'question': 'Выручка за вчера'}).json()
+    assert body['answer'] == 'По этому вопросу данных не найдено.'
+    assert body['explanation']['shownRows'] == 0
+    assert body['explanation']['hasMore'] is False
 
 
 def test_модель_видит_схему_и_предыдущий_план(dataset, monkeypatch):
@@ -115,3 +165,12 @@ def test_csv_агрегация_по_всему_файлу(metabase, tmp_path, m
     result = answer._answer_csv(dataset, {'select': [{'field': 'revenue', 'agg': 'sum'}],
                                           'filters': [{'field': 'city', 'op': 'eq', 'value': 'Москва'}]})
     assert result['rows'] == [['15.0']]
+    assert result['explanation']['filters'] == ['«city» равно «Москва»']
+    assert result['explanation']['totalRows'] == 1
+
+    limited = answer._answer_csv(dataset, {
+        'select': [{'field': 'city'}], 'limit': 1})
+    assert limited['answer'] == 'Показано 1 из 3 строк.'
+    assert limited['explanation']['shownRows'] == 1
+    assert limited['explanation']['totalRows'] == 3
+    assert limited['explanation']['hasMore'] is True

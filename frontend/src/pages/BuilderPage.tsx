@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { DragEvent } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import type { Report } from '../types/report'
 import type { Dataset } from '../types/dataset'
 import type {
@@ -275,6 +275,8 @@ export function BuilderPage() {
 function Builder() {
   const { slug } = useParams<{ slug: string }>()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const requestedDataset = searchParams.get('dataset')?.trim()
   const { isAdmin } = useAuth()
   const { reload: reloadReports } = useReports()
   const { confirm, dialog } = useConfirm()
@@ -335,13 +337,17 @@ function Builder() {
         setDimensions(d)
         setDatasets(ds)
         setLinks(ls)
+        if (!editing && requestedDataset && ds.some((item) => item.slug === requestedDataset)) {
+          setPickedDatasets((previous) => previous.includes(requestedDataset)
+            ? previous : [...previous, requestedDataset])
+        }
       })
       .catch(() => undefined)
       .finally(() => alive && setLoading(false))
     return () => {
       alive = false
     }
-  }, [])
+  }, [editing, requestedDataset])
 
   const metricsBySlug = useMemo(() => new Map(metrics.map((m) => [m.slug, m])), [metrics])
   const dimensionsBySlug = useMemo(() => new Map(dimensions.map((d) => [d.slug, d])), [dimensions])
