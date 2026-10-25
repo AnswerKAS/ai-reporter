@@ -320,6 +320,23 @@ def test_словарный_датасет_не_дублируется_поля�
     assert all(not item['definition'].get('fields') for item in variants)
 
 
+def test_рекомендация_для_датасета_без_числовых_колонок(catalog):
+    catalog.metrics = {}
+    catalog.dimensions = {}
+    catalog.datasets = {'cities': {
+        'slug': 'cities', 'title': 'Города', 'source': 'postgres', 'status': 'ok',
+        'schema': [{'name': 'city', 'type': 'text', 'comment': 'Город'}],
+    }}
+
+    variant = interpret.recommend(catalog, datasets=['cities'])['recommendations'][0]
+
+    assert variant['title'].startswith('Заполненных значений «Город»')
+    metric = next(field for field in variant['definition']['fields']
+                  if field['role'] == 'metric')
+    assert metric['field'] == 'city'
+    assert metric['agg'] == 'count'
+
+
 def test_без_ключа_ищет_за_пределами_выбранного_датасета(catalog, monkeypatch):
     monkeypatch.setattr(interpret, '_openrouter_key', lambda: None)
     catalog.metrics['margin'] = {'slug': 'margin', 'title': 'Маржа',

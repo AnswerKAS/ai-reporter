@@ -22,7 +22,7 @@ from pathlib import Path
 
 from ..core import config as _config  # noqa: F401  — грузит .env до чтения переменных
 from ..datasets.base import DatasetError
-from ..semantic.suggest import suggest_for_dataset
+from ..semantic.suggest import field_kind, suggest_for_dataset
 from . import phrase
 
 # Разбор — одно обращение к модели, а не диалог, поэтому таймаут человеческий.
@@ -739,6 +739,7 @@ def _schema_recommendations(catalog, metrics: dict, dimensions: dict,
                      'dataset_slug': slug, 'type': item['type'],
                      '_report_field': report_field}
             extra_dimensions[key] = entry
+        metric_count = 0
         for item in draft['metrics']:
             if not item.get('selected') or not item.get('column'):
                 continue
@@ -754,6 +755,27 @@ def _schema_recommendations(catalog, metrics: dict, dimensions: dict,
                                   'dataset_slug': slug, 'status': 'ok',
                                   'format': item['format'],
                                   '_report_field': report_field}
+            metric_count += 1
+        if metric_count == 0:
+            # У справочника могут быть только текстовые колонки. Считаем
+            # заполненные значения, а не обещаем число всех строк источника:
+            # count(column) пропускает NULL.
+            first = next((item for item in dataset['schema']
+                          if item.get('name') and field_kind(
+                              item.get('type') or '', dataset['source']) != 'other'), None)
+            if first:
+                key = f'field_{slug}_values'
+                if key not in taken:
+                    title = (first.get('comment') or first['name']).strip()
+                    label = f'Заполненных значений «{title}»'
+                    report_field = {'key': key, 'title': label, 'datasetSlug': slug,
+                                    'field': first['name'], 'role': 'metric',
+                                    'agg': 'count', 'type': 'number', 'format': 'number'}
+                    extra_metrics[key] = {'slug': key, 'title': label,
+                                          'dataset_slug': slug, 'status': 'ok',
+                                          'format': 'number',
+                                          '_report_field': report_field}
+                    taken.add(key)
     return extra_metrics, extra_dimensions
 
 
@@ -861,7 +883,7 @@ def recommend(catalog, fields=None, computed=None, datasets=None,
     recommendations = _recommendations(catalog, metrics, dimensions,
                                         datasets, request)
     if not recommendations:
-        raise DatasetError('в выбранных датасетах нет числовых полей для рекомендаций')
+        raise DatasetError('в доступных датасетах нет подходящих полей для рекомендаций')
     return {'recommendations': recommendations}
 
 
