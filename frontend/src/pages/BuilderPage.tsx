@@ -985,6 +985,7 @@ function Builder({ embedded, suggestedPrompt }: {
         fields={ownFields}
         computed={computed}
         datasets={pickedDatasets}
+        availableDatasets={datasets}
         definition={definition}
         suggestedPrompt={suggestedPrompt}
         saving={busy}

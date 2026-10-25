@@ -2,8 +2,10 @@ import { useEffect, useRef, useState } from 'react'
 import type { ChatMessage, ReportRecommendation } from '../../lib/api'
 import { ApiError, chatReport, parsePhrase, recommendReports } from '../../lib/api'
 import type { ComputedField, ReportDefinition, ReportField } from '../../types/semantic'
+import type { Dataset } from '../../types/dataset'
 import { Alert, Button, Card, Input, Modal, Textarea } from '../ui'
 import { cn } from '../../lib/cn'
+import { DatasetDataDialog } from './DatasetDataDialog'
 
 /**
  * Диалог о будущем отчёте.
@@ -23,6 +25,7 @@ export function ReportChat({
   fields,
   computed,
   datasets,
+  availableDatasets,
   definition,
   suggestedPrompt,
   saving,
@@ -36,6 +39,7 @@ export function ReportChat({
   fields: ReportField[]
   computed: ComputedField[]
   datasets: string[]
+  availableDatasets: Dataset[]
   definition: ReportDefinition
   suggestedPrompt?: { id: number; text: string } | null
   saving: boolean
@@ -49,6 +53,7 @@ export function ReportChat({
   onVocabulary: () => void
 }) {
   const [open, setOpen] = useState(false)
+  const [dataOpen, setDataOpen] = useState(false)
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
@@ -191,6 +196,7 @@ export function ReportChat({
             ? 'Уточнить описание'
             : messages.length ? 'Доработать в диалоге' : 'Выбрать или описать отчёт'}
         </Button>
+        <Button onClick={() => setDataOpen(true)}>Посмотреть данные</Button>
         <span className="text-xs text-fg-muted">
           {model
             ? `собеседник — ${model}; выбирает только из вашего словаря`
@@ -210,6 +216,9 @@ export function ReportChat({
           ?
         </button>
       </section>
+
+      {dataOpen && <DatasetDataDialog datasets={availableDatasets} selectedSlugs={datasets}
+        onClose={() => setDataOpen(false)} />}
 
       {proposed && (
         <div className="mt-3 flex flex-col gap-2 rounded-card border border-accent bg-accent-soft p-3.5">
