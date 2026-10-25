@@ -41,7 +41,8 @@ def test_dataset_agent_executes_window_query(dataset, sources, monkeypatch):
         {'final': {'answer': 'Выручка по городу: 100',
                    'calculations': ['Оконная сумма выручки по городу'],
                    'groupBy': ['city'], 'filters': [], 'orderBy': None,
-                   'scope': 'Все строки датасета'}},
+                   'scope': 'Все строки датасета',
+                   'columnLabels': {'city': 'Город', 'total': 'Выручка'}}},
     ])
     monkeypatch.setattr(interpret, '_openrouter_key', lambda: 'fake')
     monkeypatch.setattr(interpret, '_chat_models', lambda: ('fake-model', None))
@@ -52,8 +53,34 @@ def test_dataset_agent_executes_window_query(dataset, sources, monkeypatch):
     response = runner.ask_dataset(dataset, 'Выручка по городам', [], reveal_sql=True)
 
     assert response['rows'] == [['Москва', '100']]
+    assert response['columns'] == ['Город', 'Выручка']
     assert 'OVER (PARTITION BY city)' in response['sql']
     assert response['explanation']['calculations'] == ['Оконная сумма выручки по городу']
+
+
+def test_dataset_agent_uses_configured_russian_column_titles(dataset):
+    """Dataset field names and administrator labels take precedence over raw SQL names."""
+    dataset['schema'] = [{'name': 'city', 'type': 'String', 'comment': 'Город из БД'},
+                         {'name': 'revenue', 'type': 'Float64', 'comment': ''}]
+    dataset['field_settings'] = {'city': {'title': 'Город продажи'}}
+    assert runner._russian_columns(['city', 'revenue'],
+                                   {'columnLabels': {'revenue': 'Выручка'}}, dataset) == [
+        'Город продажи', 'Выручка']
+
+
+def test_dataset_agent_requires_russian_column_titles(dataset):
+    """An unknown SQL alias must be translated before its table reaches the user."""
+    with pytest.raises(DatasetError, match='columnLabels'):
+        runner._russian_columns(['opaque_alias'], {}, dataset)
+
+
+def test_dataset_agent_resolves_duplicate_configured_titles(dataset):
+    """A final label can disambiguate fields with the same saved title."""
+    dataset['schema'] = [{'name': 'a', 'type': 'String'}, {'name': 'b', 'type': 'String'}]
+    dataset['field_settings'] = {'a': {'title': 'Сумма'}, 'b': {'title': 'Сумма'}}
+    assert runner._russian_columns(['a', 'b'],
+                                   {'columnLabels': {'b': 'Сумма возвратов'}}, dataset) == [
+        'Сумма', 'Сумма возвратов']
 
 
 def test_report_agent_previews_sql_section(dataset, monkeypatch):

@@ -56,6 +56,27 @@ def _sample(dataset: dict) -> dict:
         adapter.close()
 
 
+def _russian_columns(columns: list[str], final: dict, dataset: dict) -> list[str]:
+    """Resolve every result column to a distinct Russian display heading."""
+    labels = final.get('columnLabels') if isinstance(final.get('columnLabels'), dict) else {}
+    schema = {item['name']: item for item in dataset.get('schema') or []}
+    settings = dataset.get('field_settings') or {}
+    translated: list[str] = []
+    for name in columns:
+        field = schema.get(name) or {}
+        configured = (settings.get(name) or {}).get('title')
+        candidates = (configured, field.get('comment'), labels.get(name), name)
+        label = next((str(value).strip() for value in candidates
+                      if value and re.search(r'[А-Яа-яЁё]', str(value))
+                      and str(value).strip() not in translated), None)
+        if label is None:
+            raise DatasetError(
+                f'Для столбца {name!r} укажи русское название в final.columnLabels; '
+                'SQL и значения менять не нужно.')
+        translated.append(label)
+    return translated
+
+
 def _stream_answer(question: str, columns: list[str], rows: list[list],
                    draft: str, model: str, key: str,
                    emit: Callable[[dict], None]) -> str:
@@ -89,19 +110,23 @@ def ask_dataset(dataset: dict, question: str, history: list[dict], *, reveal_sql
     key = interpret._openrouter_key()
     if not key:
         raise DatasetError('модель вопросов не настроена: нужен OPENROUTER_API_KEY')
+    settings = dataset.get('field_settings') or {}
     fields = [{'name': item['name'], 'type': item['type'],
-               'comment': item.get('comment') or ''}
+               'comment': item.get('comment') or '',
+               'title': (settings.get(item['name']) or {}).get('title') or ''}
               for item in dataset.get('schema') or []]
     base = (
         'Ты ReAct агент анализа данных. На каждом шаге верни ОДИН JSON-объект: '
         '{"tool":"describe_schema|sample_rows|execute_sql", "args":{...}} '
         'или {"final":{"answer":"...","calculations":["..."],'
-        '"groupBy":["..."],"filters":["..."],"orderBy":null,"scope":"..."}}. '
+        '"groupBy":["..."],"filters":["..."],"orderBy":null,"scope":"...",'
+        '"columnLabels":{"sql_column":"Русское название"}}}. '
         'Для execute_sql аргумент — {"sql":"SELECT ... FROM dataset ..."}. '
         'Таблица dataset — выбранный датасет. Можно применять все функции SELECT, '
         'CTE, JOIN, подзапросы, оконные функции и выражения SQL выбранного диалекта. '
         'Запрещено изменение данных или схемы. Сначала вызови execute_sql, '
         'при ошибке исправь SQL и вызови инструмент снова. '
+        'В final.columnLabels дай русское название каждому столбцу результата SQL. '
         'Отвечай только по фактическому результату инструмента, без вымышленных чисел. '
         f'Диалект: {dataset["source"]}. Датасет: {dataset.get("title")}. '
         f'Поля: {json.dumps(fields, ensure_ascii=False)}. '
@@ -151,13 +176,14 @@ def ask_dataset(dataset: dict, question: str, history: list[dict], *, reveal_sql
                 return None, {'error': 'Сначала вызови execute_sql.'}
             final = action.get('final') or {}
             sql, columns, rows, truncated = result
+            display_columns = _russian_columns(columns, final, dataset)
             safe_rows = [[str(value) if value is not None else '' for value in row]
                          for row in rows]
             answer = str(final.get('answer') or '').strip() or f'Показано строк: {len(safe_rows)}.'
             if on_event:
                 on_event({'type': 'status', 'text': 'Формулирую ответ…'})
                 try:
-                    answer = _stream_answer(question, columns, rows, answer,
+                    answer = _stream_answer(question, display_columns, rows, answer,
                                             model, key, on_event) or answer
                 except Exception:
                     on_event({'type': 'delta', 'text': answer})
@@ -171,7 +197,7 @@ def ask_dataset(dataset: dict, question: str, history: list[dict], *, reveal_sql
                 'limit': MAX_VISIBLE_ROWS, 'shownRows': len(safe_rows),
                 'totalRows': None, 'hasMore': truncated,
             }
-            return ({'answer': answer, 'columns': columns, 'rows': safe_rows,
+            return ({'answer': answer, 'columns': display_columns, 'rows': safe_rows,
                      'plan': {'sql': sql}, 'truncated': truncated,
                      'explanation': explanation, 'sql': sql, 'parameters': {}}, None)
 

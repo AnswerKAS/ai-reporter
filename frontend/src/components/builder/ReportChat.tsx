@@ -3,39 +3,13 @@ import type { ChatMessage } from '../../lib/api'
 import { ApiError, fetchReportChatHistory, parsePhrase, streamReportChat } from '../../lib/api'
 import type { ComputedField, ReportDefinition, ReportField } from '../../types/semantic'
 import type { Dataset } from '../../types/dataset'
-import { Alert, Button, Input, Modal, Textarea } from '../ui'
-import { cn } from '../../lib/cn'
+import { Alert, Button, Input, Textarea } from '../ui'
 import { DatasetDataDialog } from './DatasetDataDialog'
 
-/**
- * Диалог о будущем отчёте.
- *
- * Отличие от прежнего «Собрать по описанию» не в модели, а в том, что
- * разговор продолжается: несогласие автора — не конец разбора, а следующая
- * реплика, и собеседник правит уже собранную раскладку, а не пересобирает её
- * с нуля. Поэтому текущее определение уходит вместе с перепиской.
- *
- * Переписка показывается в модалке и сохраняется сервером, а предложение —
- * на странице. Как только раскладка предложена, модалка закрывается; при
- * повторном открытии или обновлении страницы реплики восстанавливаются.
- */
-export function ReportChat({
-  fields,
-  computed,
-  datasets,
-  availableDatasets,
-  definition,
-  suggestedPrompt,
-  saving,
-  title,
-  onTitle,
-  onProposal,
-  onRevert,
-  onSave,
-  onVocabulary,
-  compact = false,
-  target,
-}: {
+/** Persistent inline report chat, styled like the dataset question chat. */
+export function ReportChat({ fields, computed, datasets, availableDatasets, definition,
+  suggestedPrompt, saving, title, onTitle, onProposal, onRevert, onSave,
+  onVocabulary, compact = false, target }: {
   fields: ReportField[]
   computed: ComputedField[]
   datasets: string[]
@@ -45,64 +19,59 @@ export function ReportChat({
   saving: boolean
   title: string
   onTitle: (value: string) => void
-  /** Применить предложение к раскладке; вызывающий запоминает прежнюю. */
   onProposal: (definition: ReportDefinition, title?: string | null) => void
   onRevert: () => void
   onSave: () => void
-  /** Показать словарь отчёта: словами можно назвать только то, что в нём есть. */
   onVocabulary: () => void
   compact?: boolean
   target: string
 }) {
-  const [open, setOpen] = useState(false)
   const [dataOpen, setDataOpen] = useState(false)
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [conversationId, setConversationId] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
+  const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [model, setModel] = useState<string | null>(null)
   const [parserMode, setParserMode] = useState(false)
   const [progress, setProgress] = useState('')
   const [streamedReply, setStreamedReply] = useState('')
-  /** Есть ли что подтверждать: предложение пришло и его ещё не откатили. */
   const [proposed, setProposed] = useState(false)
-  /** Последняя реплика человека — её разбирает запасной путь без модели. */
   const [lastSaid, setLastSaid] = useState('')
   const tail = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     let active = true
+    setLoading(true)
+    setMessages([])
+    setConversationId(null)
+    setProposed(false)
+    setError(null)
+    setModel(null)
+    setParserMode(false)
     void fetchReportChatHistory(target).then((saved) => {
       if (!active) return
       setConversationId(saved.conversationId)
       setMessages(saved.messages)
-    }).catch(() => { /* Chat stays usable when history is unavailable. */ })
+    }).catch((failure) => {
+      if (active) setError(failure instanceof ApiError ? failure.message : 'Не удалось загрузить диалог')
+    }).finally(() => { if (active) setLoading(false) })
     return () => { active = false }
   }, [target])
 
-  // Переход из ответа по датасету открывает тот же диалог с готовым вопросом.
   useEffect(() => {
-    if (!suggestedPrompt) return
-    setDraft(suggestedPrompt.text)
-    setOpen(true)
+    if (suggestedPrompt) setDraft(suggestedPrompt.text)
   }, [suggestedPrompt])
 
   useEffect(() => {
-    if (open) tail.current?.scrollIntoView({ block: 'nearest' })
-  }, [messages, busy, open])
+    tail.current?.scrollIntoView({ block: 'nearest', behavior: busy ? 'smooth' : 'instant' })
+  }, [messages, busy, progress, streamedReply])
 
-  /** Open the saved conversation without fetching preset report layouts. */
-  const openDialog = () => {
-    setOpen(true)
-  }
-
-  /** Send one turn and apply only the completed agent proposal. */
-  const send = async () => {
+  /** Send one turn and apply the verified layout to the builder. */
+  async function send(): Promise<void> {
     const text = draft.trim()
-    if (!text || busy) return
-    // реплика встаёт в переписку сразу: ответ идёт секунды, и всё это время
-    // человек должен видеть, что его услышали
+    if (!text || busy || loading) return
     const next: ChatMessage[] = [...messages, { role: 'user', text }]
     setMessages(next)
     setLastSaid(text)
@@ -115,8 +84,11 @@ export function ReportChat({
       await streamReportChat(next, { fields, computed, datasets, definition,
         conversationId, target }, (event) => {
         if (event.type === 'status') setProgress(event.text ?? '')
-        if (event.type === 'delta') setStreamedReply((value) => value + (event.text ?? ''))
-        if (event.type === 'error') throw new Error(event.message ?? 'не удалось собрать отчёт')
+        if (event.type === 'delta') {
+          setProgress('')
+          setStreamedReply((value) => value + (event.text ?? ''))
+        }
+        if (event.type === 'error') throw new Error(event.message ?? 'Агент не смог собрать отчёт')
         if (event.type === 'done' && event.result) {
           const answer = event.result
           setConversationId(event.conversationId ?? null)
@@ -126,14 +98,13 @@ export function ReportChat({
           if (answer.definition) {
             onProposal(answer.definition, answer.title)
             setProposed(true)
-            setOpen(false)
           }
         }
       })
-    } catch (err) {
-      // реплику из переписки не убираем: она часть разговора, и повторять её
-      // человеку заново незачем — можно просто отправить ещё раз
-      setError(err instanceof ApiError ? err.message : 'не удалось получить ответ')
+    } catch (failure) {
+      setMessages(messages)
+      setDraft(text)
+      setError(failure instanceof Error ? failure.message : 'Не удалось получить ответ')
     } finally {
       setBusy(false)
       setProgress('')
@@ -141,12 +112,8 @@ export function ReportChat({
     }
   }
 
-  /** Запасной путь: словарь без модели.
-
-      Диалога он не ведёт — просто разбирает последнюю реплику по названиям
-      словаря. Нужен там, где ключа провайдера нет вовсе: без этой кнопки
-      установка без модели осталась бы вообще без разбора описаний. */
-  const parseWithoutModel = async () => {
+  /** Parse the last request using the vocabulary if the model fails. */
+  async function parseWithoutModel(): Promise<void> {
     if (!lastSaid || busy) return
     setBusy(true)
     setError(null)
@@ -156,166 +123,122 @@ export function ReportChat({
       setProposed(true)
       setModel(null)
       setParserMode(true)
-      setMessages((prev) => [
-        ...prev,
-        { role: 'assistant', text: 'Разобрал по словарю, без модели — посмотрите раскладку ниже.' },
-      ])
-      setOpen(false)
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'не удалось разобрать описание')
+      setMessages((previous) => [...previous,
+        { role: 'assistant', text: 'Разобрал по словарю без модели. Проверьте раскладку и предпросмотр ниже.' }])
+    } catch (failure) {
+      setError(failure instanceof ApiError ? failure.message : 'Не удалось разобрать описание')
     } finally {
       setBusy(false)
     }
   }
 
-  const revert = () => {
+  /** Restore the layout that was active before the agent proposal. */
+  function revert(): void {
     onRevert()
     setProposed(false)
-    setMessages((prev) => [...prev, { role: 'assistant', text: 'Вернул прежнюю раскладку.' }])
+    setMessages((previous) => [...previous, { role: 'assistant', text: 'Вернул прежнюю раскладку.' }])
   }
 
   return (
     <>
-      <section className={cn('rounded-card border border-line bg-surface', compact ? 'mt-3 px-4 py-3' : 'mt-6 p-5 shadow-card sm:p-6')}>
-        {!compact && <p className="text-[11px] font-semibold tracking-[0.14em] text-accent uppercase">02 · Отчёт по данным</p>}
-        <div className={cn('flex flex-wrap items-center justify-between gap-3', !compact && 'mt-2 items-start gap-4')}>
-          <div className="max-w-2xl">
-            <h2 className={cn('font-semibold tracking-tight', compact ? 'text-sm' : 'text-xl')}>{compact ? 'Доработать отчёт' : 'Соберите отчёт из выбранных данных'}</h2>
-            {!compact && <p className="mt-2 text-sm text-fg-muted">
-              {model
-                ? `Опишите результат своими словами. Собеседник ${model} выбирает только доступные поля.`
-                : parserMode
-                  ? 'Разбор по словарю работает без модели: назовите показатель и разрез.'
-                  : 'Опишите постоянный отчёт своими словами. Агент соберёт и проверит его карточки перед сохранением.'}
-            </p>}
+      <section className={`mx-auto flex w-full max-w-6xl flex-col overflow-hidden rounded-card border border-line bg-surface shadow-card ${compact ? 'h-[min(62vh,640px)] min-h-[440px]' : 'h-[min(78vh,880px)] min-h-[550px]'}`}>
+        <header className="flex flex-wrap items-start justify-between gap-3 border-b border-line px-5 py-4 sm:px-6">
+          <div>
+            <p className="text-[11px] font-semibold tracking-[0.14em] text-accent uppercase">02 · Конструктор отчёта</p>
+            <h2 className="mt-1 text-xl font-semibold tracking-tight">Соберите отчёт в диалоге</h2>
+            <p className="mt-1 text-sm text-fg-muted">
+              {model ? `${model} · ` : ''}Агент помнит сообщения и обновляет раскладку отчёта
+            </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Button variant="primary" onClick={openDialog}>
-              {parserMode && messages.length
-                ? 'Уточнить описание'
-                : messages.length ? 'Доработать в диалоге' : 'Описать отчёт'}
-            </Button>
-            <Button onClick={() => setDataOpen(true)}>Посмотреть данные</Button>
-            <button type="button" aria-label="Показать словарь отчёта"
-              title="Какие показатели и разрезы можно назвать" onClick={onVocabulary}
-              className="flex size-10 cursor-pointer items-center justify-center rounded-control border border-line text-sm font-semibold text-fg-muted hover:border-accent hover:text-accent">?</button>
+            <Button size="sm" onClick={() => setDataOpen(true)}>Посмотреть данные</Button>
+            <Button size="sm" onClick={onVocabulary}>Словарь полей</Button>
+          </div>
+        </header>
+
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6" aria-live="polite">
+          {loading && <p className="text-sm text-fg-muted">Загружаю историю диалога…</p>}
+          {!loading && messages.length === 0 && !busy && (
+            <div className="mx-auto flex h-full max-w-lg flex-col items-center justify-center text-center">
+              <span className="mb-3 text-3xl" aria-hidden="true">✦</span>
+              <p className="text-lg font-medium">Каким должен быть отчёт?</p>
+              <p className="mt-2 text-sm text-fg-muted">
+                Например: «Покажи продажи по месяцам графиком, итог карточкой и детали таблицей».
+              </p>
+            </div>
+          )}
+          <div className="space-y-6">
+            {messages.map((message, index) => message.role === 'user' ? (
+              <div key={index} className="ml-auto max-w-[85%] rounded-card bg-accent-soft px-4 py-3 text-sm font-medium sm:max-w-[75%]">
+                {message.text}
+              </div>
+            ) : (
+              <div key={index} className="max-w-[95%] space-y-2 rounded-card border border-line bg-surface-sunken px-4 py-4 sm:max-w-[88%]">
+                <p className="text-[11px] font-semibold tracking-[0.12em] text-accent uppercase">Агент · отчёт</p>
+                <p className="whitespace-pre-wrap text-sm leading-relaxed">{message.text}</p>
+              </div>
+            ))}
+            {busy && (
+              <div className="max-w-[95%] rounded-card border border-line bg-surface-sunken px-4 py-4 sm:max-w-[88%]">
+                <p className="text-[11px] font-semibold tracking-[0.12em] text-accent uppercase">Агент · собирает отчёт</p>
+                {streamedReply ? <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed">{streamedReply}<span className="ml-0.5 animate-pulse">▍</span></p>
+                  : <p className="mt-2 text-sm text-fg-muted">{progress || 'Думаю…'}</p>}
+              </div>
+            )}
+            <div ref={tail} />
           </div>
         </div>
+
+        {proposed && (
+          <div className="flex flex-wrap items-end gap-3 border-t border-accent bg-accent-soft px-4 py-3 sm:px-6">
+            <p className="mr-auto max-w-md text-sm">
+              {parserMode ? 'Раскладка собрана по словарю.' : 'Раскладка проверена на данных.'}
+              {' '}Предпросмотр обновлён ниже.
+            </p>
+            <label className="flex flex-col gap-1 text-xs text-fg-muted">
+              Название отчёта
+              <Input className="min-w-48" value={title} onChange={(event) => onTitle(event.target.value)}
+                placeholder="Продажи по городам" />
+            </label>
+            <Button size="sm" variant="primary" onClick={onSave} disabled={saving || !title.trim()}>
+              {saving ? 'Сохранение…' : 'Сохранить отчёт'}
+            </Button>
+            <Button size="sm" variant="ghost" onClick={revert}>Вернуть как было</Button>
+          </div>
+        )}
+
+        <footer className="border-t border-line bg-surface px-4 py-4 sm:px-6">
+          {error && <Alert className="mb-3">
+            {error}
+            {lastSaid && <button type="button" className="ml-2 cursor-pointer underline"
+              onClick={() => void parseWithoutModel()} disabled={busy}>
+              разобрать по словарю без модели
+            </button>}
+          </Alert>}
+          <form onSubmit={(event) => { event.preventDefault(); void send() }}>
+            <label htmlFor="report-chat-input" className="sr-only">Описание отчёта</label>
+            <div className="flex items-end gap-2">
+              <Textarea id="report-chat-input" rows={2} value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+                    event.preventDefault()
+                    void send()
+                  }
+                }}
+                placeholder={messages.length ? 'Что изменить в отчёте?' : 'Опишите нужный отчёт…'}
+                disabled={busy || loading} className="min-h-16 flex-1 resize-none" />
+              <Button type="submit" variant="primary" disabled={busy || loading || !draft.trim()}>
+                {busy ? 'Собираю…' : 'Отправить ↑'}
+              </Button>
+            </div>
+            <p className="mt-2 text-xs text-fg-muted">Enter — отправить · Shift+Enter — новая строка</p>
+          </form>
+        </footer>
       </section>
 
       {dataOpen && <DatasetDataDialog datasets={availableDatasets} selectedSlugs={datasets}
         onClose={() => setDataOpen(false)} />}
-
-      {proposed && (
-        <div className={cn('mt-3 flex gap-2 rounded-card border border-accent bg-accent-soft p-3.5', compact ? 'flex-wrap items-center justify-between' : 'flex-col')}>
-          <span className="text-sm">{compact ? 'Предложенная раскладка готова к проверке.' :
-            `Раскладка ниже собрана ${parserMode ? 'по словарю без модели' : 'собеседником'}. Предпросмотр показывает её на настоящих данных. Проверьте и сохраните отчёт или уточните описание.`}</span>
-          <div className="flex flex-wrap items-end gap-2">
-            {!compact && <label className="flex flex-col gap-1 text-xs text-fg-muted">
-              Название отчёта
-              <Input
-                className="min-w-64"
-                value={title}
-                onChange={(e) => onTitle(e.target.value)}
-                placeholder="Продажи по городам"
-              />
-            </label>}
-            {!compact && <Button variant="primary" onClick={onSave} disabled={saving || !title.trim()}>
-              {saving ? 'Сохранение…' : 'Сохранить отчёт'}
-            </Button>}
-            <Button onClick={openDialog}>
-              {parserMode ? 'Уточнить описание' : 'Доработать в диалоге'}
-            </Button>
-            <Button variant="ghost" onClick={revert}>
-              Вернуть как было
-            </Button>
-          </div>
-        </div>
-      )}
-
-      {open && (
-        <Modal title="Отчёт по описанию" size="lg" onClose={() => setOpen(false)}>
-          <div className="flex flex-col gap-2.5">
-            {messages.length === 0 ? (
-              <p className="max-w-prose text-sm text-fg-muted">
-                Опишите, какой постоянный отчёт нужен. Агент соберёт карточки, графики,
-                таблицы и фильтры, проверит их на данных и покажет раскладку ниже.
-              </p>
-            ) : (
-              <div className="flex max-h-[50vh] flex-col gap-2 overflow-y-auto rounded-control border border-line bg-bg p-2.5">
-                {messages.map((m, i) => (
-                  <div
-                    key={i}
-                    className={cn(
-                      'max-w-[85%] rounded-card px-3 py-2 text-sm whitespace-pre-wrap',
-                      m.role === 'user'
-                        ? 'self-end bg-accent text-accent-fg'
-                        : 'self-start border border-line bg-surface',
-                    )}
-                  >
-                    {m.text}
-                  </div>
-                ))}
-                {busy && (
-                  <div className="self-start rounded-card border border-line bg-surface px-3 py-2 text-sm text-fg-muted">
-                    {streamedReply || progress || 'Собираю отчёт…'}
-                  </div>
-                )}
-                <div ref={tail} />
-              </div>
-            )}
-
-            <Textarea
-              autoFocus
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                // Enter отправляет, Shift+Enter — перенос строки: диалог
-                // набирают короткими репликами, тянуться к кнопке на каждую —
-                // лишнее
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault()
-                  void send()
-                }
-              }}
-              rows={3}
-              disabled={busy}
-              placeholder={
-                parserMode
-                  ? 'например «выручка по городам столбцами»'
-                  : messages.length
-                  ? 'что поправить? например «добавь разбивку по каналам» или «убери таблицу»'
-                  : 'отчёт по продажам в разрезе городов'
-              }
-            />
-
-            {error && (
-              <Alert>
-                {error}
-                {lastSaid && (
-                  <button
-                    type="button"
-                    className="ml-2 cursor-pointer underline"
-                    onClick={() => void parseWithoutModel()}
-                    disabled={busy}
-                  >
-                    разобрать по словарю без модели
-                  </button>
-                )}
-              </Alert>
-            )}
-
-            <div className="flex flex-wrap items-center gap-2">
-              <Button variant="primary" onClick={() => void send()} disabled={busy || !draft.trim()}>
-                {busy ? 'Собираю…' : messages.length ? 'Отправить' : 'Собрать отчёт'}
-              </Button>
-              <Button variant="ghost" onClick={() => setOpen(false)} disabled={busy}>
-                Закрыть
-              </Button>
-            </div>
-          </div>
-        </Modal>
-      )}
     </>
   )
 }
