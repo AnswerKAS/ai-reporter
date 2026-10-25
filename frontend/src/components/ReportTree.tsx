@@ -177,7 +177,7 @@ export function ReportTree({ className, onNavigate }: { className?: string; onNa
                 )
               }
             >
-              <span className="truncate">{item.title}</span>
+              <span className="min-w-0 whitespace-normal break-words">{item.title}</span>
               {isFavorite(item.slug) && (
                 <span aria-hidden="true" className="shrink-0 text-xs text-warn">
                   ★

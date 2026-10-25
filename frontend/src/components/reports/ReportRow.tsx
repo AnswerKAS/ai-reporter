@@ -70,7 +70,7 @@ export function ReportRow({
         }
       >
         <StatusDot status={report.status} />
-        <span className="truncate">{report.title}</span>
+        <span className="min-w-0 whitespace-normal break-words">{report.title}</span>
       </NavLink>
 
       <button
