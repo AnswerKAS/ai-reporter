@@ -24,7 +24,7 @@ export function ReportChat({
   computed,
   datasets,
   definition,
-  isAdmin,
+  suggestedPrompt,
   saving,
   title,
   onTitle,
@@ -37,7 +37,7 @@ export function ReportChat({
   computed: ComputedField[]
   datasets: string[]
   definition: ReportDefinition
-  isAdmin: boolean
+  suggestedPrompt?: { id: number; text: string } | null
   saving: boolean
   title: string
   onTitle: (value: string) => void
@@ -63,6 +63,13 @@ export function ReportChat({
   /** Последняя реплика человека — её разбирает запасной путь без модели. */
   const [lastSaid, setLastSaid] = useState('')
   const tail = useRef<HTMLDivElement | null>(null)
+
+  // Переход из ответа по датасету открывает тот же диалог с готовым вопросом.
+  useEffect(() => {
+    if (!suggestedPrompt) return
+    setDraft(suggestedPrompt.text)
+    setOpen(true)
+  }, [suggestedPrompt])
 
   useEffect(() => {
     if (open) tail.current?.scrollIntoView({ block: 'nearest' })
@@ -221,17 +228,9 @@ export function ReportChat({
                 placeholder="Продажи по городам"
               />
             </label>
-            {isAdmin ? (
-              <Button variant="primary" onClick={onSave} disabled={saving || !title.trim()}>
-                {saving ? 'Сохранение…' : 'Сохранить отчёт'}
-              </Button>
-            ) : (
-              // право сохранять не двигается: говорим об этом до нажатия, а не
-              // ошибкой после
-              <span className="pb-1.5 text-xs text-fg-muted">
-                Раскладка осталась в конструкторе — сохранить отчёт может администратор.
-              </span>
-            )}
+            <Button variant="primary" onClick={onSave} disabled={saving || !title.trim()}>
+              {saving ? 'Сохранение…' : 'Сохранить отчёт'}
+            </Button>
             <Button onClick={openDialog}>
               {parserMode ? 'Уточнить описание' : 'Доработать в диалоге'}
             </Button>

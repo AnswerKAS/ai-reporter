@@ -1,6 +1,7 @@
 import { NavLink, useNavigate } from 'react-router-dom'
 import type { ReportMeta } from '../../types/report'
 import { cn } from '../../lib/cn'
+import { useAuth } from '../../lib/auth'
 import { RowMenu } from './RowMenu'
 
 /** Точка статуса: готовый отчёт молчит, сборка и ошибка — видны прямо в меню. */
@@ -41,15 +42,17 @@ export function ReportRow({
   onToggleFavorite: () => void
 }) {
   const navigate = useNavigate()
+  const { user } = useAuth()
+  const canEdit = isAdmin || Boolean(user && report.createdBy === user.id)
   const actions = [
-    {
+    ...(canEdit ? [{
       label: 'Открыть в конструкторе',
       onSelect: () => {
         onNavigate?.()
-        navigate(`/builder/${report.slug}`)
+        navigate(`/workspace/${report.slug}`)
       },
-    },
-    { label: 'Переименовать', onSelect: onRename },
+    }] : []),
+    ...(canEdit ? [{ label: 'Переименовать', onSelect: onRename }] : []),
     { label: favorite ? 'Открепить' : 'Закрепить', onSelect: onToggleFavorite },
     ...(isAdmin ? [{ label: 'Удалить', onSelect: onDelete, danger: true }] : []),
   ]
@@ -89,16 +92,16 @@ export function ReportRow({
 
       <span className="flex shrink-0 items-center">
         <span className="hidden items-center opacity-0 transition-opacity group-hover/row:opacity-100 focus-within:opacity-100 md:flex">
-          <NavLink
-            to={`/builder/${report.slug}`}
+          {canEdit && <NavLink
+            to={`/workspace/${report.slug}`}
             onClick={onNavigate}
             aria-label={`Открыть «${report.title}» в конструкторе`}
             title="Открыть в конструкторе"
             className="rounded-control px-1.5 py-1 text-xs text-fg-muted hover:bg-bg hover:text-fg"
           >
             <span aria-hidden="true">⚙</span>
-          </NavLink>
-          <button
+          </NavLink>}
+          {canEdit && <button
             type="button"
             aria-label={`Переименовать «${report.title}»`}
             title="Переименовать"
@@ -106,7 +109,7 @@ export function ReportRow({
             className="cursor-pointer rounded-control px-1.5 py-1 text-xs text-fg-muted hover:bg-bg hover:text-fg"
           >
             <span aria-hidden="true">✎</span>
-          </button>
+          </button>}
           {isAdmin && (
             <button
               type="button"

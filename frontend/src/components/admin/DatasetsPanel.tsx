@@ -115,10 +115,10 @@ export function DatasetsPanel({ onCount }: { onCount?: (count: number) => void }
                 </span>
               </button>
               <Link
-                to="/datasets"
+                to={`/workspace?dataset=${encodeURIComponent(d.slug)}`}
                 className="mr-3 rounded-control px-2.5 py-1 text-xs text-fg-muted hover:bg-surface-sunken hover:text-fg"
               >
-                Открыть в каталоге
+                Спросить о данных
               </Link>
             </PanelRow>
             {d.status === 'error' && d.error && <p className="mt-1 text-xs text-bad">{d.error}</p>}

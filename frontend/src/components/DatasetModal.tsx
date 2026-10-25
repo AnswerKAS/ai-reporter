@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import type { Dataset, DatasetDetail, DatasetQuestionTurn, DbConnection } from '../types/dataset'
+import type { Dataset, DatasetDetail, DbConnection } from '../types/dataset'
 import type { Dimension, Metric } from '../types/semantic'
 import {
   ApiError,
@@ -10,7 +10,6 @@ import {
   patchDataset,
   refreshDataset,
   uploadDatasetCsv,
-  askDataset,
   fetchDbConnections,
   putDatasetFields,
 } from '../lib/api'
@@ -33,7 +32,7 @@ import {
   Tr,
 } from './ui'
 
-type Tab = 'preview' | 'questions' | 'fields' | 'metrics' | 'dimensions' | 'draft' | 'source' | 'connection'
+type Tab = 'preview' | 'fields' | 'metrics' | 'dimensions' | 'draft' | 'source' | 'connection'
 
 /** Показатель считается «по полю», если его выражение упоминает колонку по
     границе слова: `sum(revenue)` — по `revenue`, но `sum(revenue_plan)` — нет.
@@ -81,10 +80,6 @@ export function DatasetModal({
   const [dimensions, setDimensions] = useState<Dimension[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [question, setQuestion] = useState('')
-  const [turns, setTurns] = useState<DatasetQuestionTurn[]>([])
-  const [asking, setAsking] = useState(false)
-  const [questionError, setQuestionError] = useState<string | null>(null)
   const [connections, setConnections] = useState<DbConnection[]>([])
   const [nextConnection, setNextConnection] = useState('')
   useEffect(() => {
@@ -143,7 +138,6 @@ export function DatasetModal({
 
   const tabs: { value: Tab; label: string; count?: number }[] = [
     { value: 'preview', label: 'Превью' },
-    { value: 'questions', label: 'Вопросы по данным' },
     { value: 'fields', label: 'Поля датасета', count: fields.length },
     { value: 'metrics', label: 'Показатели', count: metrics.length },
     { value: 'dimensions', label: 'Разрезы', count: dimensions.length },
@@ -192,7 +186,7 @@ export function DatasetModal({
             <Button variant="danger" disabled={busy} onClick={onDelete}>
               Удалить
             </Button>
-            <Button variant="primary" onClick={() => navigate(`/builder?dataset=${encodeURIComponent(current.slug)}`)}>
+            <Button variant="primary" onClick={() => navigate(`/workspace?mode=report&dataset=${encodeURIComponent(current.slug)}`)}>
               Собрать отчёт
             </Button>
             <Button variant="ghost" className="ml-auto" onClick={onClose}>
@@ -201,7 +195,7 @@ export function DatasetModal({
           </>
         ) : (
           <>
-            <Button variant="primary" onClick={() => navigate(`/builder?dataset=${encodeURIComponent(current.slug)}`)}>
+            <Button variant="primary" onClick={() => navigate(`/workspace?mode=report&dataset=${encodeURIComponent(current.slug)}`)}>
               Собрать отчёт
             </Button>
             <Button variant="ghost" className="ml-auto" onClick={onClose}>
@@ -229,72 +223,6 @@ export function DatasetModal({
         ) : (
           <p className="text-sm text-fg-muted">Превью недоступно.</p>
         ))}
-
-      {tab === 'questions' && (
-        <div className="space-y-4">
-          <p className="text-sm text-fg-muted">Спросите о значениях этого датасета. Следующий вопрос может уточнять предыдущий.</p>
-          {turns.map((turn, index) => (
-            <div key={index} className="rounded-card border border-line p-3">
-              <p className="font-medium">{turn.question}</p>
-              <p className="mt-2 text-sm">{turn.answer}</p>
-              {turn.columns.length > 0 && (
-                <div className="mt-2 overflow-x-auto">
-                  <Table><thead><tr>{turn.columns.map((column) => <Th key={column}>{column}</Th>)}</tr></thead>
-                    <tbody>{turn.rows.map((row, rowIndex) => <Tr key={rowIndex}>{row.map((cell, cellIndex) => <Td key={cellIndex}>{cell}</Td>)}</Tr>)}</tbody>
-                  </Table>
-                </div>
-              )}
-              {turn.explanation && (
-                <section className="mt-3 space-y-1 rounded-control bg-surface-sunken p-3 text-sm" aria-label="Как посчитано">
-                  <h4 className="font-medium">Как посчитано</h4>
-                  <p><span className="text-fg-muted">Источник:</span> {turn.explanation.source}</p>
-                  <p><span className="text-fg-muted">Расчёт:</span> {turn.explanation.calculations.join('; ')}</p>
-                  {turn.explanation.groupBy.length > 0 && (
-                    <p><span className="text-fg-muted">Группировка:</span> {turn.explanation.groupBy.join(', ')}</p>
-                  )}
-                  {turn.explanation.filters.length > 0 && (
-                    <p><span className="text-fg-muted">Условия:</span> {turn.explanation.filters.join('; ')}</p>
-                  )}
-                  {turn.explanation.orderBy && (
-                    <p><span className="text-fg-muted">Сортировка:</span> {turn.explanation.orderBy}</p>
-                  )}
-                  <p>{turn.explanation.scope}</p>
-                  <p className="text-fg-muted">
-                    Показано строк результата: {turn.explanation.shownRows}
-                    {turn.explanation.totalRows !== null && ` из ${turn.explanation.totalRows}`}.
-                    {' '}Предел вывода: {turn.explanation.limit}.
-                    {turn.explanation.hasMore && ' Есть ещё строки.'}
-                  </p>
-                </section>
-              )}
-              {isAdmin && turn.sql && (
-                <details className="mt-3 rounded-control border border-line p-3 text-sm">
-                  <summary className="cursor-pointer font-medium">Показать SQL-запрос</summary>
-                  <pre className="mt-2 overflow-x-auto text-xs text-fg-muted">
-                    {turn.sql}{turn.parameters ? `\n${JSON.stringify(turn.parameters)}` : ''}
-                  </pre>
-                </details>
-              )}
-            </div>
-          ))}
-          {questionError && <Alert>{questionError}</Alert>}
-          <form onSubmit={(event) => {
-            event.preventDefault()
-            const text = question.trim()
-            if (!text || asking) return
-            setAsking(true)
-            setQuestionError(null)
-            void askDataset(current.slug, text, turns).then((reply) => {
-              setTurns((previous) => [...previous, { ...reply, question: text }])
-              setQuestion('')
-            }).catch((err) => setQuestionError(err instanceof ApiError ? err.message : 'не удалось получить ответ'))
-              .finally(() => setAsking(false))
-          }} className="flex gap-2">
-            <Textarea aria-label="Вопрос по датасету" value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="Например: какая выручка по городам?" />
-            <Button type="submit" disabled={asking || !question.trim()}>{asking ? 'Считаю…' : 'Спросить'}</Button>
-          </form>
-        </div>
-      )}
 
       {tab === 'fields' &&
         (fields.length === 0 ? (

@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from starlette.concurrency import run_in_threadpool
 
 from ..core import database as db
-from ..core.security import get_current_user, require_admin
+from ..core.security import get_current_user
 from ..core import report_access
 from ..schemas.report import FiltersPatch, ReportMeta, ReportUpdate
 from ..datasets.base import DatasetError
@@ -189,8 +189,8 @@ def preview_definition(definition: ReportDefinition, user: dict = Depends(get_cu
 
 
 @router.post('/reports/builder', status_code=201)
-def create_builder_report(payload: dict, user: dict = Depends(require_admin)) -> dict:
-    """Создаёт отчёт: логика в декларации, сборка не нужна."""
+def create_builder_report(payload: dict, user: dict = Depends(get_current_user)) -> dict:
+    """Создаёт проверенный отчёт от имени текущего пользователя."""
     title = str(payload.get('title') or '').strip()
     if not title:
         raise HTTPException(422, 'нужно название отчёта')

@@ -12,6 +12,7 @@ import { useAuth } from '../lib/auth'
 import { AccessPanel } from '../components/admin/AccessPanel'
 import { AccessTagsPanel } from '../components/admin/AccessTagsPanel'
 import { DatasetsPanel } from '../components/admin/DatasetsPanel'
+import { ModelPage } from './ModelPage'
 import { DbConnectionsPanel } from '../components/admin/DbConnectionsPanel'
 import { GroupsPanel } from '../components/admin/GroupsPanel'
 import { MailServersPanel } from '../components/admin/MailServersPanel'
@@ -26,9 +27,9 @@ import {
   SkeletonRows,
 } from '../components/ui'
 
-type Tab = 'users' | 'groups' | 'access' | 'access-tags' | 'datasets' | 'connections' | 'mail'
+type Tab = 'users' | 'groups' | 'access' | 'access-tags' | 'datasets' | 'model' | 'connections' | 'mail'
 
-const TABS: Tab[] = ['users', 'groups', 'access', 'access-tags', 'datasets', 'connections', 'mail']
+const TABS: Tab[] = ['users', 'groups', 'access', 'access-tags', 'datasets', 'model', 'connections', 'mail']
 
 /**
  * Администрирование одной страницей с вкладками: все четыре блока сразу
@@ -147,6 +148,7 @@ export function AdminPage() {
             { value: 'access', label: 'Доступ к отчётам', count: accessReady ? grants : undefined },
             { value: 'access-tags', label: 'Метки доступа' },
             { value: 'datasets', label: 'Датасеты', count: datasetCount },
+            { value: 'model', label: 'Словарь и связи' },
             { value: 'connections', label: 'Подключения' },
             { value: 'mail', label: 'Почтовые серверы', count: mailCount },
           ]}
@@ -198,6 +200,8 @@ export function AdminPage() {
         )
       ) : tab === 'datasets' ? (
         <DatasetsPanel onCount={setDatasetCount} />
+      ) : tab === 'model' ? (
+        <ModelPage />
       ) : (
         <MailServersPanel onCount={setMailCount} />
       )}

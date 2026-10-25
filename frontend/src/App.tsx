@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { BrowserRouter, Navigate, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
+import { BrowserRouter, Navigate, NavLink, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
 import type { ReactNode } from 'react'
 import { cn } from './lib/cn'
 import { ReportListPage } from './pages/ReportListPage'
@@ -7,9 +7,7 @@ import { ReportViewPage } from './pages/ReportViewPage'
 import { LoginPage } from './pages/LoginPage'
 import { AccountPage } from './pages/AccountPage'
 import { AdminPage } from './pages/AdminPage'
-import { DatasetsPage } from './pages/DatasetsPage'
-import { BuilderPage } from './pages/BuilderPage'
-import { ModelPage } from './pages/ModelPage'
+import { WorkspacePage } from './pages/WorkspacePage'
 import { AuthProvider, useAuth } from './lib/auth'
 import { ReportsProvider } from './lib/reports'
 import { Sidebar, SidebarPanel } from './components/Sidebar'
@@ -32,22 +30,9 @@ function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
       <NavLink to="/reports" className={navLinkClass} onClick={onNavigate}>
         Отчёты
       </NavLink>
-      <NavLink to="/builder" className={navLinkClass} onClick={onNavigate}>
-        Конструктор
+      <NavLink to="/workspace" className={navLinkClass} onClick={onNavigate}>
+        Рабочее окно
       </NavLink>
-      <NavLink to="/datasets" className={navLinkClass} onClick={onNavigate}>
-        Датасеты
-      </NavLink>
-      {isAdmin && (
-        <NavLink to="/model" className={navLinkClass} onClick={onNavigate}>
-          Модель данных
-        </NavLink>
-      )}
-      {user && (
-        <NavLink to="/account" className={navLinkClass} onClick={onNavigate}>
-          Кабинет
-        </NavLink>
-      )}
       {isAdmin && (
         <NavLink to="/admin" className={navLinkClass} onClick={onNavigate}>
           Админ
@@ -57,14 +42,17 @@ function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
   )
 }
 
+/** Верхняя панель трёх основных разделов и действий учётной записи. */
 function Navbar({
   menuOpen,
   onToggleMenu,
   showMenu,
+  showCatalog,
 }: {
   menuOpen: boolean
   onToggleMenu: () => void
   showMenu: boolean
+  showCatalog: boolean
 }) {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
@@ -100,7 +88,8 @@ function Navbar({
 
         {user ? (
           <span className="flex items-center gap-2.5">
-            <span className="hidden text-sm font-semibold text-fg-muted sm:inline">{user.username}</span>
+            <NavLink to="/account" className="hidden text-sm font-semibold text-fg-muted hover:text-accent sm:inline"
+              title="Личный кабинет">{user.username}</NavLink>
             <Button
               variant="ghost"
               onClick={async () => {
@@ -123,7 +112,7 @@ function Navbar({
           <nav aria-label="Основная навигация" className="flex flex-col gap-1">
             <NavLinks onNavigate={onToggleMenu} />
           </nav>
-          <Sidebar className="mt-4 border-t border-line pt-3" onNavigate={onToggleMenu} />
+          {showCatalog && <Sidebar className="mt-4 border-t border-line pt-3" onNavigate={onToggleMenu} />}
         </div>
       )}
     </header>
@@ -155,6 +144,15 @@ function LoginRoute() {
   return <LoginPage />
 }
 
+/** Старые ссылки на конструктор сохраняют slug и выбранный датасет. */
+function LegacyBuilderRedirect() {
+  const { slug } = useParams<{ slug: string }>()
+  const { search } = useLocation()
+  const query = new URLSearchParams(search)
+  query.set('mode', 'report')
+  return <Navigate to={`/workspace${slug ? `/${encodeURIComponent(slug)}` : ''}?${query}`} replace />
+}
+
 /** Страница входа живёт в той же оболочке, поэтому меню прячется по маршруту,
     а не только по наличию пользователя: между входом и переходом на `/reports`
     пользователь уже есть, и каталог отчётов успевал мелькнуть за формой. */
@@ -163,12 +161,14 @@ function Layout() {
   const { pathname } = useLocation()
   const [menuOpen, setMenuOpen] = useState(false)
   const showMenu = Boolean(user) && pathname !== '/login'
+  const showCatalog = showMenu && (pathname === '/' || pathname.startsWith('/reports'))
 
   return (
     <div className="flex min-h-screen flex-col bg-bg text-fg">
-      <Navbar menuOpen={menuOpen} onToggleMenu={() => setMenuOpen((v) => !v)} showMenu={showMenu} />
+      <Navbar menuOpen={menuOpen} onToggleMenu={() => setMenuOpen((v) => !v)}
+        showMenu={showMenu} showCatalog={showCatalog} />
       <div className="flex flex-1 items-stretch">
-        {showMenu && <SidebarPanel />}
+        {showCatalog && <SidebarPanel />}
         <div className="min-w-0 flex-1">
           <Routes>
             <Route path="/login" element={<LoginRoute />} />
@@ -189,18 +189,18 @@ function Layout() {
               }
             />
             <Route
-              path="/builder"
+              path="/workspace"
               element={
                 <RequireAuth>
-                  <BuilderPage />
+                  <WorkspacePage />
                 </RequireAuth>
               }
             />
             <Route
-              path="/builder/:slug"
+              path="/workspace/:slug"
               element={
                 <RequireAuth>
-                  <BuilderPage />
+                  <WorkspacePage />
                 </RequireAuth>
               }
             />
@@ -213,21 +213,23 @@ function Layout() {
               }
             />
             <Route
-              path="/datasets"
+              path="/builder"
               element={
                 <RequireAuth>
-                  <DatasetsPage />
+                  <LegacyBuilderRedirect />
                 </RequireAuth>
               }
             />
             <Route
-              path="/model"
+              path="/builder/:slug"
               element={
                 <RequireAuth>
-                  <ModelPage />
+                  <LegacyBuilderRedirect />
                 </RequireAuth>
               }
             />
+            <Route path="/datasets" element={<RequireAuth><Navigate to="/workspace" replace /></RequireAuth>} />
+            <Route path="/model" element={<RequireAuth><Navigate to="/admin?tab=model" replace /></RequireAuth>} />
             <Route
               path="/account"
               element={

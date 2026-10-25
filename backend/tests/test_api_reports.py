@@ -4,6 +4,7 @@ import uuid
 
 import pytest
 
+from app.core import database as db
 from tests.conftest import auth
 
 TABLE_SECTION = {'type': 'table', 'metrics': ['revenue'], 'by': ['city']}
@@ -175,11 +176,29 @@ def test_создание_отчёта_с_занятым_slug_409(client, report
     assert response.status_code == 409
 
 
-def test_создание_отчёта_обычному_пользователю_403(client, model, user_headers):
+def test_employee_creates_owned_report(client, model, user_headers, plain_user):
+    """An employee can save a report and becomes its owner."""
     response = client.post('/api/reports/builder', headers=user_headers, json={
         'title': 'Новый', 'definition': definition()})
 
-    assert response.status_code == 403
+    assert response.status_code == 201, response.text
+    slug = response.json()['report']['slug']
+    assert db.get_report(slug)['created_by'] == plain_user['id']
+    assert client.get(f'/api/reports/{slug}', headers=user_headers).status_code == 200
+
+
+def test_employee_edits_own_definition(client, model, user_headers):
+    """The owner can change a definition while report readers cannot."""
+    created = client.post('/api/reports/builder', headers=user_headers, json={
+        'title': 'Личный отчёт', 'definition': definition()})
+    slug = created.json()['report']['slug']
+
+    changed = client.put(f'/api/reports/{slug}/definition', headers=user_headers,
+                         json=definition(sections=[dict(KPI_SECTION)]))
+
+    assert changed.status_code == 200, changed.text
+    assert client.get(f'/api/reports/{slug}/definition',
+                      headers=user_headers).json()['definition']['sections'][0]['type'] == 'kpi'
 
 
 # --- GET/PUT /api/reports/{slug}/definition -----------------------------------
@@ -222,9 +241,8 @@ def test_запись_определения_несуществующему_404(
                       json=definition()).status_code == 404
 
 
-def test_запись_определения_обычному_пользователю_403(client, report, user_headers, plain_user):
-    from app.core import database as db
-
+def test_assigned_reader_cannot_edit_report_definition(client, report, user_headers, plain_user):
+    """Report access does not grant permission to change its definition."""
     db.grant_access('sales-report', user_id=plain_user['id'])
 
     assert client.put('/api/reports/sales-report/definition', headers=user_headers,

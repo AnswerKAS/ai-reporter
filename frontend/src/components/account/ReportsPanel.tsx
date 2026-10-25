@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useReports, useReportSearch } from '../../lib/reports'
 import { useDebounced } from '../../lib/useDebounced'
+import { useAuth } from '../../lib/auth'
 import { Alert, Badge, Button, EmptyState, Input, Panel, PanelRow, Segmented } from '../ui'
 
 type Order = 'updated' | 'title'
@@ -28,6 +29,7 @@ export function ReportsPanel({
   isAdmin: boolean
   onSchedule: (slug: string) => void
 }) {
+  const { user } = useAuth()
   const { facets } = useReports()
   const [query, setQuery] = useState('')
   const [order, setOrder] = useState<Order>('updated')
@@ -101,9 +103,9 @@ export function ReportsPanel({
                       <Button size="sm" variant="ghost" onClick={() => onSchedule(r.slug)}>
                         Рассылка
                       </Button>
-                      {isAdmin && (
+                      {(isAdmin || (user && r.createdBy === user.id)) && (
                         <Link
-                          to={`/builder/${r.slug}`}
+                          to={`/workspace/${r.slug}`}
                           className="inline-flex items-center rounded-control border border-transparent px-2.5 py-1 text-xs text-fg-muted transition-colors hover:bg-surface-sunken hover:text-fg"
                         >
                           Править

@@ -88,7 +88,7 @@ export function ReportTree({ className, onNavigate }: { className?: string; onNa
     writeCatalog(next)
   }
 
-  const activeSlug = decodeURIComponent(location.pathname).match(/^\/(?:reports|builder)\/(.+)$/)?.[1]
+  const activeSlug = decodeURIComponent(location.pathname).match(/^\/(?:reports|workspace)\/(.+)$/)?.[1]
 
   const askDelete = (report: ReportMeta) =>
     confirm({
@@ -111,9 +111,8 @@ export function ReportTree({ className, onNavigate }: { className?: string; onNa
         >
           Отчёты {total > 0 && <span className="font-mono">({total})</span>}
         </NavLink>
-        {isAdmin && (
           <NavLink
-            to="/builder"
+            to="/workspace?mode=report"
             onClick={onNavigate}
             aria-label="Новый отчёт"
             title="Новый отчёт"
@@ -121,7 +120,6 @@ export function ReportTree({ className, onNavigate }: { className?: string; onNa
           >
             <span aria-hidden="true">＋</span>
           </NavLink>
-        )}
       </div>
 
       <CatalogControls
@@ -209,11 +207,9 @@ export function ReportTree({ className, onNavigate }: { className?: string; onNa
             ) : (
               <>
                 Отчётов пока нет.{' '}
-                {isAdmin && (
-                  <NavLink to="/builder" onClick={onNavigate} className="text-accent hover:underline">
-                    Собрать первый
-                  </NavLink>
-                )}
+                <NavLink to="/workspace?mode=report" onClick={onNavigate} className="text-accent hover:underline">
+                  Собрать первый
+                </NavLink>
               </>
             )
           }

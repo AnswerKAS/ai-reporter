@@ -96,14 +96,14 @@ export function DatasetSemanticDraft({ slug }: { slug: string }) {
               ))}
             </ul>
           )}{' '}
-          <Link to="/model" className="underline">Открыть словарь</Link>
+          <Link to="/admin?tab=model" className="underline">Открыть словарь</Link>
         </Alert>
       )}
 
       {!pending ? (
         <p className="text-sm text-fg-muted">
           Словарь по этому датасету уже заведён — правьте его в{' '}
-          <Link to="/model" className="underline">модели данных</Link>.
+          <Link to="/admin?tab=model" className="underline">словаре</Link>.
         </p>
       ) : (
         <>

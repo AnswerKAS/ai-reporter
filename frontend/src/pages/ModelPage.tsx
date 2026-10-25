@@ -28,15 +28,14 @@ type Tab = 'dictionary' | 'links'
 const TABS: Tab[] = ['dictionary', 'links']
 
 /**
- * Модель данных: словарь и связи двумя вкладками.
+ * Унаследованный словарь и связи внутри административного раздела.
  *
  * Показатели и разрезы остаются рядом — так устроена сама модель: и то и
  * другое живёт внутри датасета и заводится по одним и тем же колонкам.
  * Отдельно вынесены только связи: они про пары датасетов, а не про один.
  *
- * Прежняя простыня не давала ни поиска, ни правки (`PATCH` был, интерфейса
- * не было), ни понимания, что сломает удаление. Вкладка живёт в адресе
- * (`/model?tab=links`), как в админке.
+ * Внутренняя вкладка живёт в адресе как `modelTab`, не перезаписывая
+ * `tab=model` внешней админки.
  *
  * Страница целиком закрыта: выражение метрики — это SQL, то есть граница
  * доверия системы. Читать словарь без прав можно в конструкторе.
@@ -44,8 +43,8 @@ const TABS: Tab[] = ['dictionary', 'links']
 export function ModelPage() {
   const { isAdmin } = useAuth()
   const [params, setParams] = useSearchParams()
-  const tab = (TABS as string[]).includes(params.get('tab') ?? '')
-    ? (params.get('tab') as Tab)
+  const tab = (TABS as string[]).includes(params.get('modelTab') ?? '')
+    ? (params.get('modelTab') as Tab)
     : 'dictionary'
 
   const [datasets, setDatasets] = useState<Dataset[]>([])
@@ -114,10 +113,10 @@ export function ModelPage() {
   const broken = metrics.filter((m) => m.status === 'error').length
 
   return (
-    <Page>
+    <section>
       <PageHeader
-        title="Модель данных"
-        subtitle="Показатели и разрезы живут внутри датасета — в конструкторе датасет не выбирают, он приезжает вместе с показателем. Чтобы соединить показатели из разных датасетов в одной секции, между этими датасетами нужна связь."
+        title="Словарь и связи"
+        subtitle="Управление старыми словарными показателями и связями подготовленных датасетов."
         actions={
           <Button onClick={() => void load()} disabled={loading || busy}>
             Обновить
@@ -128,7 +127,12 @@ export function ModelPage() {
           className="mt-4"
           ariaLabel="Разделы модели данных"
           value={tab}
-          onChange={(next) => setParams(next === 'dictionary' ? {} : { tab: next }, { replace: true })}
+          onChange={(next) => setParams((previous) => {
+            const updated = new URLSearchParams(previous)
+            if (next === 'dictionary') updated.delete('modelTab')
+            else updated.set('modelTab', next)
+            return updated
+          }, { replace: true })}
           options={[
             {
               value: 'dictionary',
@@ -155,7 +159,7 @@ export function ModelPage() {
       {!loading && datasets.length === 0 && (
         <Alert className="mb-4">
           Датасетов ещё нет — словарь заводить не на чем. Заведите источник на странице{' '}
-          <Link to="/datasets" className="text-accent hover:underline">
+          <Link to="/admin?tab=datasets" className="text-accent hover:underline">
             «Датасеты»
           </Link>
           .
@@ -176,6 +180,6 @@ export function ModelPage() {
       ) : (
         <LinksPanel links={links} datasets={datasets} busy={busy} run={run} />
       )}
-    </Page>
+    </section>
   )
 }

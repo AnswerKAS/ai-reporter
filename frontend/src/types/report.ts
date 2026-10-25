@@ -107,6 +107,8 @@ export interface Report {
   title: string
   description?: string
   status?: string
+  /** Владелец определения отчёта; читатель может менять только свои отчёты. */
+  createdBy?: string | null
   createdAt: string
   updatedAt: string
   filters?: ReportFilter[]

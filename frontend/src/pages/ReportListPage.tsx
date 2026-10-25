@@ -83,7 +83,7 @@ export function ReportGrid({ reports }: { reports: ReportMeta[] }) {
  * отчётов это мегабайты ради первого экрана.
  */
 export function ReportListPage() {
-  const { user, isAdmin } = useAuth()
+  const { user } = useAuth()
   const { facets } = useReports()
   const [query, setQuery] = useState('')
   const [sort, setSort] = useState<'updated' | 'title'>('updated')
@@ -94,14 +94,14 @@ export function ReportListPage() {
     limit: PAGE,
   })
 
-  const newReport = isAdmin ? (
+  const newReport = (
     <Link
-      to="/builder"
+      to="/workspace?mode=report"
       className="inline-flex items-center rounded-control border border-accent bg-accent px-3.5 py-1.5 text-sm font-semibold text-accent-fg transition-colors hover:bg-accent-hover"
     >
       Новый отчёт
     </Link>
-  ) : undefined
+  )
 
   const header = (
     <PageHeader

@@ -37,7 +37,7 @@ function ReportEdit({ report }: { report: Report }) {
   // живут в конструкторе, а не в отдельной форме
   return (
     <Link
-      to={`/builder/${report.slug}`}
+      to={`/workspace/${report.slug}`}
       className="inline-flex items-center rounded-control border border-transparent px-3.5 py-1.5 text-sm text-fg-muted transition-colors hover:bg-surface-sunken hover:text-fg"
     >
       Редактировать
@@ -62,7 +62,7 @@ function StatusScreen({ title, description, busy }: { title: string; description
 export function ReportViewPage() {
   const { slug } = useParams<{ slug: string }>()
   const navigate = useNavigate()
-  const { isAdmin } = useAuth()
+  const { isAdmin, user } = useAuth()
   const { reload: reloadReports, markVisited } = useReports()
   const [report, setReport] = useState<Report | null>(null)
   const [status, setStatus] = useState<string>('loading')
@@ -176,7 +176,7 @@ export function ReportViewPage() {
             <Button variant="ghost" onClick={() => setMailOpen(true)}>
               Отправка по почте
             </Button>
-            <ReportEdit report={report} />
+            {(isAdmin || (user && report.createdBy === user.id)) && <ReportEdit report={report} />}
             {isAdmin && (
               <Button variant="danger" onClick={() => setConfirming(true)}>
                 Удалить отчёт

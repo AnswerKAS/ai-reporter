@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { DragEvent } from 'react'
+import type { DragEvent, ReactNode } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import type { Report } from '../types/report'
 import type { Dataset } from '../types/dataset'
@@ -34,7 +34,6 @@ import type { LinkIndex } from '../lib/dataset-links'
 import { buildLinkIndex, reachableFrom } from '../lib/dataset-links'
 import { DatasetPicker } from '../components/builder/DatasetPicker'
 import { ReportChat } from '../components/builder/ReportChat'
-import { useAuth } from '../lib/auth'
 import { useReports } from '../lib/reports'
 import { VocabularyDialog } from '../components/builder/VocabularyDialog'
 
@@ -263,22 +262,33 @@ function StepLink({
 }
 
 /**
- * `/builder` и `/builder/<slug>` — один и тот же элемент маршрута, и без
+ * `/workspace` и `/workspace/<slug>` — один и тот же элемент маршрута, и без
  * ключа React переиспользует состояние: после правки отчёта «Новый отчёт»
  * открывался с его секциями и выбранными данными, а переход от одного отчёта
  * к другому подсовывал раскладку предыдущего.
  */
-export function BuilderPage() {
+export function BuilderPage({ embedded = false, suggestedPrompt = null }: {
+  embedded?: boolean
+  suggestedPrompt?: { id: number; text: string } | null
+}) {
   const { slug } = useParams<{ slug: string }>()
-  return <Builder key={slug ?? 'new'} />
+  return <Builder key={slug ?? 'new'} embedded={embedded} suggestedPrompt={suggestedPrompt} />
 }
 
-function Builder() {
+/** Убирает внешние поля страницы, когда конструктор открыт внутри рабочего окна. */
+function BuilderFrame({ embedded, children }: { embedded: boolean; children: ReactNode }) {
+  return embedded ? <section>{children}</section> : <Page>{children}</Page>
+}
+
+/** Хранит черновик определения и выполняет предпросмотр отчёта. */
+function Builder({ embedded, suggestedPrompt }: {
+  embedded: boolean
+  suggestedPrompt: { id: number; text: string } | null
+}) {
   const { slug } = useParams<{ slug: string }>()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const requestedDataset = searchParams.get('dataset')?.trim()
-  const { isAdmin } = useAuth()
   const { reload: reloadReports } = useReports()
   const { confirm, dialog } = useConfirm()
   const editing = Boolean(slug)
@@ -934,14 +944,14 @@ function Builder() {
 
   if (loading || definitionLoading)
     return (
-      <Page>
+      <BuilderFrame embedded={embedded}>
         <PageHeader title={editing ? 'Правка отчёта' : 'Конструктор отчёта'} />
         <SkeletonRows count={5} />
-      </Page>
+      </BuilderFrame>
     )
 
   return (
-    <Page>
+    <BuilderFrame embedded={embedded}>
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">{editing ? 'Правка отчёта' : 'Конструктор отчёта'}</h1>
@@ -976,7 +986,7 @@ function Builder() {
         computed={computed}
         datasets={pickedDatasets}
         definition={definition}
-        isAdmin={isAdmin}
+        suggestedPrompt={suggestedPrompt}
         saving={busy}
         title={title}
         onTitle={setTitle}
@@ -1507,15 +1517,10 @@ function Builder() {
             />
           )}
 
-          {!isAdmin && (
-            <p className="max-w-[60ch] text-sm text-fg-muted">
-              Сохранять отчёты может администратор — предпросмотр доступен всем.
-            </p>
-          )}
         </>
       )}
       {dialog}
-    </Page>
+    </BuilderFrame>
   )
 }
 
