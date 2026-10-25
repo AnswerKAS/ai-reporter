@@ -26,6 +26,7 @@ def connections() -> dict[str, dict]:
         raise ValueError('DB_CONNECTIONS: некорректный JSON') from exc
     if not isinstance(values, dict):
         raise ValueError('DB_CONNECTIONS: ожидается объект с именованными подключениями')
+    aliases: set[str] = set()
     for key, value in values.items():
         if not isinstance(key, str) or not key or not isinstance(value, dict):
             raise ValueError('DB_CONNECTIONS: ключ и запись подключения должны быть объектами')
@@ -42,6 +43,15 @@ def connections() -> dict[str, dict]:
             raise ValueError(f'DB_CONNECTIONS: schema подключения {key} должна быть строкой')
         if 'sslmode' in value and not isinstance(value['sslmode'], str):
             raise ValueError(f'DB_CONNECTIONS: sslmode подключения {key} должен быть строкой')
+        if key != 'metabase':
+            alias = value.get('title', key)
+            if not isinstance(alias, str) or not alias.strip():
+                raise ValueError(f'DB_CONNECTIONS: у подключения {key} нет имени')
+            alias = alias.strip()
+            if alias.casefold() in aliases:
+                raise ValueError(f'DB_CONNECTIONS: повторяется имя подключения {alias}')
+            aliases.add(alias.casefold())
+            value['title'] = alias
     if 'metabase' not in values or values['metabase']['source'] != 'postgres':
         raise ValueError('DB_CONNECTIONS: требуется подключение metabase типа postgres')
     return values

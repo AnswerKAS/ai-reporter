@@ -18,3 +18,17 @@ export function suggestSlug(title: string): string {
     .replace(/^_+|_+$/g, '')
     .slice(0, 40)
 }
+
+/** Выбирает свободный slug с числовым суффиксом, сохраняя предел длины. */
+export function suggestUniqueSlug(title: string, existingSlugs: string[], fallback = 'item'): string {
+  const base = suggestSlug(title) || fallback
+  const taken = new Set(existingSlugs)
+  if (!taken.has(base)) return base
+  let index = 2
+  let candidate: string
+  do {
+    const suffix = `_${index++}`
+    candidate = `${base.slice(0, 40 - suffix.length)}${suffix}`
+  } while (taken.has(candidate))
+  return candidate
+}

@@ -45,16 +45,17 @@ export function DatasetFieldSettingsEditor({ dataset, busy, onSave }: {
     }))
   }
 
-  /** Отправляет только явно настроенные поля; «Авто» остаётся эвристикой. */
+  /** Сохраняет ручные названия даже при автоматическом выборе роли. */
   async function save(): Promise<void> {
     const settings: Record<string, DatasetFieldSetting> = {}
     for (const field of dataset.fields) {
       const item = draft[field.name]
-      if (item.role === 'auto') continue
+      if (item.role === 'auto' && item.title.trim() === (field.comment || field.name).trim()) continue
+      const role = item.role === 'auto' ? inferredRole(field) : item.role
       settings[field.name] = {
-        title: item.title.trim(), role: item.role,
-        agg: item.role === 'metric' ? item.agg : null,
-        format: item.role === 'metric' ? item.format : 'number',
+        title: item.title.trim(), role,
+        agg: role === 'metric' ? item.agg : null,
+        format: role === 'metric' ? item.format : 'number',
       }
     }
     await onSave(settings)
@@ -63,8 +64,8 @@ export function DatasetFieldSettingsEditor({ dataset, busy, onSave }: {
   return (
     <div className="space-y-4">
       <p className="text-sm text-fg-muted">
-        Названия и операции используются в новых рекомендациях и при сборке отчёта словами.
-        Настройки сохраняются при повторном чтении схемы. Ранее сохранённые отчёты не пересчитывают выбор полей.
+        Измените понятное название поля без правки имени колонки в источнике.
+        Названия используются в обзоре датасета и новых рекомендациях; они сохраняются при повторном чтении схемы.
       </p>
       <div className="space-y-3">
         {dataset.fields.map((field) => {
@@ -78,10 +79,10 @@ export function DatasetFieldSettingsEditor({ dataset, busy, onSave }: {
               </div>
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <Field label="Название">
-                  <Input value={item.title} disabled={busy || item.role === 'ignore'}
+                  <Input value={item.title} disabled={busy} maxLength={120}
+                    aria-label={`Название поля ${field.name}`}
                     onChange={(event) => updateField(field.name, {
                       title: event.target.value,
-                      role: item.role === 'auto' ? inferredRole(field) : item.role,
                     })} />
                 </Field>
                 <Field label="Роль">
@@ -128,7 +129,8 @@ export function DatasetFieldSettingsEditor({ dataset, busy, onSave }: {
           )
         })}
       </div>
-      <Button variant="primary" disabled={busy} onClick={() => void save()}>
+      <Button variant="primary" disabled={busy || dataset.fields.some((field) => !draft[field.name].title.trim())}
+        onClick={() => void save()}>
         {busy ? 'Сохраняю…' : 'Сохранить настройки полей'}
       </Button>
     </div>

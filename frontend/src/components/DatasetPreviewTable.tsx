@@ -22,7 +22,10 @@ const COLLATOR = new Intl.Collator('ru', { numeric: true, sensitivity: 'base' })
  * Всё считается над уже полученными строками: превью стоит источнику одного
  * запроса, и нажатие на заголовок не должно превращаться во второй.
  */
-export function DatasetPreviewTable({ preview }: { preview: DatasetPreview }) {
+export function DatasetPreviewTable({ preview, columnLabels = {} }: {
+  preview: DatasetPreview
+  columnLabels?: Record<string, string>
+}) {
   const { columns, rows } = preview
   const [filters, setFilters] = useState<Record<number, string>>({})
   const [sort, setSort] = useState<{ column: number; direction: Direction } | null>(null)
@@ -90,7 +93,11 @@ export function DatasetPreviewTable({ preview }: { preview: DatasetPreview }) {
                       sorted && 'text-accent',
                     )}
                   >
-                    {column}
+                    <span>{columnLabels[column] || column}
+                      {columnLabels[column] && columnLabels[column] !== column && (
+                        <span className="ml-1 text-xs font-normal text-fg-muted">· {column}</span>
+                      )}
+                    </span>
                     <span aria-hidden="true" className="text-xs">
                       {sorted === 'asc' ? '↑' : sorted === 'desc' ? '↓' : '↕'}
                     </span>

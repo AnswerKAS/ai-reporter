@@ -66,8 +66,10 @@ def main() -> int:
             })
     if DB.configured:
         values.setdefault('demo', {'source': 'clickhouse', 'dsn': DB.raw,
-                                   'secure': DB.secure})
-    for item in values.values():
+                                   'title': 'Демо ClickHouse', 'secure': DB.secure})
+    for key, item in values.items():
+        if key != 'metabase':
+            item.setdefault('title', key)
         if item['source'] == 'clickhouse' and 'secure' not in item:
             item['secure'] = item['dsn'].startswith('clickhouses://') or DB.secure
     existing = {(item['source'], item['dsn']): key for key, item in values.items()}

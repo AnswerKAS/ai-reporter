@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { Dataset, DatasetSource, DbConnection } from '../../types/dataset'
 import { ApiError, createDataset, deleteDataset, fetchDatasets, fetchDbConnections } from '../../lib/api'
+import { suggestUniqueSlug } from '../../lib/slug'
 import { DatasetModal } from '../DatasetModal'
 import {
   Alert,
@@ -25,14 +26,6 @@ const SOURCE_LABELS: Record<DatasetSource, string> = {
   csv: 'CSV-файл',
 }
 
-/** Имя объекта Oracle без кавычек сервер сворачивает в верхний регистр. */
-const TABLE_PLACEHOLDERS: Record<DatasetSource, string> = {
-  clickhouse: 'my_table',
-  postgres: 'my_table',
-  oracle: 'MY_TABLE или SCHEMA.MY_TABLE',
-  csv: '',
-}
-
 const STATUS_TONES: Record<Dataset['status'], BadgeTone> = {
   ok: 'good',
   error: 'bad',
@@ -51,6 +44,7 @@ export function DatasetsPanel({ onCount }: { onCount?: (count: number) => void }
   const [datasets, setDatasets] = useState<Dataset[] | null>(null)
   const [open, setOpen] = useState(false)
   const [shown, setShown] = useState<Dataset | null>(null)
+  const [shownTab, setShownTab] = useState<'preview' | 'fields'>('preview')
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const { confirm, dialog } = useConfirm()
@@ -102,7 +96,7 @@ export function DatasetsPanel({ onCount }: { onCount?: (count: number) => void }
               <button
                 type="button"
                 title={`Открыть датасет ${d.slug}`}
-                onClick={() => setShown(d)}
+                onClick={() => { setShownTab('preview'); setShown(d) }}
                 className="flex flex-1 cursor-pointer flex-wrap items-center gap-3 px-3 py-2.5 text-left"
               >
                 <strong>{d.title}</strong>
@@ -114,6 +108,9 @@ export function DatasetsPanel({ onCount }: { onCount?: (count: number) => void }
                   {` · полей: ${d.fields.length}`}
                 </span>
               </button>
+              <Button size="sm" className="ml-3" onClick={() => { setShownTab('fields'); setShown(d) }}>
+                Переименовать поля
+              </Button>
               <Link
                 to={`/workspace?dataset=${encodeURIComponent(d.slug)}`}
                 className="mr-3 rounded-control px-2.5 py-1 text-xs text-fg-muted hover:bg-surface-sunken hover:text-fg"
@@ -130,6 +127,7 @@ export function DatasetsPanel({ onCount }: { onCount?: (count: number) => void }
         <DatasetModal
           key={shown.slug}
           dataset={shown}
+          initialTab={shownTab}
           isAdmin
           onClose={() => setShown(null)}
           onChanged={() => void load()}
@@ -152,6 +150,7 @@ export function DatasetsPanel({ onCount }: { onCount?: (count: number) => void }
 
       {open && (
         <DatasetCreateModal
+          existingSlugs={(datasets ?? []).map((dataset) => dataset.slug)}
           onClose={() => setOpen(false)}
           onCreated={(dataset) => {
             setOpen(false)
@@ -166,38 +165,35 @@ export function DatasetsPanel({ onCount }: { onCount?: (count: number) => void }
 }
 
 function DatasetCreateModal({
+  existingSlugs,
   onClose,
   onCreated,
 }: {
+  existingSlugs: string[]
   onClose: () => void
   onCreated: (dataset: Dataset) => void
 }) {
-  const [source, setSource] = useState<DatasetSource>('clickhouse')
-  const [mode, setMode] = useState<'table' | 'query'>('table')
-  const [slug, setSlug] = useState('')
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [connectionKey, setConnectionKey] = useState('')
   const [connections, setConnections] = useState<DbConnection[]>([])
   useEffect(() => { void fetchDbConnections().then(setConnections).catch(() => setConnections([])) }, [])
-  const [tableName, setTableName] = useState('')
   const [query, setQuery] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const asQuery = source !== 'csv' && mode === 'query'
-  const incomplete =
-    !slug || !title || (source !== 'csv' && !connectionKey) ||
-    (asQuery ? !query.trim() : source !== 'csv' && !tableName.trim())
+  const connection = connections.find((item) => item.key === connectionKey)
+  const incomplete = !title.trim() || !connection || !query.trim()
 
   const submit = async () => {
+    if (!connection || incomplete) return
     setBusy(true)
     setError(null)
     try {
       const { dataset } = await createDataset({
-        slug, title, description: description || undefined, source, connectionKey,
-        tableName: asQuery ? '' : tableName,
-        query: asQuery ? query : '',
+        slug: suggestUniqueSlug(title, existingSlugs, 'dataset'), title: title.trim(),
+        description: description.trim() || undefined,
+        source: connection.source, connectionKey, query: query.trim(),
       })
       onCreated(dataset)
     } catch (err) {
@@ -225,24 +221,14 @@ function DatasetCreateModal({
       }
     >
       <div className="grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] items-end gap-3">
-        <Field label="Источник">
-          <Select value={source} onChange={(e) => setSource(e.target.value as DatasetSource)}>
-            <option value="clickhouse">ClickHouse</option>
-            <option value="postgres">PostgreSQL</option>
-            <option value="oracle">Oracle</option>
-            <option value="csv">CSV-файл</option>
+        <Field label="Подключение" className="col-span-full"
+          hint="Уникальное имя подключения задаётся в DB_CONNECTIONS файла backend/.env.">
+          <Select value={connectionKey} onChange={(e) => setConnectionKey(e.target.value)}>
+            <option value="">Выберите подключение</option>
+            {connections.map((item) => <option key={item.key} value={item.key}>
+              {item.title} · {SOURCE_LABELS[item.source]}
+            </option>)}
           </Select>
-        </Field>
-        {source !== 'csv' && (
-          <Field label="Читаем">
-            <Select value={mode} onChange={(e) => setMode(e.target.value as 'table' | 'query')}>
-              <option value="table">Таблицу или представление</option>
-              <option value="query">SQL-запрос</option>
-            </Select>
-          </Field>
-        )}
-        <Field label="Slug">
-          <Input value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="my-data" />
         </Field>
         <Field label="Название">
           <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Мои данные" />
@@ -254,44 +240,15 @@ function DatasetCreateModal({
             placeholder="необязательно"
           />
         </Field>
-        {source !== 'csv' && (
-          <>
-            <Field label="Подключение" className="col-span-full" hint="Подключения задаются в DB_CONNECTIONS файла backend/.env и применяются после перезапуска.">
-              <Select value={connectionKey} onChange={(e) => setConnectionKey(e.target.value)}>
-                <option value="">Выберите подключение</option>
-                {connections.filter((c) => c.source === source).map((c) => <option key={c.key} value={c.key}>{c.title}</option>)}
-              </Select>
-            </Field>
-            {asQuery ? (
-              <Field
-                label="SQL-запрос"
-                className="col-span-full"
-                hint="Один запрос, SELECT или WITH. Выполняется заново на каждую секцию отчёта, на каждый список значений фильтра и на детализацию — держите его дешёвым: тяжёлую агрегацию лучше вынести в представление источника."
-              >
-                <Textarea
-                  rows={10}
-                  className="font-mono text-xs"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder={'SELECT o.order_date, c.region, o.revenue\nFROM orders o\nJOIN clients c ON c.id = o.client_id'}
-                />
-              </Field>
-            ) : (
-              <Field label="Таблица" className="col-span-full">
-                <Input
-                  value={tableName}
-                  onChange={(e) => setTableName(e.target.value)}
-                  placeholder={TABLE_PLACEHOLDERS[source]}
-                />
-              </Field>
-            )}
-          </>
-        )}
-        {source === 'csv' && (
-          <p className="col-span-full text-sm text-fg-muted">
-            Файл .csv загружается после создания — на карточке датасета в каталоге.
-          </p>
-        )}
+        <Field label="SQL-запрос" className="col-span-full"
+          hint="Один SELECT или WITH. Для таблицы используйте SELECT * FROM имя_таблицы. Запрос выполняется при построении отчётов и превью.">
+          <Textarea rows={10} className="font-mono text-xs" value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder={'SELECT o.order_date, c.region, o.revenue\nFROM orders o\nJOIN clients c ON c.id = o.client_id'} />
+        </Field>
+        {connections.length === 0 && <Alert className="col-span-full">
+          Нет подключений для датасетов. Добавьте именованное подключение в DB_CONNECTIONS и перезапустите приложение.
+        </Alert>}
         {error && (
           <div className="col-span-full">
             <Alert>{error}</Alert>

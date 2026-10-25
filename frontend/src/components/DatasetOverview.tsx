@@ -114,7 +114,8 @@ export function DatasetOverview({ dataset }: { dataset: Dataset }) {
           <section>
             <h3 className="mb-2 text-sm font-semibold">Пример строк</h3>
             {loading ? <Skeleton className="h-32" /> : error ? <Alert>{error}</Alert> :
-              preview && preview.columns.length > 0 ? <DatasetPreviewTable preview={preview} /> :
+              preview && preview.columns.length > 0 ? <DatasetPreviewTable preview={preview}
+                columnLabels={Object.fromEntries(fields.map((field) => [field.name, fieldTitle(detail?.dataset ?? dataset, field)]))} /> :
                 <p className="text-sm text-fg-muted">Пример строк пока недоступен.</p>}
           </section>
         </div>

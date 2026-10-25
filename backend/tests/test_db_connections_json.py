@@ -25,6 +25,32 @@ def test_json_битый_не_раскрывает_секрет(monkeypatch):
     assert 'secret' not in str(exc.value)
 
 
+def test_connection_aliases_are_unique_and_visible(monkeypatch):
+    """Source connections expose distinct names without revealing their DSNs."""
+    values = {
+        'metabase': {'source': 'postgres', 'dsn': 'postgresql://u:p@db/app'},
+        'sales': {'source': 'clickhouse', 'dsn': 'clickhouse://u:p@host/db',
+                  'title': 'Продажи'},
+        'stats': {'source': 'postgres', 'dsn': 'postgresql://u:p@host/db',
+                  'title': 'продажи'},
+    }
+    monkeypatch.setenv('DB_CONNECTIONS', json.dumps(values))
+    with pytest.raises(ValueError, match='повторяется имя подключения'):
+        config.connections()
+    values['stats']['title'] = 'Статистика'
+    monkeypatch.setenv('DB_CONNECTIONS', json.dumps(values))
+    assert config.connections()['stats']['title'] == 'Статистика'
+
+
+def test_legacy_connection_key_becomes_alias(monkeypatch):
+    """Older connection entries remain usable with their unique key as the name."""
+    monkeypatch.setenv('DB_CONNECTIONS', json.dumps({
+        'metabase': {'source': 'postgres', 'dsn': 'postgresql://u:p@db/app'},
+        'sales': {'source': 'postgres', 'dsn': 'postgresql://u:p@host/db'},
+    }))
+    assert config.connections()['sales']['title'] == 'sales'
+
+
 def test_датасет_берёт_dsn_по_ключу(monkeypatch):
     monkeypatch.setenv('DB_CONNECTIONS', json.dumps({
         'metabase': {'source': 'postgres', 'dsn': 'postgresql://u:p@db/app'},

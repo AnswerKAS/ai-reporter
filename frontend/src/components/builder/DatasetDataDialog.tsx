@@ -85,7 +85,9 @@ export function DatasetDataDialog({ datasets, selectedSlugs, onClose }: {
             <p className="mb-3 text-xs text-fg-muted">Первые строки источника; сортировка и фильтры действуют только на показанный пример.</p>
             {loading && !detail ? <Skeleton className="h-32" /> : error ? <Alert>{error}</Alert> :
               detail?.preview && detail.preview.columns.length > 0 ?
-                <DatasetPreviewTable key={slug} preview={detail.preview} /> :
+                <DatasetPreviewTable key={slug} preview={detail.preview}
+                  columnLabels={Object.fromEntries(selected.fields.map((field) => [field.name,
+                    selected.fieldSettings?.[field.name]?.title || field.comment || field.name]))} /> :
                 <p className="text-sm text-fg-muted">Превью недоступно или датасет пуст.</p>}
           </section>
         </div>

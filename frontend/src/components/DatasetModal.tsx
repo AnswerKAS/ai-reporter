@@ -61,12 +61,14 @@ function mentions(expression: string, field: string): boolean {
  */
 export function DatasetModal({
   dataset,
+  initialTab = 'preview',
   isAdmin,
   onClose,
   onChanged,
   onDelete,
 }: {
   dataset: Dataset
+  initialTab?: 'preview' | 'fields'
   isAdmin: boolean
   onClose: () => void
   /** Датасет изменился — список снаружи пора перечитать. */
@@ -74,7 +76,7 @@ export function DatasetModal({
   onDelete: () => void
 }) {
   const navigate = useNavigate()
-  const [tab, setTab] = useState<Tab>('preview')
+  const [tab, setTab] = useState<Tab>(initialTab)
   const [detail, setDetail] = useState<DatasetDetail | null>(null)
   const [metrics, setMetrics] = useState<Metric[]>([])
   const [dimensions, setDimensions] = useState<Dimension[]>([])
@@ -219,7 +221,8 @@ export function DatasetModal({
         (!detail ? (
           <Skeleton className="h-40" />
         ) : detail.preview && detail.preview.columns.length > 0 ? (
-          <DatasetPreviewTable preview={detail.preview} />
+          <DatasetPreviewTable preview={detail.preview}
+            columnLabels={Object.fromEntries(fields.map((field) => [field.name, current.fieldSettings?.[field.name]?.title || field.comment || field.name]))} />
         ) : (
           <p className="text-sm text-fg-muted">Превью недоступно.</p>
         ))}
