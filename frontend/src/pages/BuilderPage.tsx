@@ -36,6 +36,8 @@ import { buildLinkIndex, reachableFrom } from '../lib/dataset-links'
 import { DatasetPicker } from '../components/builder/DatasetPicker'
 import { ReportChat } from '../components/builder/ReportChat'
 import { ChartKindPicker } from '../components/builder/ChartKindPicker'
+import { SectionFieldPicker } from '../components/builder/SectionFieldPicker'
+import type { SectionFieldChoice } from '../components/builder/SectionFieldPicker'
 import { useReports } from '../lib/reports'
 import { VocabularyDialog } from '../components/builder/VocabularyDialog'
 
@@ -197,47 +199,6 @@ function OwnChip({
   )
 }
 
-/** Шаг конструктора: состояние читается и глазами, и скринридером. */
-/**
- * Подпись ряда палитры: какого вида поля идут ниже и сколько их.
- *
- * Отдельно называет то, что не отмечено на шаге «Данные»: раскладка берёт
- * поля только оттуда, и датасет с четырьмя разрезами в словаре, но без
- * единого отмеченного, выглядел как датасет вовсе без разрезов.
- */
-function PaletteLabel({
-  title,
-  shown,
-  unpicked,
-  onPick,
-}: {
-  title: string
-  shown: number
-  unpicked: number
-  onPick: () => void
-}) {
-  return (
-    <div className="mt-0.5 flex flex-wrap items-baseline gap-x-1.5">
-      <span className="text-[11px] font-semibold tracking-wide text-fg-muted uppercase">{title}</span>
-      <span className="font-mono text-[10px] text-fg-muted">{shown}</span>
-      {unpicked > 0 && (
-        <button
-          type="button"
-          onClick={onPick}
-          title={`Вернуться на шаг «Данные» и отметить их`}
-          className="cursor-pointer text-[11px] text-accent hover:underline"
-        >
-          + ещё {unpicked} на шаге «Данные»
-        </button>
-      )}
-      {shown === 0 && unpicked === 0 && (
-        <span className="text-[11px] text-fg-muted">в словаре датасета нет</span>
-      )}
-    </div>
-  )
-}
-
-
 function StepLink({
   n,
   label,
@@ -343,9 +304,8 @@ function Builder({ embedded, suggestedPrompt }: {
   // почему сброс не принят — молчание пользователь читает как поломку
   const [dropNote, setDropNote] = useState<{ index: number; text: string } | null>(null)
   const [dragging, setDragging] = useState<DragPayload | null>(null)
-  // клик — равноправная альтернатива перетаскиванию: с тачскрина и с
-  // клавиатуры drag недоступен, поэтому поле кладётся в активную секцию
-  const [activeSection, setActiveSection] = useState(0)
+  // Выбор поля открывается из конкретного блока и не зависит от глобальной палитры.
+  const [fieldPicker, setFieldPicker] = useState<{ index: number; kind: 'metric' | 'dimension' } | null>(null)
   const [vocabularyOpen, setVocabularyOpen] = useState(false)
 
   useEffect(() => {
@@ -481,15 +441,6 @@ function Builder({ embedded, suggestedPrompt }: {
     return order.map((slug) => ({
       slug,
       title: datasetTitle(slug),
-      // сколько полей этого датасета есть в словаре, но не отмечено на шаге
-      // «Данные»: без этого числа раскладка молчит о том, что разрезы вообще
-      // существуют, и выглядит так, будто у датасета одни показатели
-      unpickedMetrics: metrics.filter(
-        (m) => m.datasetSlug === slug && !pickedMetrics.includes(m.slug),
-      ).length,
-      unpickedDimensions: dimensions.filter(
-        (d) => d.datasetSlug === slug && !pickedDimensions.includes(d.slug),
-      ).length,
       metrics: [
         ...availableMetrics
           .filter((m) => m.datasetSlug === slug)
@@ -519,8 +470,25 @@ function Builder({ embedded, suggestedPrompt }: {
           .map((f) => ({ key: f.key, title: f.title, own: true, type: f.type, hint: `${slug}.${f.field}` })),
       ],
     }))
-  }, [availableMetrics, ownMetrics, availableDimensions, ownDimensions, datasetTitle,
-      metrics, dimensions, pickedMetrics, pickedDimensions])
+  }, [availableMetrics, ownMetrics, availableDimensions, ownDimensions, datasetTitle])
+
+  /** Варианты выбора показывают происхождение поля и скрывают технический ключ. */
+  const metricChoices = useMemo<SectionFieldChoice[]>(() => [
+    ...palette.flatMap((group) => group.metrics.map((item) => ({
+      key: item.key, title: item.title, dataset: group.title, hint: item.hint,
+      unavailable: item.broken ? 'Поле недоступно: ошибка проверки' : undefined,
+    }))),
+    ...computed.map((item) => ({
+      key: item.key, title: item.title, dataset: 'Формулы отчёта',
+      hint: `${fieldTitle(item.left)} ${item.op} ${fieldTitle(item.right)}`,
+    })),
+  ], [palette, computed, fieldTitle])
+
+  /** Разрезы нужны и блокам, и фильтрам, поэтому список строится один раз. */
+  const dimensionChoices = useMemo<SectionFieldChoice[]>(() =>
+    palette.flatMap((group) => group.dimensions.map((item) => ({
+      key: item.key, title: item.title, dataset: group.title, hint: item.hint,
+    }))), [palette])
 
   const definition = useMemo<ReportDefinition>(
     () => ({
@@ -801,9 +769,6 @@ function Builder({ embedded, suggestedPrompt }: {
       next.splice(to, 0, moved)
       return next
     })
-    setActiveSection((current) => current === from ? to
-      : from < current && current <= to ? current - 1
-        : to <= current && current < from ? current + 1 : current)
   }
 
   const onDropToSection = (event: DragEvent, index: number) => {
@@ -813,11 +778,9 @@ function Builder({ embedded, suggestedPrompt }: {
     const payload = readDrag(event)
     if (!payload) return
     if (payload.kind === 'metric') {
-      setActiveSection(index)
       return addMetric(index, payload.slug)
     }
     if (payload.kind === 'dimension') {
-      setActiveSection(index)
       return setDimension(index, payload.slug, true)
     }
     moveSection(payload.index, index)
@@ -877,7 +840,6 @@ function Builder({ embedded, suggestedPrompt }: {
       }
       setSections(parsed.sections.length ? parsed.sections : [emptySection()])
       setFilters(parsed.filters ?? [])
-      setActiveSection(0)
     },
     [metricsBySlug, dimensionsBySlug, ownByKey],
   )
@@ -1069,191 +1031,72 @@ function Builder({ embedded, suggestedPrompt }: {
           </div>
 
           <div className="mt-3 grid grid-cols-1 items-start gap-4 xl:grid-cols-2">
-            <div className="order-1 min-w-0 rounded-card border border-line bg-surface p-4 xl:col-start-1 xl:row-start-1">
-                <section className="min-w-0">
-                  <h3 className="text-sm font-semibold">Добавить в секцию {activeSection + 1}</h3>
-                  <p className="mt-1 text-xs text-fg-muted">
-                    Выберите секцию ниже, затем нажмите на поле или перетащите его.
-                    Показатель — что считаем; разрез — по чему разбиваем.
-                  </p>
-                  <div className="mt-3 flex flex-wrap gap-4">
-
-              {palette.map((group) => (
-                <div key={group.slug} className="min-w-0 flex-[1_1_280px] space-y-1.5">
-                  <span className="mb-0.5 border-b border-line pb-1 text-xs font-semibold text-fg-muted">{group.title}</span>
-
-                  <PaletteLabel
-                    title="Показатели"
-                    shown={group.metrics.length}
-                    unpicked={group.unpickedMetrics}
-                    onPick={() => setStep(1)}
-                  />
-                  {group.metrics.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5">
-                      {group.metrics.map((m) => (
-                        <button
-                          key={m.key}
-                          className={cn(
-                            CHIP,
-                            'cursor-grab select-none active:cursor-grabbing',
-                            m.own && 'border-double',
-                            m.broken && 'cursor-not-allowed opacity-40',
-                          )}
-                          draggable={!m.broken}
-                          disabled={m.broken}
-                          onDragStart={(e) => {
-                            startDrag(e, { kind: 'metric', slug: m.key })
-                            setDragging({ kind: 'metric', slug: m.key })
-                          }}
-                          onDragEnd={() => setDragging(null)}
-                          onClick={() => addMetric(activeSection, m.key)}
-                          title={`${group.title} · ${m.hint}`}
-                        >
-                          {m.title}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-
-                  <PaletteLabel
-                    title="Разрезы"
-                    shown={group.dimensions.length}
-                    unpicked={group.unpickedDimensions}
-                    onPick={() => setStep(1)}
-                  />
-                  {group.dimensions.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5">
-                      {group.dimensions.map((d) => (
-                        <button
-                          key={d.key}
-                          className={cn(
-                            CHIP,
-                            'cursor-grab border-dashed select-none active:cursor-grabbing',
-                            d.own && 'border-double',
-                          )}
-                          draggable
-                          onDragStart={(e) => {
-                            startDrag(e, { kind: 'dimension', slug: d.key })
-                            setDragging({ kind: 'dimension', slug: d.key })
-                          }}
-                          onDragEnd={() => setDragging(null)}
-                          onClick={() => setDimension(activeSection, d.key)}
-                          title={`${group.title} · ${d.hint}`}
-                        >
-                          {d.title}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ))}
-
-              {computed.length > 0 && (
-                <div className="min-w-0 flex-[1_1_280px] space-y-1.5">
-                  {/* формулы не принадлежат одному датасету — их источник виден по операндам */}
-                  <span className="mb-0.5 border-b border-line pb-1 text-xs font-semibold text-fg-muted">формулы отчёта</span>
-                  <div className="flex flex-wrap gap-1.5">
-                    {computed.map((c) => (
-                      <button
-                        key={c.key}
-                        className={cn(CHIP, 'cursor-grab border-double select-none active:cursor-grabbing')}
-                        draggable
-                        onDragStart={(e) => {
-                          startDrag(e, { kind: 'metric', slug: c.key })
-                          setDragging({ kind: 'metric', slug: c.key })
-                        }}
-                        onDragEnd={() => setDragging(null)}
-                        onClick={() => addMetric(activeSection, c.key)}
-                        title={`${fieldTitle(c.left)} ${c.op} ${fieldTitle(c.right)}`}
-                      >
-                        {c.title}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-                  </div>
-                  <Button variant="ghost" size="sm" className="mt-2.5" onClick={() => setStep(1)}>
-                    ← изменить набор данных
-                  </Button>
-                </section>
-            </div>
-
-                <section className="order-3 min-w-0 rounded-card border border-line bg-surface p-4 xl:col-start-2 xl:row-start-1 xl:order-none">
-                  <h3 className="text-sm font-semibold">Фильтры для читателя</h3>
-                  <p className="mt-1 text-xs text-fg-muted">Условия применяются ко всему отчёту. Выберите разрезы, по которым читатель сможет его фильтровать.</p>
-              {palette.every((group) => group.dimensions.length === 0) && (
-                <p className="mt-3 text-xs leading-snug text-fg-muted">
-                  Фильтр строится по разрезу: пока ни одного разреза не выбрано, фильтровать
-                  отчёт не по чему.
-                </p>
-              )}
-              <div className="mt-3 flex flex-wrap gap-1.5">
-                {palette.flatMap((group) =>
-                  group.dimensions.map((d) => {
-                    const on = filters.some((f) => f.dimension === d.key)
-                    // по дате фильтруют периодом: список всех дат в выпадающем
-                    // списке читателю бесполезен
-                    const kind = d.type === 'date' ? 'daterange' : 'select'
-                    return (
-                      <button
-                        key={d.key}
-                        className={cn(CHIP, on && CHIP_ON)}
-                        title={`${group.title} · ${d.hint}${kind === 'daterange' ? ' · период с — по' : ''}`}
-                        onClick={() => {
-                          if (on)
-                            // у периода два ключа значений — снимаем оба
-                            setPreviewFilters((prev) =>
-                              Object.fromEntries(
-                                Object.entries(prev).filter(
-                                  ([k]) => k !== d.key && !k.startsWith(`${d.key}__`),
-                                ),
-                              ),
-                            )
-                          setFilters((prev) =>
-                            on
-                              ? prev.filter((f) => f.dimension !== d.key)
-                              : [...prev, { dimension: d.key, kind }],
-                          )
-                        }}
-                      >
-                        {d.title}
-                        {kind === 'daterange' && <span className="ml-1.5 text-[10px] opacity-70">период</span>}
-                      </button>
-                    )
-                  }),
-                )}
-              </div>
-
-              {filters.length > 0 && (
-                <div className="mt-3 space-y-2 border-t border-line pt-3">
-                  <p className="text-xs font-medium text-fg-muted">Как читатель задаст условие</p>
+            <section className="order-2 min-w-0 rounded-card border border-line bg-surface p-4 xl:col-start-2 xl:row-start-1 xl:order-none">
+              <h3 className="text-sm font-semibold">Фильтры отчёта</h3>
+              <p className="mt-1 text-xs text-fg-muted">Читатель сможет выбирать эти условия в готовом отчёте.</p>
+              {filters.length === 0 ? (
+                <p className="mt-3 text-sm text-fg-muted">Фильтров пока нет — отчёт покажет все доступные данные.</p>
+              ) : (
+                <div className="mt-3 space-y-2">
                   {filters.map((filter) => {
                     const info = dimensionInfo(filter.dimension)
                     const options = FILTER_KIND_OPTIONS[info?.type ?? 'string']
                     return (
-                      <label key={filter.dimension} className="flex flex-col gap-1 text-xs text-fg-muted">
-                        <span className="truncate">{info?.title ?? filter.dimension}</span>
-                        <Select value={filter.kind} className="py-1.5"
-                          onChange={(event) => {
-                            const kind = event.target.value as FilterDefinition['kind']
-                            setFilters((prev) => prev.map((item) => item.dimension === filter.dimension ? { ...item, kind } : item))
-                            setPreviewFilters((prev) => Object.fromEntries(Object.entries(prev).filter(
+                      <div key={filter.dimension} className="flex flex-wrap items-end gap-2 rounded-control border border-line p-2.5">
+                        <div className="min-w-28 flex-1 text-sm font-medium">{info?.title ?? filter.dimension}</div>
+                        {options.length === 1 ? (
+                          <span className="self-center text-xs text-fg-muted">{options[0].label}</span>
+                        ) : (
+                          <Field label="Как выбрать" className="min-w-40 flex-1">
+                            <Select value={filter.kind} onChange={(event) => {
+                              const kind = event.target.value as FilterDefinition['kind']
+                              setFilters((previous) => previous.map((item) => item.dimension === filter.dimension ? { ...item, kind } : item))
+                              setPreviewFilters((previous) => Object.fromEntries(Object.entries(previous).filter(
+                                ([key]) => key !== filter.dimension && !key.startsWith(`${filter.dimension}__`),
+                              )))
+                            }}>
+                              {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                            </Select>
+                          </Field>
+                        )}
+                        <Button variant="ghost" size="sm" aria-label={`Убрать фильтр ${info?.title ?? filter.dimension}`}
+                          onClick={() => {
+                            setFilters((previous) => previous.filter((item) => item.dimension !== filter.dimension))
+                            setPreviewFilters((previous) => Object.fromEntries(Object.entries(previous).filter(
                               ([key]) => key !== filter.dimension && !key.startsWith(`${filter.dimension}__`),
                             )))
-                          }}>
-                          {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                        </Select>
-                      </label>
+                          }}>Убрать</Button>
+                      </div>
                     )
                   })}
                 </div>
               )}
+              {dimensionChoices.some((choice) => !filters.some((filter) => filter.dimension === choice.key)) ? (
+                <Field label="Добавить фильтр по полю" className="mt-3">
+                  <Select value="" onChange={(event) => {
+                    const key = event.target.value
+                    const info = dimensionInfo(key)
+                    if (key) setFilters((previous) => [...previous, {
+                      dimension: key, kind: info?.type === 'date' ? 'daterange' : 'select',
+                    }])
+                  }}>
+                    <option value="">Выберите поле…</option>
+                    {palette.map((group) => {
+                      const available = group.dimensions.filter((item) => !filters.some((filter) => filter.dimension === item.key))
+                      return available.length > 0 && <optgroup key={group.slug} label={group.title}>
+                        {available.map((item) => <option key={item.key} value={item.key}>{item.title}</option>)}
+                      </optgroup>
+                    })}
+                  </Select>
+                </Field>
+              ) : (
+                <Button variant="ghost" size="sm" className="mt-3" onClick={() => setStep(1)}>
+                  Нужен ещё фильтр? Изменить данные
+                </Button>
+              )}
+            </section>
 
-                </section>
-
-            <div className="order-2 flex min-w-0 flex-col gap-3 xl:col-start-1 xl:row-start-2 xl:order-none">
+            <div className="order-1 flex min-w-0 flex-col gap-3 xl:col-start-1 xl:row-start-1 xl:row-span-2 xl:order-none">
               {sections.map((section, index) => {
                 const active = dropTarget === index
                 const rejects =
@@ -1265,10 +1108,8 @@ function Builder({ embedded, suggestedPrompt }: {
                     key={index}
                     className={cn(
                       'flex flex-col gap-3 rounded-card border border-line bg-surface p-3.5',
-                      index === activeSection && 'border-accent',
                       active && (rejects ? 'border-bad ring-2 ring-bad-soft' : 'border-accent ring-2 ring-accent-soft'),
                     )}
-                    onClick={() => setActiveSection(index)}
                     onDragOver={(e) => {
                       e.preventDefault()
                       if (dropTarget !== index) setDropTarget(index)
@@ -1290,6 +1131,7 @@ function Builder({ embedded, suggestedPrompt }: {
                       >
                         ⠿
                       </span>
+                      <span className="text-xs font-semibold text-fg-muted">Блок {index + 1}</span>
                       {/* порядок секций меняется мышью через ⠿, а с клавиатуры — этими кнопками */}
                       <span className="flex flex-col leading-none">
                         <button
@@ -1369,7 +1211,7 @@ function Builder({ embedded, suggestedPrompt }: {
                           onClick={(event) => {
                             event.stopPropagation()
                             setSections((prev) => prev.filter((_, i) => i !== index))
-                            setActiveSection((current) => Math.min(current > index ? current - 1 : current, sections.length - 2))
+                            setFieldPicker(null)
                           }}
                         >
                           удалить
@@ -1383,9 +1225,12 @@ function Builder({ embedded, suggestedPrompt }: {
                     )}
 
                     <div className="flex flex-col gap-1.5 rounded-control border border-dashed border-line px-2.5 py-2">
-                      <span className="text-xs font-medium tracking-wide text-fg-muted uppercase">Показатели</span>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-xs font-medium tracking-wide text-fg-muted uppercase">Показатели</span>
+                        <Button size="sm" onClick={() => setFieldPicker({ index, kind: 'metric' })}>+ Добавить показатель</Button>
+                      </div>
                       {section.metrics.length === 0 ? (
-                        <p className="text-xs text-fg-muted">перетащите поле сюда или нажмите на него слева</p>
+                        <p className="text-xs text-fg-muted">Выберите, какое число должен показывать этот блок.</p>
                       ) : (
                         <div className="flex flex-wrap gap-1.5">
                           {section.metrics.map((m) => (
@@ -1425,15 +1270,16 @@ function Builder({ embedded, suggestedPrompt }: {
 
                     {section.type !== 'kpi' && (
                       <div className="flex flex-col gap-1.5 rounded-control border border-dashed border-line px-2.5 py-2">
-                        <span className="text-xs font-medium tracking-wide text-fg-muted uppercase">
-                          Разрезы{' '}
-                          <span className="normal-case">
-                            (группировка, {section.by.length} из {byLimit(section.type)})
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="text-xs font-medium tracking-wide text-fg-muted uppercase">
+                            Разрезы <span className="normal-case">({section.by.length} из {byLimit(section.type)})</span>
                           </span>
-                        </span>
+                          <Button size="sm" disabled={section.by.length >= byLimit(section.type)}
+                            onClick={() => setFieldPicker({ index, kind: 'dimension' })}>+ Добавить разрез</Button>
+                        </div>
                         {section.by.length === 0 ? (
                           <p className="text-xs text-fg-muted">
-                            перетащите разрез сюда — секция посчитается в разбивке по нему
+                            Выберите, по какому полю разбить данные блока.
                           </p>
                         ) : (
                           <div className="flex flex-wrap items-center gap-1.5">
@@ -1520,14 +1366,13 @@ function Builder({ embedded, suggestedPrompt }: {
                 variant="ghost"
                 onClick={() => {
                   setSections((prev) => [...prev, emptySection()])
-                  setActiveSection(sections.length)
                 }}
               >
-                + добавить секцию
+                + добавить блок
               </Button>
             </div>
 
-            <div className="order-4 min-h-50 min-w-0 rounded-card border border-line bg-surface p-4 xl:col-start-2 xl:row-start-2 xl:order-none xl:sticky xl:top-4">
+            <div className="order-3 min-h-50 min-w-0 rounded-card border border-line bg-surface p-4 xl:col-start-2 xl:row-start-2 xl:order-none xl:sticky xl:top-4">
               <div className="mb-3 flex items-center gap-2.5">
                 <span className="text-xs font-medium tracking-wide text-fg-muted uppercase">Предпросмотр</span>
                 {preview && <span className="inline-flex items-center rounded-full border border-good/30 bg-good-soft px-2.5 py-0.5 text-xs font-semibold text-good">живые данные</span>}
@@ -1552,6 +1397,24 @@ function Builder({ embedded, suggestedPrompt }: {
               {preview && <SectionsGrid sections={preview.sections} />}
             </div>
           </div>
+
+          {fieldPicker && sections[fieldPicker.index] && (
+            <SectionFieldPicker
+              kind={fieldPicker.kind}
+              blockNumber={fieldPicker.index + 1}
+              choices={(fieldPicker.kind === 'metric' ? metricChoices : dimensionChoices)
+                .filter((choice) => fieldPicker.kind === 'metric'
+                  ? !sections[fieldPicker.index].metrics.includes(choice.key)
+                  : !sections[fieldPicker.index].by.includes(choice.key))
+                .map((choice) => fieldPicker.kind === 'dimension' &&
+                  !dimensionFits(sections[fieldPicker.index], choice.key)
+                  ? { ...choice, unavailable: 'Не связан с данными этого блока' } : choice)}
+              onPick={(key) => fieldPicker.kind === 'metric'
+                ? addMetric(fieldPicker.index, key) : setDimension(fieldPicker.index, key)}
+              onChangeData={() => { setFieldPicker(null); setStep(1) }}
+              onClose={() => setFieldPicker(null)}
+            />
+          )}
 
           {vocabularyOpen && (
             <VocabularyDialog
