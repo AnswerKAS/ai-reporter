@@ -1069,23 +1069,17 @@ function Builder({ embedded, suggestedPrompt }: {
           </div>
 
           <div className="mt-3 grid grid-cols-1 items-start gap-4 xl:grid-cols-2">
-            <details className="min-w-0 rounded-card border border-line bg-surface px-4 py-3 xl:col-span-2">
-              <summary className="cursor-pointer text-sm font-semibold">
-                Поля и фильтры · {palette.reduce((count, group) => count + group.metrics.length + group.dimensions.length, 0) + computed.length} полей · {filters.length} фильтров
-              </summary>
-              <div className="mt-3 grid gap-4 border-t border-line pt-3 md:grid-cols-2 xl:grid-cols-3">
-              {/* поля датасета делятся на два вида, и раскладка обязана это
-                  проговаривать: без подписей чипы читаются одинаково, а
-                  разрезы, не отмеченные на шаге «Данные», выглядели так, будто
-                  их у датасета нет вовсе */}
-              <p className="text-[11px] leading-snug text-fg-muted">
-                <span className="font-semibold text-fg">Показатель</span> — что считаем;{' '}
-                <span className="font-semibold text-fg">разрез</span> — по чему разбиваем
-                (пунктирная рамка). Разрезы задают группировку секции и фильтры отчёта.
-              </p>
+            <div className="order-1 min-w-0 rounded-card border border-line bg-surface p-4 xl:col-start-1 xl:row-start-1">
+                <section className="min-w-0">
+                  <h3 className="text-sm font-semibold">Добавить в секцию {activeSection + 1}</h3>
+                  <p className="mt-1 text-xs text-fg-muted">
+                    Выберите секцию ниже, затем нажмите на поле или перетащите его.
+                    Показатель — что считаем; разрез — по чему разбиваем.
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-4">
 
               {palette.map((group) => (
-                <div key={group.slug} className="mb-3 flex flex-col gap-1.5">
+                <div key={group.slug} className="min-w-0 flex-[1_1_280px] space-y-1.5">
                   <span className="mb-0.5 border-b border-line pb-1 text-xs font-semibold text-fg-muted">{group.title}</span>
 
                   <PaletteLabel
@@ -1155,7 +1149,7 @@ function Builder({ embedded, suggestedPrompt }: {
               ))}
 
               {computed.length > 0 && (
-                <div className="mb-3 flex flex-col gap-1.5">
+                <div className="min-w-0 flex-[1_1_280px] space-y-1.5">
                   {/* формулы не принадлежат одному датасету — их источник виден по операндам */}
                   <span className="mb-0.5 border-b border-line pb-1 text-xs font-semibold text-fg-muted">формулы отчёта</span>
                   <div className="flex flex-wrap gap-1.5">
@@ -1179,14 +1173,23 @@ function Builder({ embedded, suggestedPrompt }: {
                 </div>
               )}
 
-              <span className="text-xs font-medium tracking-wide text-fg-muted uppercase">Фильтры отчёта</span>
+                  </div>
+                  <Button variant="ghost" size="sm" className="mt-2.5" onClick={() => setStep(1)}>
+                    ← изменить набор данных
+                  </Button>
+                </section>
+            </div>
+
+                <section className="order-3 min-w-0 rounded-card border border-line bg-surface p-4 xl:col-start-2 xl:row-start-1 xl:order-none">
+                  <h3 className="text-sm font-semibold">Фильтры для читателя</h3>
+                  <p className="mt-1 text-xs text-fg-muted">Условия применяются ко всему отчёту. Выберите разрезы, по которым читатель сможет его фильтровать.</p>
               {palette.every((group) => group.dimensions.length === 0) && (
-                <p className="text-[11px] leading-snug text-fg-muted">
+                <p className="mt-3 text-xs leading-snug text-fg-muted">
                   Фильтр строится по разрезу: пока ни одного разреза не выбрано, фильтровать
                   отчёт не по чему.
                 </p>
               )}
-              <div className="flex flex-wrap gap-1.5">
+              <div className="mt-3 flex flex-wrap gap-1.5">
                 {palette.flatMap((group) =>
                   group.dimensions.map((d) => {
                     const on = filters.some((f) => f.dimension === d.key)
@@ -1248,13 +1251,9 @@ function Builder({ embedded, suggestedPrompt }: {
                 </div>
               )}
 
-              <Button variant="ghost" size="sm" className="mt-2.5" onClick={() => setStep(1)}>
-                ← изменить набор данных
-              </Button>
-              </div>
-            </details>
+                </section>
 
-            <div className="flex flex-col gap-3">
+            <div className="order-2 flex min-w-0 flex-col gap-3 xl:col-start-1 xl:row-start-2 xl:order-none">
               {sections.map((section, index) => {
                 const active = dropTarget === index
                 const rejects =
@@ -1378,7 +1377,6 @@ function Builder({ embedded, suggestedPrompt }: {
                       )}
                     </div>
 
-                    {index === activeSection ? <>
                     {section.type === 'chart' && (
                       <ChartKindPicker value={section.kind ?? 'bar'}
                         onChange={(kind) => patchSection(index, { kind })} />
@@ -1514,13 +1512,6 @@ function Builder({ embedded, suggestedPrompt }: {
                           /></Field>
                       </div>
                     )}
-                    </> : (
-                      <button type="button" onClick={() => setActiveSection(index)}
-                        className="cursor-pointer rounded-control border border-dashed border-line px-3 py-2 text-left text-xs text-fg-muted hover:border-accent hover:text-fg">
-                        <span className="font-medium text-fg">{section.metrics.length ? section.metrics.map(fieldTitle).join(', ') : 'Показатели не выбраны'}</span>
-                        {section.by.length > 0 && <span className="block mt-1">По: {section.by.map((key) => dimensionInfo(key)?.title ?? key).join(', ')}</span>}
-                      </button>
-                    )}
                   </section>
                 )
               })}
@@ -1536,7 +1527,7 @@ function Builder({ embedded, suggestedPrompt }: {
               </Button>
             </div>
 
-            <div className="min-h-50 min-w-0 rounded-card border border-line bg-surface p-4 xl:sticky xl:top-4">
+            <div className="order-4 min-h-50 min-w-0 rounded-card border border-line bg-surface p-4 xl:col-start-2 xl:row-start-2 xl:order-none xl:sticky xl:top-4">
               <div className="mb-3 flex items-center gap-2.5">
                 <span className="text-xs font-medium tracking-wide text-fg-muted uppercase">Предпросмотр</span>
                 {preview && <span className="inline-flex items-center rounded-full border border-good/30 bg-good-soft px-2.5 py-0.5 text-xs font-semibold text-good">живые данные</span>}
