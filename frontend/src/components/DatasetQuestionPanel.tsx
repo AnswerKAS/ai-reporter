@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { Dataset, DatasetQuestionTurn } from '../types/dataset'
 import { ApiError, askDataset } from '../lib/api'
+import { DatasetOverview } from './DatasetOverview'
 import { Alert, Button, Card, Table, Td, Textarea, Th, Tr } from './ui'
 
 /** Диалог по одному датасету с результатом, расчётом и переходом к отчёту. */
@@ -13,6 +14,7 @@ export function DatasetQuestionPanel({ dataset, isAdmin, onCreateReport }: {
   const [turns, setTurns] = useState<DatasetQuestionTurn[]>([])
   const [asking, setAsking] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [overviewOpen, setOverviewOpen] = useState(false)
 
   /** Передаёт всю локальную историю, чтобы следующий вопрос мог уточнить предыдущий. */
   async function ask(): Promise<void> {
@@ -34,9 +36,15 @@ export function DatasetQuestionPanel({ dataset, isAdmin, onCreateReport }: {
   return (
     <div className="mx-auto max-w-6xl space-y-6">
       <section className="rounded-card border border-line bg-surface p-5 shadow-card sm:p-7">
-        <p className="text-[11px] font-semibold tracking-[0.14em] text-accent uppercase">03 · Вопрос к данным</p>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <p className="text-[11px] font-semibold tracking-[0.14em] text-accent uppercase">02 · Вопрос к данным</p>
+          <Button size="sm" aria-expanded={overviewOpen} onClick={() => setOverviewOpen((open) => !open)}>
+            {overviewOpen ? 'Скрыть данные датасета' : 'Что есть в датасете'}
+          </Button>
+        </div>
         <h2 className="mt-2 text-2xl font-semibold tracking-tight">Что вы хотите узнать?</h2>
         <p className="mt-2 text-sm text-fg-muted">Спросите об итогах, динамике или сравнении. Следующим вопросом можно уточнить ответ.</p>
+        {overviewOpen && <div className="mt-5"><DatasetOverview dataset={dataset} /></div>}
         {error && <Alert className="mt-5">{error}</Alert>}
         <form onSubmit={(event) => { event.preventDefault(); void ask() }} className="mt-5">
           <label htmlFor="workspace-question" className="sr-only">Ваш вопрос</label>

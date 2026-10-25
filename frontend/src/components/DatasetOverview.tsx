@@ -13,7 +13,7 @@ function fieldTitle(dataset: Dataset, field: DatasetField): string {
   return dataset.fieldSettings?.[field.name]?.title || field.comment || field.name
 }
 
-/** Показывает схему и пример строк перед вопросом к выбранному датасету. */
+/** Показывает схему и пример строк по запросу сотрудника. */
 export function DatasetOverview({ dataset }: { dataset: Dataset }) {
   const [detail, setDetail] = useState<DatasetDetail | null>(null)
   const [loading, setLoading] = useState(true)
@@ -41,7 +41,7 @@ export function DatasetOverview({ dataset }: { dataset: Dataset }) {
     <Card className="min-w-0 p-5 sm:p-7">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="text-[11px] font-semibold tracking-[0.14em] text-accent uppercase">02 · Обзор данных</p>
+          <p className="text-[11px] font-semibold tracking-[0.14em] text-accent uppercase">Обзор данных</p>
           <h2 className="mt-2 text-xl font-semibold tracking-tight">Что есть в датасете</h2>
           <p className="mt-1 text-sm text-fg-muted">{dataset.title} · {fields.length} полей</p>
         </div>
