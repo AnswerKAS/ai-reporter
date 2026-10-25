@@ -285,7 +285,8 @@ def test_понятный_денежный_показатель_выше_тех�
     assert variants[0]['title'].startswith('Выручка')
 
 
-def test_рекомендация_из_схемы_без_словаря(catalog):
+def test_recommendation_uses_dataset_schema_without_vocabulary(catalog):
+    """A dataset with no shared metrics yields a report with its own fields."""
     catalog.metrics = {}
     catalog.dimensions = {}
     catalog.datasets = {'sales': {
@@ -309,7 +310,8 @@ def test_рекомендация_из_схемы_без_словаря(catalog)
                for key in [*section['metrics'], *section['by']])
 
 
-def test_словарный_датасет_не_дублируется_полями_схемы(catalog):
+def test_vocabulary_metrics_do_not_duplicate_schema_fields(catalog):
+    """Existing shared metrics remain the source of recommendations for a dataset."""
     catalog.datasets = {'sales': {
         'slug': 'sales', 'title': 'Продажи', 'source': 'postgres', 'status': 'ok',
         'schema': [{'name': 'revenue', 'type': 'numeric'}],
@@ -320,7 +322,8 @@ def test_словарный_датасет_не_дублируется_поля�
     assert all(not item['definition'].get('fields') for item in variants)
 
 
-def test_рекомендация_для_датасета_без_числовых_колонок(catalog):
+def test_recommendation_counts_values_without_numeric_columns(catalog):
+    """A text only dataset still offers a clearly labeled count variant."""
     catalog.metrics = {}
     catalog.dimensions = {}
     catalog.datasets = {'cities': {

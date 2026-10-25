@@ -6,8 +6,9 @@ from app.datasets import answer
 from app.datasets.base import DatasetError
 
 
-def test_вопрос_считает_по_выбранному_датасету(client, dataset, sources, user_headers,
-                                               monkeypatch):
+def test_question_uses_selected_dataset(client, dataset, sources, user_headers,
+                                        monkeypatch):
+    """The answer uses only the selected dataset and explains its calculation."""
     monkeypatch.setattr(answer, 'propose', lambda *_: {
         'select': [{'field': 'revenue', 'agg': 'sum'}],
         'groupBy': [], 'filters': [{'field': 'city', 'op': 'eq', 'value': 'Москва'}],
@@ -28,7 +29,8 @@ def test_вопрос_считает_по_выбранному_датасету(
     assert params == {'q0': 'Москва'}
 
 
-def test_модель_не_может_выбрать_чужое_поле(dataset):
+def test_model_cannot_select_unknown_field(dataset):
+    """A proposed plan cannot read a column outside the dataset schema."""
     plan = {'select': [{'field': 'password', 'agg': 'max'}]}
     try:
         answer.compile_plan(dataset, plan)
@@ -38,7 +40,9 @@ def test_модель_не_может_выбрать_чужое_поле(dataset
         assert False, 'чужое поле было принято'
 
 
-def test_маршруты_подключений(client, admin_headers, user_headers, monkeypatch):
+def test_connection_routes_enforce_permissions(client, admin_headers, user_headers,
+                                               monkeypatch):
+    """Employees see safe connection metadata while testing requires admin access."""
     monkeypatch.setenv('DB_CONNECTIONS', json.dumps({
         'metabase': {'source': 'postgres', 'dsn': 'postgresql://u:p@db/app'},
         'sales': {'source': 'clickhouse', 'dsn': 'clickhouse://u:p@host/db', 'title': 'Продажи'},
@@ -51,7 +55,8 @@ def test_маршруты_подключений(client, admin_headers, user_hea
     assert client.post('/api/datasets/connections/sales/test', headers=admin_headers).json() == {'ok': True}
 
 
-def test_создание_по_ключу_и_смена_подключения(client, admin_headers, monkeypatch):
+def test_create_dataset_and_switch_connection_key(client, admin_headers, monkeypatch):
+    """Dataset creation and updates resolve a valid configured connection key."""
     monkeypatch.setenv('DB_CONNECTIONS', json.dumps({
         'metabase': {'source': 'postgres', 'dsn': 'postgresql://u:p@db/app'},
         'one': {'source': 'clickhouse', 'dsn': 'clickhouse://u:p@host1/db'},
@@ -70,9 +75,11 @@ def test_создание_по_ключу_и_смена_подключения(c
     assert changed.json()['dataset']['connectionKey'] == 'two'
 
 
-def test_уточнение_передаёт_историю(client, dataset, user_headers, monkeypatch):
+def test_followup_passes_question_history(client, dataset, user_headers, monkeypatch):
+    """A followup question passes prior turns to plan generation."""
     seen = []
     def propose(_, question, history):
+        """Record the question and history received by the planner."""
         seen.append((question, history))
         return {'select': [{'field': '*', 'agg': 'count'}], 'limit': 1}
     monkeypatch.setattr(answer, 'propose', propose)
@@ -84,8 +91,9 @@ def test_уточнение_передаёт_историю(client, dataset, use
     assert response.json()['explanation']['calculations'] == ['Количество строк']
 
 
-def test_объяснение_группировки_и_неполной_выдачи(client, dataset, sources,
-                                                user_headers, admin_headers, monkeypatch):
+def test_grouped_explanation_and_truncated_result(client, dataset, sources,
+                                                   user_headers, admin_headers, monkeypatch):
+    """A grouped answer explains sorting, truncation, and role specific SQL visibility."""
     sources.specs['sales'].result = (['c0', 'c1'], [
         ['Москва', 100], ['Тверь', 80], ['Казань', 60],
     ])
@@ -114,8 +122,9 @@ def test_объяснение_группировки_и_неполной_выд�
     assert admin['explanation'] == employee['explanation']
 
 
-def test_пустой_ответ_тоже_объясняется(client, dataset, sources, user_headers,
-                                     monkeypatch):
+def test_empty_answer_has_explanation(client, dataset, sources, user_headers,
+                                      monkeypatch):
+    """An empty result still carries the calculation and completeness details."""
     sources.specs['sales'].result = (['c0'], [])
     monkeypatch.setattr(answer, 'propose', lambda *_: {
         'select': [{'field': 'revenue', 'agg': 'sum'}], 'limit': 5,
@@ -128,12 +137,14 @@ def test_пустой_ответ_тоже_объясняется(client, dataset
     assert body['explanation']['hasMore'] is False
 
 
-def test_модель_видит_схему_и_предыдущий_план(dataset, monkeypatch):
+def test_model_receives_schema_and_previous_plan(dataset, monkeypatch):
+    """The model receives dataset fields and previous context for a followup."""
     from app.query import interpret
     prompts = []
     monkeypatch.setattr(interpret, '_openrouter_key', lambda: 'fake-key')
     monkeypatch.setattr(interpret, '_chat_models', lambda: ('test-model', None))
     def ask(prompt, *_args, **_kwargs):
+        """Capture the model prompt and return a fixed valid plan."""
         prompts.append(prompt)
         return '{"select":[{"field":"*","agg":"count"}]}'
     monkeypatch.setattr(interpret, '_ask', ask)
@@ -142,7 +153,8 @@ def test_модель_видит_схему_и_предыдущий_план(dat
     assert 'revenue' in prompts[0] and 'Сколько строк?' in prompts[0] and 'А вчера?' in prompts[0]
 
 
-def test_план_не_принимает_произвольную_операцию(dataset):
+def test_plan_rejects_unsupported_operations(dataset):
+    """Only allow listed aggregations, filter operators, and group fields."""
     for plan in ({'select': [{'field': 'revenue', 'agg': 'eval'}]},
                  {'select': [{'field': 'revenue', 'agg': 'sum'}],
                   'filters': [{'field': 'city', 'op': 'execute', 'value': 'x'}]},
@@ -155,7 +167,8 @@ def test_план_не_принимает_произвольную_операц�
             assert False, f'опасный план принят: {plan}'
 
 
-def test_csv_агрегация_по_всему_файлу(metabase, tmp_path, monkeypatch):
+def test_csv_aggregation_uses_full_file(metabase, tmp_path, monkeypatch):
+    """CSV aggregates use all matching rows while displayed rows honor the limit."""
     from app.datasets import registry
     path = tmp_path / 'data.csv'
     path.write_text('city,revenue\nМосква,10\nТверь,20\nМосква,5\n')

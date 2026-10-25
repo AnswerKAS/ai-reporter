@@ -881,6 +881,7 @@ function Builder() {
      pickedDatasets, title],
   )
 
+  /** Восстанавливает раскладку и поля отчёта до последнего предложения. */
   const revertProposal = useCallback(() => {
     const snapshot = before.current
     if (!snapshot) return
