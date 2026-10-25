@@ -72,6 +72,7 @@ COVERED = {
     ('DELETE', '/api/reports/{slug}/favorite'): 'test_api_reports.py',
     ('POST', '/api/reports/parse'): 'test_api_reports.py',
     ('POST', '/api/reports/chat'): 'test_interpret_chat.py',
+    ('POST', '/api/reports/chat/stream'): 'test_agent_conversations.py',
     ('GET', '/api/reports/chat/history'): 'test_agent_conversations.py',
     ('POST', '/api/reports/recommendations'): 'test_interpret_chat.py',
     ('POST', '/api/reports/preview'): 'test_api_reports.py',

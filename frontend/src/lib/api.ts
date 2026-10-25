@@ -829,28 +829,6 @@ export interface ChatMessage {
   text: string
 }
 
-export interface ReportRecommendation {
-  title: string
-  datasetTitle: string
-  description: string
-  definition: ReportDefinition
-}
-
-/** Готовые варианты из полей датасетов и словаря до первой реплики. */
-export async function recommendReports(
-  context: { fields?: ReportField[]; computed?: ComputedField[]; datasets?: string[] } = {},
-): Promise<{ recommendations: ReportRecommendation[] }> {
-  return request('/reports/recommendations', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      fields: context.fields ?? [],
-      computed: context.computed ?? [],
-      datasets: context.datasets ?? [],
-    }),
-  })
-}
-
 export interface ChatAnswer {
   /** Ответ собеседника по-русски — его и показываем в переписке. */
   reply: string
@@ -859,9 +837,7 @@ export interface ChatAnswer {
   /** Название, предложенное моделью, — подставляется в пустое поле. */
   title?: string | null
   notes: ParseNote[]
-  /** Готовые варианты из словаря, если описание не назвало показатель. */
-  recommendations?: ReportRecommendation[]
-  source?: 'llm' | 'parser'
+  source?: 'llm' | 'parser' | 'agent'
   /** Какая модель ответила: у диалога и разбора они разные. */
   model?: string
   conversationId?: string
@@ -901,6 +877,61 @@ export async function chatReport(
       target: context.target ?? 'new',
     }),
   })
+}
+
+export interface ReportStreamEvent {
+  type: 'status' | 'delta' | 'done' | 'error'
+  text?: string
+  message?: string
+  conversationId?: string
+  result?: ChatAnswer
+}
+
+/** Stream visual report construction and its verified proposal. */
+export async function streamReportChat(
+  messages: ChatMessage[],
+  context: {
+    fields?: ReportField[]
+    computed?: ComputedField[]
+    datasets?: string[]
+    definition?: ReportDefinition | null
+    conversationId?: string | null
+    target?: string
+  },
+  onEvent: (event: ReportStreamEvent) => void,
+): Promise<void> {
+  const response = await fetch(`${BASE}/reports/chat/stream`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}),
+    },
+    body: JSON.stringify({ messages, ...context }),
+  })
+  if (response.status === 401) {
+    setToken(null)
+    onUnauthorized?.()
+    throw new ApiError(401, 'требуется авторизация')
+  }
+  if (!response.ok || !response.body) {
+    let detail = `HTTP ${response.status}`
+    try { detail = describeDetail((await response.json() as { detail?: unknown }).detail) } catch { /* no JSON body */ }
+    throw new ApiError(response.status, detail)
+  }
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let pending = ''
+  while (true) {
+    const { value, done } = await reader.read()
+    pending += decoder.decode(value, { stream: !done })
+    const lines = pending.split('\n')
+    pending = lines.pop() ?? ''
+    for (const line of lines) {
+      if (line.trim()) onEvent(JSON.parse(line) as ReportStreamEvent)
+    }
+    if (done) break
+  }
+  if (pending.trim()) onEvent(JSON.parse(pending) as ReportStreamEvent)
 }
 
 /** Разбор описания. Поля и формулы отчёта передаются вместе с текстом:

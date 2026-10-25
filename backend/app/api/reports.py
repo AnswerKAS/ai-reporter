@@ -6,15 +6,19 @@
 """
 
 import uuid
+import json
+import queue
+import threading
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi.responses import StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
 from ..core import database as db
 from ..core.security import get_current_user
 from ..core import report_access
 from ..schemas.report import FiltersPatch, ReportMeta, ReportUpdate
-from ..datasets.base import DatasetError
+from ..datasets.base import DatasetError, sanitize_error
 from ..query import builder as query_builder
 from ..query import interpret
 from ..agent import store as agent_store
@@ -171,6 +175,56 @@ def chat_report(payload: dict, user: dict = Depends(get_current_user)) -> dict:
         raise HTTPException(422, str(exc))
     finally:
         catalog.close()
+
+
+@router.post('/reports/chat/stream')
+def stream_report_chat(payload: dict, user: dict = Depends(get_current_user)) -> StreamingResponse:
+    """Stream LangGraph report progress and save the resulting visual proposal."""
+    messages = payload.get('messages') or []
+    latest = next((item for item in reversed(messages)
+                   if item.get('role') == 'user' and str(item.get('text') or '').strip()), None)
+    if latest is None:
+        raise HTTPException(422, 'напишите, какой отчёт нужен — обычными словами')
+    target = str(payload.get('target') or 'new')[:120]
+    try:
+        conversation = agent_store.conversation(
+            user['id'], 'report', target, payload.get('conversationId'), create=True)
+    except DatasetError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    stored = agent_store.messages(conversation['id'])
+    context = ([{'role': item['role'], 'text': item['text']} for item in stored]
+               + [latest]) if stored else messages
+    events: queue.Queue[dict | None] = queue.Queue()
+
+    def worker() -> None:
+        """Run report construction away from the response generator."""
+        catalog = query_builder.Catalog()
+        try:
+            from ..agent.runner import chat_report as agent_chat_report
+            result = agent_chat_report(
+                context, catalog, payload.get('fields') or [],
+                payload.get('computed') or [], payload.get('datasets') or [],
+                payload.get('definition') or None, on_event=events.put)
+            agent_store.save_exchange(conversation['id'], latest['text'], result['reply'], result)
+            events.put({'type': 'done', 'conversationId': conversation['id'], 'result': result})
+        except Exception as exc:
+            events.put({'type': 'error', 'message': sanitize_error(str(exc))})
+        finally:
+            catalog.close()
+            events.put(None)
+
+    def stream():
+        """Yield newline-delimited status, answer and completion events."""
+        threading.Thread(target=worker, daemon=True).start()
+        while True:
+            event = events.get()
+            if event is None:
+                break
+            yield json.dumps(event, ensure_ascii=False, default=str) + '\n'
+
+    return StreamingResponse(stream(), media_type='application/x-ndjson',
+                             headers={'Cache-Control': 'no-cache',
+                                      'X-Accel-Buffering': 'no'})
 
 
 @router.get('/reports/chat/history')

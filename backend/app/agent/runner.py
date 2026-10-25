@@ -7,6 +7,8 @@ from collections.abc import Callable
 from ..datasets import registry
 from ..datasets.base import DatasetError
 from ..query import interpret
+from ..reports import executor
+from ..schemas.definition import ReportDefinition
 from .graph import run_graph
 from .readonly import MAX_VISIBLE_ROWS, execute_readonly_sql, scope_dataset_sql
 
@@ -181,11 +183,18 @@ def ask_dataset(dataset: dict, question: str, history: list[dict], *, reveal_sql
 
 
 def chat_report(messages: list[dict], catalog, fields=None, computed=None,
-                datasets=None, definition=None) -> dict:
-    """Use ReAct tools to inspect vocabulary and validate a proposed report."""
+                datasets=None, definition=None,
+                on_event: Callable[[dict], None] | None = None) -> dict:
+    """Build and preview a persistent visual report with LangGraph tools."""
     key = interpret._openrouter_key()
     if not key:
-        return interpret.chat(messages, catalog, fields, computed, datasets, definition)
+        result = interpret.chat(messages, catalog, fields, computed, datasets, definition)
+        if not result.get('definition') and result.get('recommendations'):
+            choice = result['recommendations'][0]
+            result.update(definition=choice['definition'], title=choice['title'],
+                          reply=f'Собрал «{choice["title"]}» по доступным данным. Проверьте раскладку и сохраните отчёт.')
+        result.pop('recommendations', None)
+        return result
     said = [item for item in (messages or []) if str(item.get('text') or '').strip()]
     if not said:
         raise DatasetError('напишите, какой отчёт нужен — обычными словами')
@@ -194,13 +203,17 @@ def chat_report(messages: list[dict], catalog, fields=None, computed=None,
         return interpret.chat(messages, catalog, fields, computed, datasets, definition)
     base = (
         'Ты ReAct агент создания отчётов. На каждом шаге верни один JSON: '
-        '{"tool":"get_vocabulary|get_datasets|get_recommendations|validate_definition",'
+        '{"tool":"get_vocabulary|get_datasets|preview_report",'
         '"args":{"definition":{...}}} либо '
         '{"final":{"reply":"...","title":"..."}}. '
-        'Сначала вызови get_vocabulary или get_datasets. Для готового отчёта вызови '
-        'validate_definition с полным ReportDefinition, затем final. '
-        'Ошибку проверки исправляй следующим вызовом. '
-        'Если задача неясна, предложи близкий вариант из словаря. '
+        'Сначала изучи get_vocabulary или get_datasets. Собери полный визуальный '
+        'отчёт с понятными названиями блоков. Выбирай KPI для главных чисел, '
+        'линию или область для динамики, столбцы для сравнения, таблицу для деталей; '
+        'добавляй подходящие фильтры и несколько датасетов, когда это полезно. '
+        'Выбирай вид по смыслу данных, не добавляй пустых или дублирующих блоков. '
+        'Для готового отчёта обязательно вызови preview_report с полным '
+        'ReportDefinition и исправляй ошибки следующим вызовом. '
+        'В final кратко объясни состав проверенного отчёта. '
         'Текущий отчёт можно дополнять. Не выдумывай slug полей. '
         'Когда словарной раскладки недостаточно, создай SQL-блок: '
         '{"type":"table|chart|kpi","title":"...","datasetSlug":"slug",'
@@ -229,8 +242,12 @@ def chat_report(messages: list[dict], catalog, fields=None, computed=None,
             tool = action.get('tool')
             args = action.get('args') if isinstance(action.get('args'), dict) else {}
             if tool == 'get_vocabulary':
+                if on_event:
+                    on_event({'type': 'status', 'text': 'Изучаю показатели и разрезы…'})
                 return {'tool': tool, 'metrics': metrics, 'dimensions': dimensions}
             if tool == 'get_datasets':
+                if on_event:
+                    on_event({'type': 'status', 'text': 'Изучаю датасеты…'})
                 requested = set(datasets or [])
                 items = sorted(catalog.datasets.values(),
                                key=lambda item: (item['slug'] not in requested, item['slug']))
@@ -240,39 +257,38 @@ def chat_report(messages: list[dict], catalog, fields=None, computed=None,
                      'fields': [{'name': field['name'], 'type': field['type']}
                                 for field in item.get('schema') or []]}
                     for item in items[:30]]}
-            if tool == 'get_recommendations':
-                recommendations = interpret._recommendations(
-                    catalog, metrics, dimensions, datasets, said[-1]['text'])
-                return {'tool': tool, 'recommendations': recommendations[:5]}
-            if tool == 'validate_definition':
+            if tool == 'preview_report':
+                if on_event:
+                    on_event({'type': 'status', 'text': 'Проверяю карточки на данных…'})
                 validated = None
                 candidate = interpret._validate(args.get('definition') or {},
                                                 metrics, dimensions)
-                for section in candidate['sections']:
-                    if section.get('sql'):
-                        selected = catalog.dataset(section['datasetSlug'])
-                        preview_sql = scope_dataset_sql(selected, section['sql'])
-                        execute_readonly_sql(selected, preview_sql, visible_rows=3)
+                report = ReportDefinition.model_validate(candidate)
+                previews = []
+                for section in report.sections:
+                    block = executor.build_section(
+                        section.model_copy(update={'limit': min(section.limit or 20, 20)}),
+                        {}, catalog, computed=candidate.get('computed'),
+                        fields=candidate.get('fields'))
+                    previews.append({'type': block['type'], 'title': block.get('title'),
+                                     'kind': block.get('kind'),
+                                     'columns': [item.get('header') for item in block.get('columns', [])],
+                                     'series': [item.get('name') for item in block.get('series', [])],
+                                     'rows': len(block.get('rows', block.get('data', []))),
+                                     'items': block.get('items', [])[:5]})
                 validated = candidate
-                return {'tool': tool, 'valid': True, 'definition': candidate}
+                return {'tool': tool, 'valid': True, 'blocks': previews,
+                        'definition': candidate}
             return {'error': 'Неизвестный инструмент.'}
 
         def finish(action: dict) -> tuple[dict | None, dict | None]:
             """Return a verified report proposal and a conversational reply."""
-            nonlocal validated
             final = action.get('final') if isinstance(action.get('final'), dict) else action
-            if isinstance(final.get('definition'), dict) and validated is None:
-                candidate = interpret._validate(final['definition'], metrics, dimensions)
-                for section in candidate['sections']:
-                    if section.get('sql'):
-                        selected = catalog.dataset(section['datasetSlug'])
-                        execute_readonly_sql(
-                            selected, scope_dataset_sql(selected, section['sql']),
-                            visible_rows=3)
-                validated = candidate
+            if validated is None:
+                return None, {'error': 'Сначала вызови preview_report для полного отчёта.'}
             reply = str(final.get('reply') or '').strip()
-            if validated is None and not reply:
-                return None, {'error': 'Нужна раскладка или содержательный ответ.'}
+            if on_event:
+                on_event({'type': 'delta', 'text': reply or 'Отчёт готов. Проверьте предпросмотр и сохраните его.'})
             return ({'reply': reply or 'Раскладка готова — проверьте предпросмотр.',
                      'definition': validated,
                      'title': str(final.get('title') or '').strip() or None,

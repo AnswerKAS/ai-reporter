@@ -23,7 +23,6 @@ export function WorkspacePage() {
   const [sourcesOpen, setSourcesOpen] = useState(false)
   const mode: Mode = reportSlug || params.get('mode') === 'report' ? 'report' : 'question'
   const [reportOpened, setReportOpened] = useState(mode === 'report')
-  const [suggestedPrompt, setSuggestedPrompt] = useState<{ id: number; text: string } | null>(null)
   const selectedSlug = params.get('dataset') || ''
   const selected = datasets.find((dataset) => dataset.slug === selectedSlug) ?? null
 
@@ -66,17 +65,6 @@ export function WorkspacePage() {
     const updated = new URLSearchParams(params)
     updated.set('dataset', slug)
     setParams(updated)
-  }
-
-  /** Открывает сборку с текстом вопроса, готовым к отправке в диалог. */
-  function createFromQuestion(question: string): void {
-    setSuggestedPrompt((previous) => ({ id: (previous?.id ?? 0) + 1, text: question }))
-    setReportOpened(true)
-    if (reportSlug) {
-      navigate(`/workspace?dataset=${encodeURIComponent(selectedSlug)}&mode=report`)
-    } else {
-      selectMode('report')
-    }
   }
 
   return (
@@ -153,8 +141,7 @@ export function WorkspacePage() {
         <div className="min-w-0">
           <div className={mode === 'question' ? '' : 'hidden'}>
             {selected ? (
-              <DatasetQuestionPanel key={selected.slug} dataset={selected} isAdmin={isAdmin}
-                onCreateReport={createFromQuestion} />
+              <DatasetQuestionPanel key={selected.slug} dataset={selected} />
             ) : (
               <EmptyState title="Выберите источник" description="После выбора датасета здесь появится поле для вопроса и история ответов." />
             )}
@@ -162,7 +149,7 @@ export function WorkspacePage() {
 
           {(mode === 'report' || reportOpened) && (
             <div className={mode === 'report' ? '' : 'hidden'}>
-              <BuilderPage embedded suggestedPrompt={suggestedPrompt} />
+              <BuilderPage embedded />
             </div>
           )}
         </div>

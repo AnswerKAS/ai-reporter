@@ -11,6 +11,8 @@ import pytest
 
 from app.datasets.base import DatasetError
 from app.query import interpret
+from app.agent import runner
+from app.reports import executor
 
 
 class Catalog:
@@ -426,13 +428,19 @@ def test_метод_без_токена_401(client):
     assert client.post('/api/reports/chat', json={'messages': []}).status_code == 401
 
 
-def test_метод_отдаёт_реплику_и_определение(client, model, user_headers, model_answer):
-    model_answer['raw'] = json.dumps({
-        'reply': 'Собрал выручку по городам.',
-        'title': 'Продажи по городам',
-        'definition': {'sections': [{'type': 'table', 'metrics': ['revenue'], 'by': ['city']}],
-                       'filters': [{'dimension': 'city', 'kind': 'select'}]},
-    }, ensure_ascii=False)
+def test_report_chat_returns_verified_definition(client, model, user_headers, monkeypatch):
+    """The report endpoint returns a layout after the visual preview tool."""
+    definition = {'sections': [{'type': 'table', 'metrics': ['revenue'], 'by': ['city']}],
+                  'filters': [{'dimension': 'city', 'kind': 'select'}]}
+    actions = iter([{'tool': 'get_vocabulary'},
+                    {'tool': 'preview_report', 'args': {'definition': definition}},
+                    {'final': {'reply': 'Собрал выручку по городам.',
+                               'title': 'Продажи по городам'}}])
+    monkeypatch.setattr(interpret, '_openrouter_key', lambda: 'fake')
+    monkeypatch.setattr(interpret, '_chat_models', lambda: ('fake-model', None))
+    monkeypatch.setattr(runner, '_invoke', lambda *_: next(actions))
+    monkeypatch.setattr(executor, 'build_section', lambda *_args, **_kwargs: {
+        'type': 'table', 'title': 'Продажи', 'columns': [], 'rows': []})
 
     body = client.post('/api/reports/chat',
                        json={'messages': [{'role': 'user', 'text': 'выручка по городам'}]},
@@ -450,8 +458,9 @@ def test_метод_на_пустой_переписке_422(client, model, user
     assert 'обычными словами' in answer.json()['detail']
 
 
-def test_метод_без_модели_возвращает_варианты(client, model, user_headers,
-                                             monkeypatch):
+def test_report_chat_without_model_chooses_visual_layout(client, model, user_headers,
+                                                          monkeypatch):
+    """The parser picks a concrete layout without making the user choose a card."""
     monkeypatch.setattr(interpret, '_openrouter_key', lambda: None)
 
     response = client.post('/api/reports/chat',
@@ -461,9 +470,8 @@ def test_метод_без_модели_возвращает_варианты(cl
     assert response.status_code == 200
     body = response.json()
     assert body['source'] == 'parser'
-    assert body['definition'] is None
-    assert body['recommendations']
-    assert body['recommendations'][0]['definition']['sections']
+    assert body['definition']['sections']
+    assert 'recommendations' not in body
 
 
 def test_рекомендации_доступны_без_реплики_и_модели(client, model, user_headers,

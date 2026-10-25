@@ -5,10 +5,8 @@ import { DatasetOverview } from './DatasetOverview'
 import { Alert, Button, Table, Td, Textarea, Th, Tr } from './ui'
 
 /** Persistent dataset chat with streamed agent progress and Enter to send. */
-export function DatasetQuestionPanel({ dataset, onCreateReport }: {
+export function DatasetQuestionPanel({ dataset }: {
   dataset: Dataset
-  isAdmin: boolean
-  onCreateReport: (question: string) => void
 }) {
   const [question, setQuestion] = useState('')
   const [turns, setTurns] = useState<DatasetQuestionTurn[]>([])
@@ -131,7 +129,6 @@ export function DatasetQuestionPanel({ dataset, onCreateReport }: {
                   </div>
                 </details>
                 <div className="flex flex-wrap items-center gap-2">
-                  <Button size="sm" variant="primary" onClick={() => onCreateReport(turn.question)}>Собрать отчёт</Button>
                   {turn.sql && <details className="min-w-0 max-w-full rounded-control border border-line px-3 py-2 text-xs">
                     <summary className="cursor-pointer">Показать SQL</summary>
                     <pre className="mt-2 max-w-full overflow-x-auto font-mono text-xs text-fg-muted">{turn.sql}</pre>

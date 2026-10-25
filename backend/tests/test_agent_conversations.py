@@ -70,6 +70,27 @@ def test_report_chat_restores_server_context(client, model, user_headers, monkey
         'Продажи', 'Готово', 'Добавь график']
 
 
+def test_report_stream_saves_visual_proposal(client, model, user_headers, monkeypatch):
+    """Streamed report construction retains its definition and conversation."""
+    def fake_chat(messages, *_args, on_event):
+        """Emit progress and a verified visual layout for the route."""
+        on_event({'type': 'status', 'text': 'Проверяю карточки…'})
+        on_event({'type': 'delta', 'text': 'Отчёт готов'})
+        return {'reply': 'Отчёт готов', 'definition': {'sections': [
+            {'type': 'kpi', 'title': 'Продажи', 'metrics': ['revenue']}]},
+                'title': 'Продажи', 'notes': [], 'source': 'agent', 'model': 'fake'}
+
+    monkeypatch.setattr(runner, 'chat_report', fake_chat)
+    response = client.post('/api/reports/chat/stream', headers=user_headers,
+                           json={'messages': [{'role': 'user', 'text': 'Продажи'}]})
+    events = [json.loads(line) for line in response.text.splitlines()]
+
+    assert [event['type'] for event in events] == ['status', 'delta', 'done']
+    assert events[-1]['result']['definition']['sections'][0]['title'] == 'Продажи'
+    saved = client.get('/api/reports/chat/history', headers=user_headers).json()
+    assert [message['text'] for message in saved['messages']] == ['Продажи', 'Отчёт готов']
+
+
 def test_dataset_stream_rejects_punctuation_only(client, dataset, user_headers):
     """A punctuation-only turn cannot trigger an unrelated data query."""
     response = client.post('/api/datasets/sales/ask/stream', headers=user_headers,

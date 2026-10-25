@@ -56,11 +56,11 @@ def test_dataset_agent_executes_window_query(dataset, sources, monkeypatch):
     assert response['explanation']['calculations'] == ['Оконная сумма выручки по городу']
 
 
-def test_report_agent_validates_sql_section(dataset, monkeypatch):
-    """A report SQL block is checked and queried before it is proposed."""
+def test_report_agent_previews_sql_section(dataset, monkeypatch):
+    """A SQL table is rendered through the report executor before proposal."""
     actions = iter([
         {'tool': 'get_datasets'},
-        {'tool': 'validate_definition', 'args': {'definition': {'sections': [{
+        {'tool': 'preview_report', 'args': {'definition': {'sections': [{
             'type': 'table', 'datasetSlug': 'sales', 'sql':
                 'SELECT city, ROW_NUMBER() OVER (ORDER BY revenue) AS rank FROM dataset',
         }]}}},
@@ -84,7 +84,7 @@ def test_report_agent_validates_sql_section(dataset, monkeypatch):
     monkeypatch.setattr(interpret, '_openrouter_key', lambda: 'fake')
     monkeypatch.setattr(interpret, '_chat_models', lambda: ('fake-model', None))
     monkeypatch.setattr(runner, '_invoke', lambda *_: next(actions))
-    monkeypatch.setattr(runner, 'execute_readonly_sql', lambda *_args, **_kwargs: (
+    monkeypatch.setattr(executor, 'execute_readonly_sql', lambda *_args, **_kwargs: (
         ['city', 'rank'], [['Москва', 1]], False))
 
     response = runner.chat_report([{'role': 'user', 'text': 'Рейтинг городов'}], Catalog(dataset))
@@ -92,6 +92,75 @@ def test_report_agent_validates_sql_section(dataset, monkeypatch):
     assert response['source'] == 'agent'
     assert response['definition']['sections'][0]['datasetSlug'] == 'sales'
     assert 'ROW_NUMBER()' in response['definition']['sections'][0]['sql']
+
+
+def test_report_agent_previews_mixed_visual_blocks(dataset, monkeypatch):
+    """KPI, line chart and table are checked before the full layout is returned."""
+    sections = [
+        {'type': 'kpi', 'title': 'Продажи', 'datasetSlug': 'sales',
+         'sql': 'SELECT count(*) AS total FROM dataset'},
+        {'type': 'chart', 'kind': 'line', 'title': 'Динамика', 'datasetSlug': 'sales',
+         'sql': 'SELECT day, sum(revenue) AS total FROM dataset GROUP BY day'},
+        {'type': 'table', 'title': 'Детали', 'datasetSlug': 'sales',
+         'sql': 'SELECT city, revenue FROM dataset'},
+    ]
+    actions = iter([{'tool': 'get_datasets'},
+                    {'tool': 'preview_report', 'args': {'definition': {'sections': sections}}},
+                    {'final': {'reply': 'Готово', 'title': 'Продажи'}}])
+
+    class Catalog:
+        """Expose the selected dataset to the visual report agent."""
+        metrics = {}
+        dimensions = {}
+
+        def __init__(self):
+            """Store the selected registered dataset."""
+            self.datasets = {'sales': dataset}
+
+        def dataset(self, slug):
+            """Resolve the selected dataset for a report section."""
+            return self.datasets[slug]
+
+    previewed = []
+
+    def fake_build(section, *_args, **_kwargs):
+        """Record that each visual section was rendered."""
+        previewed.append(section.type)
+        return {'type': section.type, 'title': section.title,
+                'items': [], 'rows': [], 'data': [], 'columns': [], 'series': []}
+
+    monkeypatch.setattr(interpret, '_openrouter_key', lambda: 'fake')
+    monkeypatch.setattr(interpret, '_chat_models', lambda: ('fake-model', None))
+    monkeypatch.setattr(runner, '_invoke', lambda *_: next(actions))
+    monkeypatch.setattr(executor, 'build_section', fake_build)
+    result = runner.chat_report([{'role': 'user', 'text': 'Продажи'}], Catalog())
+
+    assert previewed == ['kpi', 'chart', 'table']
+    assert [section['title'] for section in result['definition']['sections']] == [
+        'Продажи', 'Динамика', 'Детали']
+
+
+def test_report_agent_rejects_unpreviewed_definition(dataset, monkeypatch):
+    """A model final action cannot bypass live card rendering."""
+    actions = iter([{'final': {'reply': 'Готово', 'definition': {'sections': [
+        {'type': 'kpi', 'datasetSlug': 'sales', 'sql': 'SELECT count(*) FROM dataset'}]}}},
+                    {'final': {'reply': 'Готово'}}])
+
+    class Catalog:
+        """Expose one dataset while testing the finalization guard."""
+        metrics = {}
+        dimensions = {}
+
+        def __init__(self):
+            """Store one selected dataset."""
+            self.datasets = {'sales': dataset}
+
+    monkeypatch.setattr(interpret, '_openrouter_key', lambda: 'fake')
+    monkeypatch.setattr(interpret, '_chat_models', lambda: ('fake-model', None))
+    monkeypatch.setattr(runner, '_invoke', lambda *_: next(actions))
+
+    with pytest.raises(DatasetError, match='агент не завершил'):
+        runner.chat_report([{'role': 'user', 'text': 'Продажи'}], Catalog())
 
 
 def test_sql_report_section_renders_as_table(dataset, monkeypatch):
