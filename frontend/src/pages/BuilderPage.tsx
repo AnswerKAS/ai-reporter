@@ -143,6 +143,7 @@ interface Snapshot {
   sections: SectionDefinition[]
   filters: FilterDefinition[]
   computed: ComputedField[]
+  ownFields: ReportField[]
   pickedMetrics: string[]
   pickedDimensions: string[]
   pickedDatasets: string[]
@@ -802,6 +803,13 @@ function Builder() {
    */
   const applyDefinition = useCallback(
     (parsed: ReportDefinition) => {
+      const proposedFields = parsed.fields ?? []
+      if (proposedFields.length) {
+        setOwnFields((prev) => [
+          ...prev,
+          ...proposedFields.filter((field) => !prev.some((old) => old.key === field.key)),
+        ])
+      }
       const usedM = new Set<string>()
       const usedD = new Set<string>()
       for (const s of parsed.sections) {
@@ -820,10 +828,12 @@ function Builder() {
         const next = new Set(prev)
         usedM.forEach((m) => {
           const d = metricsBySlug.get(m)?.datasetSlug ?? ownByKey.get(m)?.datasetSlug
+            ?? proposedFields.find((field) => field.key === m)?.datasetSlug
           if (d) next.add(d)
         })
         usedD.forEach((b) => {
           const d = dimensionsBySlug.get(b)?.datasetSlug ?? ownByKey.get(b)?.datasetSlug
+            ?? proposedFields.find((field) => field.key === b)?.datasetSlug
           if (d) next.add(d)
         })
         return [...next]
@@ -855,6 +865,7 @@ function Builder() {
         sections,
         filters,
         computed,
+        ownFields,
         pickedMetrics,
         pickedDimensions,
         pickedDatasets,
@@ -866,7 +877,7 @@ function Builder() {
       // название предлагает модель, но своё автор уже не потеряет
       if (proposed && !title.trim()) setTitle(proposed)
     },
-    [applyDefinition, sections, filters, computed, pickedMetrics, pickedDimensions,
+    [applyDefinition, sections, filters, computed, ownFields, pickedMetrics, pickedDimensions,
      pickedDatasets, title],
   )
 
@@ -876,6 +887,7 @@ function Builder() {
     setSections(snapshot.sections)
     setFilters(snapshot.filters)
     setComputed(snapshot.computed)
+    setOwnFields(snapshot.ownFields)
     setPickedMetrics(snapshot.pickedMetrics)
     setPickedDimensions(snapshot.pickedDimensions)
     setPickedDatasets(snapshot.pickedDatasets)

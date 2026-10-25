@@ -22,6 +22,7 @@ from pathlib import Path
 
 from ..core import config as _config  # noqa: F401  — грузит .env до чтения переменных
 from ..datasets.base import DatasetError
+from ..semantic.suggest import suggest_for_dataset
 from . import phrase
 
 # Разбор — одно обращение к модели, а не диалог, поэтому таймаут человеческий.
@@ -701,6 +702,61 @@ def _history(messages, limit: int) -> str:
     return '\n'.join(lines)
 
 
+def _schema_recommendations(catalog, metrics: dict, dimensions: dict,
+                            datasets) -> tuple[dict, dict]:
+    """Поля подготовленных датасетов для вариантов без общего словаря.
+
+    Это только кандидаты для рекомендации: в общий словарь они не пишутся.
+    Выбранные поля вкладываются в определение конкретного отчёта.
+    """
+    extra_metrics, extra_dimensions = {}, {}
+    taken = set(metrics) | set(dimensions)
+    chosen = set(datasets or [])
+    # При пустом выборе достаточно первых нескольких датасетов для стартовых
+    # вариантов; на инсталляции с тысячами источников не строим черновик всех.
+    sources = [d for d in getattr(catalog, 'datasets', {}).values()
+               if not chosen or d.get('slug') in chosen]
+    if not chosen:
+        sources = sources[:12]
+    for dataset in sources:
+        slug = dataset.get('slug')
+        if not slug or dataset.get('status') == 'error' or not dataset.get('schema'):
+            continue
+        if any(m.get('dataset_slug') == slug and m.get('status') != 'error'
+               for m in metrics.values()):
+            continue
+        draft = suggest_for_dataset(dataset, metrics=[], dimensions=[])
+        for item in draft['dimensions']:
+            key = f"field_{item['slug']}"
+            if key in taken:
+                continue
+            taken.add(key)
+            report_field = {'key': key, 'title': item['title'],
+                            'datasetSlug': slug, 'field': item['column'],
+                            'role': 'dimension', 'type': item['type'],
+                            'format': 'number'}
+            entry = {'slug': key, 'title': item['title'],
+                     'dataset_slug': slug, 'type': item['type'],
+                     '_report_field': report_field}
+            extra_dimensions[key] = entry
+        for item in draft['metrics']:
+            if not item.get('selected') or not item.get('column'):
+                continue
+            key = f"field_{item['slug']}"
+            if key in taken:
+                continue
+            taken.add(key)
+            report_field = {'key': key, 'title': item['title'],
+                            'datasetSlug': slug, 'field': item['column'],
+                            'role': 'metric', 'agg': 'sum', 'type': 'number',
+                            'format': item['format']}
+            extra_metrics[key] = {'slug': key, 'title': item['title'],
+                                  'dataset_slug': slug, 'status': 'ok',
+                                  'format': item['format'],
+                                  '_report_field': report_field}
+    return extra_metrics, extra_dimensions
+
+
 def _recommendations(catalog, metrics: dict, dimensions: dict,
                      datasets, request: str) -> list[dict]:
     """Готовые варианты из рабочих полей; источник данных не опрашивается."""
@@ -714,6 +770,10 @@ def _recommendations(catalog, metrics: dict, dimensions: dict,
         return sum(any(phrase._similar(word, candidate) >= 0.9
                        for candidate in phrase._tokens(title)) for word in words)
 
+    schema_metrics, schema_dimensions = _schema_recommendations(
+        catalog, metrics, dimensions, datasets)
+    metrics = {**metrics, **schema_metrics}
+    dimensions = {**dimensions, **schema_dimensions}
     candidates = []
     for metric in metrics.values():
         if not isinstance(metric.get('slug'), str) or not metric['slug']:
@@ -783,6 +843,10 @@ def _recommendations(catalog, metrics: dict, dimensions: dict,
              'kind': 'daterange' if dim.get('type') == 'date' else 'select'}
             for dim in used_dimensions]}
         definition = _validate(raw, metrics, dimensions)
+        report_fields = [entry['_report_field'] for entry in [metric, *used_dimensions]
+                         if '_report_field' in entry]
+        if report_fields:
+            definition['fields'] = report_fields
         result.append({'title': f"{metric['title']} · {dataset_title}",
                        'datasetTitle': dataset_title,
                        'description': ', '.join(details).capitalize(),
@@ -792,12 +856,13 @@ def _recommendations(catalog, metrics: dict, dimensions: dict,
 
 def recommend(catalog, fields=None, computed=None, datasets=None,
               request: str = '') -> dict:
-    """Варианты отчёта по словарю, доступные ещё до первой реплики."""
+    """Варианты по словарю и схеме датасетов до первой реплики."""
     metrics, dimensions = vocabulary_of(catalog, fields, computed)
-    if not metrics:
-        raise DatasetError('в словаре нет ни одного показателя для рекомендаций')
-    return {'recommendations': _recommendations(catalog, metrics, dimensions,
-                                                datasets, request)}
+    recommendations = _recommendations(catalog, metrics, dimensions,
+                                        datasets, request)
+    if not recommendations:
+        raise DatasetError('в выбранных датасетах нет числовых полей для рекомендаций')
+    return {'recommendations': recommendations}
 
 
 def _chat_without_model(said, catalog, fields, computed, datasets,

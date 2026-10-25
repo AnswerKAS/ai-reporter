@@ -764,7 +764,7 @@ export interface ReportRecommendation {
   definition: ReportDefinition
 }
 
-/** Готовые варианты из словаря до первой реплики. */
+/** Готовые варианты из полей датасетов и словаря до первой реплики. */
 export async function recommendReports(
   context: { fields?: ReportField[]; computed?: ComputedField[]; datasets?: string[] } = {},
 ): Promise<{ recommendations: ReportRecommendation[] }> {

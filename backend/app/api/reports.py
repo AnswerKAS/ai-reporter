@@ -158,7 +158,7 @@ def chat_report(payload: dict, user: dict = Depends(get_current_user)) -> dict:
 
 @router.post('/reports/recommendations')
 def report_recommendations(payload: dict, user: dict = Depends(get_current_user)) -> dict:
-    """Варианты отчёта по словарю без обращения к модели или источникам."""
+    """Варианты по схеме датасетов и словарю, без модели и запросов к источникам."""
     catalog = query_builder.Catalog()
     try:
         return interpret.recommend(catalog, payload.get('fields') or [],

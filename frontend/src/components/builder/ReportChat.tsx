@@ -275,7 +275,7 @@ export function ReportChat({
             )}
 
             {recommendationsBusy && (
-              <span className="text-sm text-fg-muted">Подбираю варианты из словаря…</span>
+              <span className="text-sm text-fg-muted">Подбираю варианты по доступным данным…</span>
             )}
 
             {recommendations.length > 0 && (

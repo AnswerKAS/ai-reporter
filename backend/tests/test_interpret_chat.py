@@ -285,6 +285,41 @@ def test_понятный_денежный_показатель_выше_тех�
     assert variants[0]['title'].startswith('Выручка')
 
 
+def test_рекомендация_из_схемы_без_словаря(catalog):
+    catalog.metrics = {}
+    catalog.dimensions = {}
+    catalog.datasets = {'sales': {
+        'slug': 'sales', 'title': 'Продажи', 'source': 'postgres', 'status': 'ok',
+        'schema': [
+            {'name': 'revenue', 'type': 'numeric', 'comment': 'Выручка'},
+            {'name': 'sale_date', 'type': 'date', 'comment': 'Дата продажи'},
+            {'name': 'city', 'type': 'text', 'comment': 'Город'},
+        ],
+    }}
+
+    variants = interpret.recommend(catalog, datasets=['sales'])['recommendations']
+
+    assert variants
+    definition = variants[0]['definition']
+    assert definition['sections'][0]['type'] == 'kpi'
+    assert {field['role'] for field in definition['fields']} == {'metric', 'dimension'}
+    assert {field['field'] for field in definition['fields']} == {'revenue', 'sale_date', 'city'}
+    assert all(key in {field['key'] for field in definition['fields']}
+               for section in definition['sections']
+               for key in [*section['metrics'], *section['by']])
+
+
+def test_словарный_датасет_не_дублируется_полями_схемы(catalog):
+    catalog.datasets = {'sales': {
+        'slug': 'sales', 'title': 'Продажи', 'source': 'postgres', 'status': 'ok',
+        'schema': [{'name': 'revenue', 'type': 'numeric'}],
+    }}
+
+    variants = interpret.recommend(catalog)['recommendations']
+
+    assert all(not item['definition'].get('fields') for item in variants)
+
+
 def test_без_ключа_ищет_за_пределами_выбранного_датасета(catalog, monkeypatch):
     monkeypatch.setattr(interpret, '_openrouter_key', lambda: None)
     catalog.metrics['margin'] = {'slug': 'margin', 'title': 'Маржа',
