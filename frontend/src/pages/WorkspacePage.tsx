@@ -46,10 +46,8 @@ export function WorkspacePage() {
       dataset.title, dataset.slug, dataset.description || '', dataset.tableName || '',
       ...dataset.fields.map((field) => `${field.name} ${field.comment || ''}`),
     ].some((value) => value.toLocaleLowerCase('ru').includes(needle))) : datasets
-    const ordered = selected && !needle
-      ? [selected, ...found.filter((dataset) => dataset.slug !== selected.slug)] : found
-    return { total: found.length, visible: ordered.slice(0, 12) }
-  }, [datasets, search, selected])
+    return { total: found.length, visible: found.slice(0, 12) }
+  }, [datasets, search])
 
   /** Переключает режим, сохраняя выбранный датасет в адресе. */
   function selectMode(next: Mode): void {
