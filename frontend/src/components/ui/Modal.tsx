@@ -27,9 +27,9 @@ export function Modal({
   onClose: () => void
   children: ReactNode
   footer?: ReactNode
-  /** `xl` — для окон с таблицами: превью датасета в `lg` живёт в колодце
-      шириной с половину экрана и прокручивается вбок на каждой колонке. */
-  size?: 'md' | 'lg' | 'xl'
+  /** `xl` — для широких таблиц; `screen` заполняет около трёх четвертей
+      экрана, чтобы в детализации одновременно были видны строки и колонки. */
+  size?: 'md' | 'lg' | 'xl' | 'screen'
   align?: 'center' | 'top'
 }) {
   const dialogRef = useRef<HTMLDivElement>(null)
@@ -92,7 +92,8 @@ export function Modal({
         onKeyDown={onKeyDown}
         className={cn(
           'flex w-full flex-col gap-3 rounded-card border border-line bg-surface p-5 shadow-modal',
-          size === 'xl' ? 'max-h-[92vh] max-w-6xl' : 'max-h-[85vh]',
+          size === 'screen' ? 'h-[86vh] max-h-[calc(100vh-2rem)] max-w-none sm:w-[86vw]'
+            : size === 'xl' ? 'max-h-[92vh] max-w-6xl' : 'max-h-[85vh]',
           size === 'lg' ? 'max-w-3xl' : size === 'md' ? 'max-w-xl' : '',
         )}
       >

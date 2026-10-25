@@ -114,14 +114,17 @@ def _pivot(section, metrics, data, x_key: str, split_key: str) -> tuple[list[dic
     # ключ серии → значение второго разреза: по нему детализация понимает,
     # какую именно линию открыл читатель
     labels: dict = {}
+    series_types: dict = {}
     for row in data:
         x = row.get(x_key)
         bucket = points.setdefault(x, {x_key: x})
         split_value = row.get(split_key)
         label = '—' if split_value in (None, '') else str(split_value)
-        for slug in section.metrics:
+        for index, slug in enumerate(section.metrics):
             key = label if len(section.metrics) == 1 else f'{metrics[slug]["title"]} · {label}'
             labels[key] = split_value
+            if section.kind == 'combo':
+                series_types[key] = _combo_series_type(section, slug, index)
             value = row.get(slug)
             bucket[key] = value
             if isinstance(value, (int, float)):
@@ -139,7 +142,15 @@ def _pivot(section, metrics, data, x_key: str, split_key: str) -> tuple[list[dic
     rows = [{k: v for k, v in point.items() if k == x_key or k in kept}
             for point in points.values()]
     rows.sort(key=lambda r: _sort_key(r.get(x_key)))
-    return rows, [{'key': k, 'name': k} for k in keys], note, {k: labels[k] for k in keys}
+    return rows, [{'key': k, 'name': k,
+                   **({'type': series_types[k]} if section.kind == 'combo' else {})}
+                  for k in keys], note, {k: labels[k] for k in keys}
+
+
+def _combo_series_type(section: SectionDefinition, slug: str, index: int) -> str:
+    """Resolve an explicit metric mark or the legacy combo default."""
+    return section.series_types.get(
+        slug, 'line' if len(section.metrics) > 1 and index == len(section.metrics) - 1 else 'bar')
 
 
 def _chart_section(section, metrics, dimensions, data) -> dict:
@@ -150,7 +161,11 @@ def _chart_section(section, metrics, dimensions, data) -> dict:
     if x_key and split_key:
         data, series, note, split_values = _pivot(section, metrics, data, x_key, split_key)
     else:
-        series = [{'key': s, 'name': metrics[s]['title']} for s in section.metrics]
+        series = [
+            {'key': slug, 'name': metrics[slug]['title'],
+             **({'type': _combo_series_type(section, slug, index)} if section.kind == 'combo' else {})}
+            for index, slug in enumerate(section.metrics)
+        ]
     return {
         'type': 'chart',
         'kind': section.kind or 'bar',

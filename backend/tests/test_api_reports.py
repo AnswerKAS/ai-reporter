@@ -142,6 +142,22 @@ def test_named_block_survives_report_save_and_reload(client, model, admin_header
     assert rendered['sections'][0]['title'] == 'Продажи'
 
 
+def test_combo_mark_survives_definition_save_and_report_read(client, report, admin_headers):
+    """A saved combo mark reaches the report view after reopening the definition."""
+    changed = definition(sections=[{
+        'type': 'chart', 'kind': 'combo', 'metrics': ['revenue'], 'by': ['city'],
+        'seriesTypes': {'revenue': 'line'},
+    }])
+
+    response = client.put('/api/reports/sales-report/definition', headers=admin_headers, json=changed)
+
+    assert response.status_code == 200
+    saved = client.get('/api/reports/sales-report/definition', headers=admin_headers).json()
+    rendered = client.get('/api/reports/sales-report', headers=admin_headers).json()['report']
+    assert saved['definition']['sections'][0]['seriesTypes'] == {'revenue': 'line'}
+    assert rendered['sections'][0]['series'][0]['type'] == 'line'
+
+
 def test_создание_отчёта_без_slug_генерирует_его(client, model, admin_headers):
     body = client.post('/api/reports/builder', headers=admin_headers, json={
         'title': 'Новый', 'definition': definition()}).json()

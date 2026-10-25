@@ -29,7 +29,7 @@ import {
 } from '../lib/api'
 import { SectionsGrid } from '../components/SectionsGrid'
 import { ReportFilters } from '../components/ReportFilters'
-import { Alert, Button, Field, Input, Modal, Page, PageHeader, Select, SkeletonRows, useConfirm } from '../components/ui'
+import { Alert, Button, Field, Input, Modal, Page, PageHeader, Segmented, Select, SkeletonRows, useConfirm } from '../components/ui'
 import { cn } from '../lib/cn'
 import type { LinkIndex } from '../lib/dataset-links'
 import { buildLinkIndex, reachableFrom } from '../lib/dataset-links'
@@ -57,7 +57,7 @@ const FILTER_KIND_OPTIONS: Record<DimensionType, { value: FilterDefinition['kind
   ],
   number: [
     { value: 'select', label: 'Одно значение' },
-    { value: 'number', label: 'Точное число' },
+    { value: 'number', label: 'Число' },
     { value: 'numberrange', label: 'Диапазон от — до' },
   ],
   date: [{ value: 'daterange', label: 'Период с — по' }],
@@ -81,6 +81,17 @@ const PER_ROW_OPTIONS = [
   { value: 1, label: 'вся ширина' },
   { value: 2, label: 'половина' },
 ] as const
+
+const COMBO_MARK_OPTIONS: { value: 'bar' | 'line'; label: string }[] = [
+  { value: 'bar', label: 'Столбцы' },
+  { value: 'line', label: 'Линия' },
+]
+
+/** Resolve a combo metric's saved mark or the default for older reports. */
+function comboSeriesType(section: SectionDefinition, metric: string, index: number): 'bar' | 'line' {
+  return section.seriesTypes?.[metric]
+    ?? (section.metrics.length > 1 && index === section.metrics.length - 1 ? 'line' : 'bar')
+}
 
 function byLimit(type: SectionDefinition['type']): number {
   if (type === 'kpi') return 0
@@ -608,6 +619,7 @@ function Builder({ embedded, suggestedPrompt }: {
             return {
               ...s,
               metrics: s.metrics.filter((m) => !gone.has(m)),
+              seriesTypes: Object.fromEntries(Object.entries(s.seriesTypes ?? {}).filter(([m]) => !gone.has(m))),
               by,
               // шаг по дате нужен, только пока в разрезах есть дата, а
               // сортировка по ушедшему полю — ссылка в никуда
@@ -688,14 +700,23 @@ function Builder({ embedded, suggestedPrompt }: {
         // разрез остаётся, если до его датасета есть путь по связям
         const ok = reachable(new Set(next.map(datasetOfField).filter(Boolean) as string[]))
         const by = s.by.filter((b) => ok.has(datasetOfDimension(b) ?? ''))
-        return { ...s, metrics: next, by }
+        if (s.type !== 'chart' || s.kind !== 'combo') return { ...s, metrics: next, by }
+        const seriesTypes = Object.fromEntries(s.metrics.map((m, position) =>
+          [m, comboSeriesType(s, m, position)]))
+        const hasLine = Object.values(seriesTypes).includes('line')
+        return { ...s, metrics: next, by,
+          seriesTypes: { ...seriesTypes, [metricSlug]: s.metrics.length > 0 && !hasLine ? 'line' : 'bar' } }
       }),
     )
   }
 
   const removeMetric = (index: number, metricSlug: string) => {
     setSections((prev) =>
-      prev.map((s, i) => (i === index ? { ...s, metrics: s.metrics.filter((m) => m !== metricSlug) } : s)),
+      prev.map((s, i) => (i === index ? {
+        ...s,
+        metrics: s.metrics.filter((m) => m !== metricSlug),
+        seriesTypes: Object.fromEntries(Object.entries(s.seriesTypes ?? {}).filter(([m]) => m !== metricSlug)),
+      } : s)),
     )
   }
 
@@ -1041,7 +1062,8 @@ function Builder({ embedded, suggestedPrompt }: {
                         const key = event.target.value
                         const info = dimensionInfo(key)
                         if (key) setFilters((previous) => [...previous, {
-                          dimension: key, kind: info?.type === 'date' ? 'daterange' : 'select',
+                          dimension: key,
+                          kind: info?.type === 'date' ? 'daterange' : info?.type === 'number' ? 'number' : 'select',
                         }])
                       }}>
                       <option value="">+ Фильтр</option>
@@ -1232,7 +1254,11 @@ function Builder({ embedded, suggestedPrompt }: {
 
                     {section.type === 'chart' && (
                       <ChartKindPicker value={section.kind ?? 'bar'}
-                        onChange={(kind) => patchSection(index, { kind })} />
+                        onChange={(kind) => patchSection(index, {
+                          kind,
+                          ...(kind === 'combo' ? { seriesTypes: Object.fromEntries(section.metrics.map((m, position) =>
+                            [m, comboSeriesType(section, m, position)])) } : {}),
+                        })} />
                     )}
 
                     <div className="flex flex-col gap-1.5 rounded-control border border-dashed border-line px-2.5 py-2">
@@ -1242,6 +1268,24 @@ function Builder({ embedded, suggestedPrompt }: {
                       </div>
                       {section.metrics.length === 0 ? (
                         <p className="text-xs text-fg-muted">Выберите, какое число должен показывать этот блок.</p>
+                      ) : section.type === 'chart' && section.kind === 'combo' ? (
+                        <div className="divide-y divide-line border-t border-line">
+                          {section.metrics.map((m, position) => (
+                            <div key={m} className="flex min-w-0 flex-wrap items-center gap-2 py-1.5">
+                              <span className="min-w-0 basis-full break-words text-sm font-medium sm:flex-1"
+                                title={`${datasetTitle(datasetOfField(m) ?? '')} · ${fieldTitle(m)}`}>
+                                {fieldTitle(m)}
+                              </span>
+                              <Segmented value={comboSeriesType(section, m, position)} options={COMBO_MARK_OPTIONS}
+                                ariaLabel={`Вид показателя ${fieldTitle(m)}`}
+                                onChange={(type) => patchSection(index, {
+                                  seriesTypes: { ...section.seriesTypes, [m]: type },
+                                })} />
+                              <Button variant="ghost" size="sm" className="px-2" aria-label={`Убрать показатель ${fieldTitle(m)}`}
+                                onClick={() => removeMetric(index, m)}>×</Button>
+                            </div>
+                          ))}
+                        </div>
                       ) : (
                         <div className="flex flex-wrap gap-1.5">
                           {section.metrics.map((m) => (

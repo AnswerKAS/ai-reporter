@@ -149,6 +149,56 @@ def test_график_по_умолчанию_столбцы(model, rows):
     assert executor.build_section(section(type='chart', by=['city']), {})['kind'] == 'bar'
 
 
+def test_combo_assigns_explicit_marks_to_metrics(model, rows):
+    """The visual report receives the mark chosen for each metric."""
+    from app.semantic import registry as semantic
+
+    semantic.create_metric(slug='plan', title='План', description=None,
+                           dataset_slug='sales', expression='sum(revenue)', format='money')
+    semantic.update_metric('plan', status='ok')
+    rows(['d_day', 'm_revenue', 'm_plan'], [['2026-01-01', 100.0, 120.0]])
+
+    built = executor.build_section(section(type='chart', kind='combo', by=['day'],
+                                           metrics=['revenue', 'plan'],
+                                           seriesTypes={'revenue': 'line', 'plan': 'bar'}), {})
+
+    assert [(item['key'], item['type']) for item in built['series']] == [
+        ('revenue', 'line'), ('plan', 'bar')]
+
+
+def test_legacy_combo_defaults_last_metric_to_line(model, rows):
+    """Older combo definitions show both marks without a saved seriesTypes map."""
+    from app.semantic import registry as semantic
+
+    semantic.create_metric(slug='plan', title='План', description=None,
+                           dataset_slug='sales', expression='sum(revenue)', format='money')
+    semantic.update_metric('plan', status='ok')
+    rows(['d_day', 'm_revenue', 'm_plan'], [['2026-01-01', 100.0, 120.0]])
+
+    built = executor.build_section(section(type='chart', kind='combo', by=['day'],
+                                           metrics=['revenue', 'plan']), {})
+
+    assert [item['type'] for item in built['series']] == ['bar', 'line']
+
+
+def test_combo_pivot_inherits_metric_marks(model, rows):
+    """Series created by the second dimension retain their source metric's mark."""
+    from app.semantic import registry as semantic
+
+    semantic.create_metric(slug='plan', title='План', description=None,
+                           dataset_slug='sales', expression='sum(revenue)', format='money')
+    semantic.update_metric('plan', status='ok')
+    rows(['d_day', 'd_city', 'm_revenue', 'm_plan'],
+         [['2026-01-01', 'Москва', 100.0, 120.0]])
+
+    built = executor.build_section(section(type='chart', kind='combo', by=['day', 'city'],
+                                           metrics=['revenue', 'plan'],
+                                           seriesTypes={'revenue': 'bar', 'plan': 'line'}), {})
+
+    assert {item['name']: item['type'] for item in built['series']} == {
+        'Выручка · Москва': 'bar', 'План · Москва': 'line'}
+
+
 def test_второй_разрез_разворачивается_в_серии(model, rows):
     rows(['d_day', 'd_city', 'm_revenue'],
          [['2026-01-01', 'Москва', 10.0], ['2026-01-01', 'Тверь', 20.0],

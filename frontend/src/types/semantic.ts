@@ -55,6 +55,8 @@ export interface SectionDefinition {
   type: 'kpi' | 'chart' | 'table'
   title?: string | null
   kind?: 'bar' | 'bar_horizontal' | 'bar_stacked' | 'line' | 'area' | 'area_stacked' | 'pie' | 'combo' | null
+  /** Which visual mark each metric uses in a combo chart. */
+  seriesTypes?: Record<string, 'bar' | 'line'>
   /** Сколько секций в ряд: 1 — во всю ширину, 2 — половина. Не задано — по виду секции. */
   perRow?: 1 | 2 | null
   metrics: string[]

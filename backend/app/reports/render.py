@@ -131,6 +131,7 @@ def _chart_image(section: dict, width_px: int = 900) -> bytes | None:
                         for item in series]
     names = [item.get('name') or item.get('key') for item in series]
     positions = list(range(len(labels)))
+    secondary_axes = None
     if kind == 'bar_horizontal':
         for i, values in enumerate(values_by_series):
             shift = (i - (len(series) - 1) / 2) * 0.8 / len(series)
@@ -150,6 +151,20 @@ def _chart_image(section: dict, width_px: int = 900) -> bytes | None:
         axes.stackplot(positions, *values_by_series, labels=names, alpha=0.75)
         axes.set_xticks(positions)
         axes.set_xticklabels(labels)
+    elif kind == 'combo':
+        bar_indices = [i for i, item in enumerate(series) if item.get('type') != 'line']
+        line_indices = [i for i, item in enumerate(series) if item.get('type') == 'line']
+        for position, i in enumerate(bar_indices):
+            shift = (position - (len(bar_indices) - 1) / 2) * 0.8 / len(bar_indices)
+            axes.bar([point + shift for point in positions], values_by_series[i],
+                     width=0.8 / len(bar_indices), label=names[i])
+        if bar_indices and line_indices:
+            secondary_axes = axes.twinx()
+        line_axes = secondary_axes or axes
+        for i in line_indices:
+            line_axes.plot(positions, values_by_series[i], label=names[i], linewidth=1.8)
+        axes.set_xticks(positions)
+        axes.set_xticklabels(labels)
     else:
         for i, values in enumerate(values_by_series):
             name = names[i]
@@ -167,7 +182,15 @@ def _chart_image(section: dict, width_px: int = 900) -> bytes | None:
                 axes.set_xticks(positions)
                 axes.set_xticklabels(labels)
     if kind != 'pie':
-        axes.legend(fontsize=7, frameon=False)
+        handles, legend_names = axes.get_legend_handles_labels()
+        if secondary_axes:
+            line_handles, line_names = secondary_axes.get_legend_handles_labels()
+            handles += line_handles
+            legend_names += line_names
+            secondary_axes.tick_params(labelsize=7)
+            secondary_axes.spines['top'].set_visible(False)
+        if handles:
+            axes.legend(handles, legend_names, fontsize=7, frameon=False)
         axes.tick_params(labelsize=7)
         axes.spines['top'].set_visible(False)
         axes.spines['right'].set_visible(False)

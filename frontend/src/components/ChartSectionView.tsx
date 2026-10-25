@@ -308,7 +308,7 @@ export function ChartSectionView({
     const hasLine = series.some((s) => s.type === 'line')
     const firstLineKey = series.find((s) => s.type === 'line')?.key
     chart = (
-      <ComposedChart data={data}>
+      <ComposedChart data={data} onClick={onChartClick}>
         <CartesianGrid strokeDasharray="3 3" stroke={theme.grid} />
         <XAxis
           dataKey={xAxisKey}

@@ -85,7 +85,7 @@ export function DrilldownDialog({
   return (
     <Modal
       title={title}
-      size="lg"
+      size="screen"
       onClose={onClose}
       footer={
         <>
@@ -98,7 +98,7 @@ export function DrilldownDialog({
         </>
       }
     >
-      <div className="flex flex-col gap-3">
+      <div className="flex h-full min-h-0 flex-col gap-3">
         <div className="flex flex-wrap items-center gap-3 text-xs text-fg-muted">
           {sources.length > 1 && (
             <label className="flex items-center gap-2">
@@ -140,7 +140,7 @@ export function DrilldownDialog({
             По этой точке в источнике нет ни одной строки.
           </p>
         ) : (
-          <div className="max-h-[55vh] overflow-auto">
+          <div className="min-h-0 flex-1 overflow-auto">
             <Table>
               <thead>
                 <tr>

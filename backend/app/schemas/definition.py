@@ -8,7 +8,7 @@
 
 from typing import Literal
 
-from pydantic import field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from .report import CamelModel
 
@@ -29,10 +29,12 @@ PER_ROW_DEFAULT = {'chart': 2, 'kpi': 1, 'table': 1}
 
 
 class SectionDefinition(CamelModel):
+    """One report block, including per-metric rendering for combo charts."""
     type: Literal['kpi', 'chart', 'table']
     title: str | None = None
     # только для type='chart'
     kind: Literal['bar', 'bar_horizontal', 'bar_stacked', 'line', 'area', 'area_stacked', 'pie', 'combo'] | None = None
+    series_types: dict[str, Literal['bar', 'line']] = Field(default_factory=dict)
     per_row: Literal[1, 2] | None = None
     metrics: list[str]
     by: list[str] = []
@@ -74,6 +76,8 @@ class SectionDefinition(CamelModel):
                 f'в {what} допустимо не более {limit} разрезов группировки, выбрано {len(seen)}'
             )
         self.by = seen
+        self.series_types = {slug: kind for slug, kind in self.series_types.items()
+                             if slug in self.metrics}
         return self
 
 

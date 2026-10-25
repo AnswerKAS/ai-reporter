@@ -256,6 +256,22 @@ def test_additional_charts_render_for_pdf(kind):
     assert render._chart_image(section)[:4] == b'\x89PNG'
 
 
+def test_combo_pdf_renders_distinct_line_and_bar_marks():
+    """Changing a combo series from a bar to a line changes the exported image."""
+    section = {**REPORT['sections'][1], 'kind': 'combo',
+               'series': [{'key': 'revenue', 'name': 'Выручка', 'type': 'bar'},
+                          {'key': 'plan', 'name': 'План', 'type': 'line'}],
+               'data': [{'day': '2026-01-01', 'revenue': 10, 'plan': 15},
+                        {'day': '2026-01-02', 'revenue': 20, 'plan': 12}]}
+
+    mixed = render._chart_image(section)
+    bars_only = render._chart_image({**section, 'series': [
+        {**item, 'type': 'bar'} for item in section['series']]})
+
+    assert mixed[:4] == b'\x89PNG'
+    assert mixed != bars_only
+
+
 def test_график_без_данных_картинки_не_даёт():
     assert render._chart_image({'type': 'chart', 'data': [], 'series': []}) is None
 

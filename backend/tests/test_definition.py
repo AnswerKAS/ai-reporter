@@ -137,6 +137,26 @@ def test_additional_chart_kinds_are_valid(kind):
     assert section.kind == kind
 
 
+def test_combo_series_types_round_trip_in_camel_case():
+    """Per-metric combo marks remain attached to their metric keys."""
+    parsed = SectionDefinition.model_validate({
+        'type': 'chart', 'kind': 'combo', 'metrics': ['revenue', 'plan'],
+        'seriesTypes': {'revenue': 'bar', 'plan': 'line'},
+    })
+
+    assert parsed.series_types == {'revenue': 'bar', 'plan': 'line'}
+    assert parsed.model_dump(by_alias=True)['seriesTypes'] == {'revenue': 'bar', 'plan': 'line'}
+
+
+def test_combo_rejects_unknown_series_type():
+    """Only marks supported by the combo renderer are accepted."""
+    with pytest.raises(ValidationError):
+        SectionDefinition.model_validate({
+            'type': 'chart', 'kind': 'combo', 'metrics': ['revenue'],
+            'seriesTypes': {'revenue': 'area'},
+        })
+
+
 def test_неизвестный_вид_фильтра():
     with pytest.raises(ValidationError):
         FilterDefinition.model_validate({'dimension': 'city', 'kind': 'ползунок'})

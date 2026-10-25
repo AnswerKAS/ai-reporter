@@ -201,6 +201,7 @@ function FilterField({
       <Input
         className="w-40! py-1.5"
         type={filter.kind === 'number' ? 'number' : 'text'}
+        step={filter.kind === 'number' ? 'any' : undefined}
         value={draft}
         placeholder={filter.kind === 'number' ? '0' : filter.label}
         disabled={disabled}
