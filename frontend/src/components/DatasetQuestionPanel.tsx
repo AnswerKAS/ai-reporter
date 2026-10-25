@@ -32,30 +32,36 @@ export function DatasetQuestionPanel({ dataset, isAdmin, onCreateReport }: {
   }
 
   return (
-    <div className="mx-auto max-w-5xl space-y-5">
-      <div>
-        <h2 className="text-xl font-semibold">Спросить о данных</h2>
-        <p className="mt-1 text-sm text-fg-muted">
-          Источник: {dataset.title}. Следующий вопрос может уточнять предыдущий.
-        </p>
-      </div>
+    <div className="mx-auto max-w-6xl space-y-6">
+      <section className="rounded-card border border-line bg-surface p-5 shadow-card sm:p-7">
+        <p className="text-[11px] font-semibold tracking-[0.14em] text-accent uppercase">02 · Вопрос к данным</p>
+        <h2 className="mt-2 text-2xl font-semibold tracking-tight">Что вы хотите узнать?</h2>
+        <p className="mt-2 text-sm text-fg-muted">Спросите об итогах, динамике или сравнении. Следующим вопросом можно уточнить ответ.</p>
+        {error && <Alert className="mt-5">{error}</Alert>}
+        <form onSubmit={(event) => { event.preventDefault(); void ask() }} className="mt-5">
+          <label htmlFor="workspace-question" className="sr-only">Ваш вопрос</label>
+          <Textarea id="workspace-question" rows={4}
+            value={question} onChange={(event) => setQuestion(event.target.value)}
+            placeholder="Например: как менялась выручка по месяцам?" />
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+            <span className="text-xs text-fg-muted">Ответ строится по датасету «{dataset.title}»</span>
+            <Button type="submit" variant="primary" disabled={asking || !question.trim()}>
+              {asking ? 'Считаю…' : 'Получить ответ →'}
+            </Button>
+          </div>
+        </form>
+      </section>
 
-      {turns.length === 0 && (
-        <Card className="p-5">
-          <p className="text-sm font-medium">Начните с того, что хотите узнать</p>
-          <p className="mt-1 text-sm text-fg-muted">
-            Например, спросите об итоге, изменении по датам или сравнении категорий.
-            Под ответом будет показано, как он посчитан.
-          </p>
-        </Card>
-      )}
+      {turns.length === 0 && <p className="px-1 text-sm text-fg-muted">
+        После ответа здесь появятся результат, таблица и объяснение расчёта.
+      </p>}
 
       <div aria-live="polite" className="space-y-4">
         {turns.map((turn, index) => (
-          <Card key={index} className="p-4">
-            <p className="text-xs font-medium tracking-wide text-fg-muted uppercase">Вопрос {index + 1}</p>
-            <h3 className="mt-1 text-base font-semibold">{turn.question}</h3>
-            <p className="mt-3 text-sm">{turn.answer}</p>
+          <Card key={index} className="p-5 sm:p-6">
+            <p className="text-[11px] font-semibold tracking-[0.14em] text-accent uppercase">Ответ {index + 1}</p>
+            <h3 className="mt-2 text-xl font-semibold tracking-tight">{turn.question}</h3>
+            <p className="mt-4 text-base">{turn.answer}</p>
             {turn.columns.length > 0 && (
               <div className="mt-3 max-h-80 overflow-auto rounded-control border border-line">
                 <Table>
@@ -66,7 +72,7 @@ export function DatasetQuestionPanel({ dataset, isAdmin, onCreateReport }: {
                 </Table>
               </div>
             )}
-            <section className="mt-4 space-y-1 rounded-control bg-surface-sunken p-3 text-sm" aria-label="Как посчитано">
+            <section className="mt-5 space-y-1 rounded-control bg-surface-sunken p-4 text-sm" aria-label="Как посчитано">
               <h4 className="font-medium">Как посчитано</h4>
               <p><span className="text-fg-muted">Источник:</span> {turn.explanation.source}</p>
               <p><span className="text-fg-muted">Расчёт:</span> {turn.explanation.calculations.join('; ')}</p>
@@ -102,19 +108,6 @@ export function DatasetQuestionPanel({ dataset, isAdmin, onCreateReport }: {
         ))}
       </div>
 
-      {error && <Alert>{error}</Alert>}
-      <form onSubmit={(event) => { event.preventDefault(); void ask() }}
-        className="rounded-card border border-line bg-surface p-4">
-        <label htmlFor="workspace-question" className="text-sm font-medium">Ваш вопрос</label>
-        <Textarea id="workspace-question" className="mt-2" rows={3}
-          value={question} onChange={(event) => setQuestion(event.target.value)}
-          placeholder="Например: какая выручка по городам?" />
-        <div className="mt-3 flex justify-end">
-          <Button type="submit" variant="primary" disabled={asking || !question.trim()}>
-            {asking ? 'Считаю…' : 'Получить ответ'}
-          </Button>
-        </div>
-      </form>
     </div>
   )
 }

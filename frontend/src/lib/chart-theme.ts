@@ -17,23 +17,23 @@ export interface ChartTheme {
 }
 
 const LIGHT: ChartTheme = {
-  palette: ['#4f46e5', '#0891b2', '#16a34a', '#d97706', '#e11d48', '#7c3aed'],
-  grid: '#e6e6ee',
-  axis: '#5f5f6e',
+  palette: ['#0a725e', '#2475a8', '#bf7a2d', '#9a5ab7', '#c55565', '#678849'],
+  grid: '#dce5df',
+  axis: '#60736b',
   surface: '#ffffff',
-  line: '#e6e6ee',
-  fg: '#2b2b33',
-  fgMuted: '#5f5f6e',
+  line: '#dce5df',
+  fg: '#172b25',
+  fgMuted: '#60736b',
 }
 
 const DARK: ChartTheme = {
-  palette: ['#8b83f7', '#38bdf8', '#4ade80', '#fbbf24', '#fb7185', '#c084fc'],
-  grid: '#2a2b35',
-  axis: '#9a9aa8',
-  surface: '#17181f',
-  line: '#2a2b35',
-  fg: '#e8e8ee',
-  fgMuted: '#9a9aa8',
+  palette: ['#79ddae', '#75bbeb', '#e6b16d', '#cca2e6', '#f193a0', '#a9cb73'],
+  grid: '#30483b',
+  axis: '#a3b9a9',
+  surface: '#15231c',
+  line: '#30483b',
+  fg: '#e9f2eb',
+  fgMuted: '#a3b9a9',
 }
 
 export function useChartTheme(): ChartTheme {

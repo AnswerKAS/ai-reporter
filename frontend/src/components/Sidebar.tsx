@@ -15,7 +15,7 @@ export function Sidebar({ className, onNavigate }: { className?: string; onNavig
 
 const MIN_WIDTH = 200
 const MAX_WIDTH = 560
-const DEFAULT_WIDTH = 256
+const DEFAULT_WIDTH = 248
 const STEP = 16
 const WIDTH_KEY = 'ai-reporter-sidebar-width'
 
@@ -91,7 +91,7 @@ export function SidebarPanel({ className }: { className?: string }) {
   return (
     <div
       ref={panel}
-      className={cn('sticky top-14 hidden h-[calc(100vh-3.5rem)] shrink-0 md:flex', className)}
+      className={cn('sticky top-0 hidden h-dvh shrink-0 xl:flex', className)}
       style={{ width }}
     >
       <Sidebar className="min-w-0 flex-1 overflow-y-auto border-r border-line bg-surface p-4" />

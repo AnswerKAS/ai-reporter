@@ -5,15 +5,15 @@ export type ButtonVariant = 'default' | 'primary' | 'ghost' | 'danger'
 export type ButtonSize = 'sm' | 'md'
 
 const VARIANTS: Record<ButtonVariant, string> = {
-  default: 'bg-surface border-line text-fg hover:border-accent',
-  primary: 'bg-accent border-accent text-accent-fg font-semibold hover:bg-accent-hover',
+  default: 'bg-surface border-line text-fg hover:border-accent hover:bg-accent-soft',
+  primary: 'bg-accent border-accent text-accent-fg font-semibold hover:bg-accent-hover shadow-card',
   ghost: 'border-transparent text-fg-muted hover:text-fg hover:bg-surface-sunken',
   danger: 'bg-surface text-bad border-bad/30 hover:bg-bad-soft hover:border-bad',
 }
 
 const SIZES: Record<ButtonSize, string> = {
-  sm: 'px-2.5 py-1 text-xs',
-  md: 'px-3.5 py-1.5 text-sm',
+  sm: 'min-h-8 px-3 py-1 text-xs',
+  md: 'min-h-10 px-4 py-2 text-sm',
 }
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {

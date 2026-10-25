@@ -187,34 +187,31 @@ export function ReportChat({
 
   return (
     <>
-      <section className="mt-3 flex flex-wrap items-center gap-2.5 rounded-card border border-line bg-surface px-3.5 py-3">
-        <span className="text-xs font-medium tracking-wide text-fg-muted uppercase">
-          Отчёт по описанию
-        </span>
-        <Button variant="primary" onClick={openDialog}>
-          {parserMode && messages.length
-            ? 'Уточнить описание'
-            : messages.length ? 'Доработать в диалоге' : 'Выбрать или описать отчёт'}
-        </Button>
-        <Button onClick={() => setDataOpen(true)}>Посмотреть данные</Button>
-        <span className="text-xs text-fg-muted">
-          {model
-            ? `собеседник — ${model}; выбирает только из вашего словаря`
-            : parserMode
-              ? 'разбор по словарю без модели: назовите показатели и разрезы'
-            : 'скажете обычными словами, что нужно, — соберу и покажу; не то соберу — поправите'}
-        </span>
-        {/* словами можно назвать только то, что есть в словаре, — и он
-            должен быть под рукой, а не угадываться по тексту ошибки */}
-        <button
-          type="button"
-          aria-label="Показать словарь отчёта"
-          title="Какие показатели и разрезы можно назвать"
-          onClick={onVocabulary}
-          className="flex size-5 cursor-pointer items-center justify-center rounded-full border border-line text-xs font-semibold text-fg-muted transition-colors hover:border-accent hover:text-accent"
-        >
-          ?
-        </button>
+      <section className="mt-6 rounded-card border border-line bg-surface p-5 shadow-card sm:p-6">
+        <p className="text-[11px] font-semibold tracking-[0.14em] text-accent uppercase">02 · Отчёт по данным</p>
+        <div className="mt-2 flex flex-wrap items-start justify-between gap-4">
+          <div className="max-w-2xl">
+            <h2 className="text-xl font-semibold tracking-tight">Соберите отчёт из выбранных данных</h2>
+            <p className="mt-2 text-sm text-fg-muted">
+              {model
+                ? `Опишите результат своими словами. Собеседник ${model} выбирает только доступные поля.`
+                : parserMode
+                  ? 'Разбор по словарю работает без модели: назовите показатель и разрез.'
+                  : 'Выберите предложенный вариант или опишите результат своими словами. Раскладку можно проверить перед сохранением.'}
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="primary" onClick={openDialog}>
+              {parserMode && messages.length
+                ? 'Уточнить описание'
+                : messages.length ? 'Доработать в диалоге' : 'Описать отчёт'}
+            </Button>
+            <Button onClick={() => setDataOpen(true)}>Посмотреть данные</Button>
+            <button type="button" aria-label="Показать словарь отчёта"
+              title="Какие показатели и разрезы можно назвать" onClick={onVocabulary}
+              className="flex size-10 cursor-pointer items-center justify-center rounded-control border border-line text-sm font-semibold text-fg-muted hover:border-accent hover:text-accent">?</button>
+          </div>
+        </div>
       </section>
 
       {dataOpen && <DatasetDataDialog datasets={availableDatasets} selectedSlugs={datasets}

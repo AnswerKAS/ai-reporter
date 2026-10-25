@@ -22,12 +22,13 @@ import {
     в несколько экранов. Дальше — «показать ещё». */
 const PAGE = 48
 
+/** Карточка отчёта с личным закреплением и краткими метаданными. */
 export function ReportCard({ report }: { report: ReportMeta }) {
   const { isFavorite, toggleFavorite } = useReports()
   const pinned = isFavorite(report.slug)
 
   return (
-    <Card interactive className="relative p-0">
+    <Card interactive className="relative flex min-h-44 flex-col p-0">
       <button
         type="button"
         aria-label={pinned ? `Открепить «${report.title}»` : `Закрепить «${report.title}»`}
@@ -42,18 +43,21 @@ export function ReportCard({ report }: { report: ReportMeta }) {
         <span aria-hidden="true">{pinned ? '★' : '☆'}</span>
       </button>
 
-      <Link to={`/reports/${report.slug}`} className="block p-5 pr-10">
-        <h3 className="mb-1.5 text-[17px] font-semibold text-fg">{report.title}</h3>
-        {report.description && <p className="mb-3.5 text-sm text-fg-muted">{report.description}</p>}
+      <Link to={`/reports/${report.slug}`} className="flex h-full flex-col p-5 pr-12 sm:p-6 sm:pr-12">
+        <span className="mb-3 text-[11px] font-semibold tracking-[0.14em] text-accent uppercase">Отчёт · {report.slug}</span>
+        <h3 className="text-xl font-semibold tracking-tight text-fg">{report.title}</h3>
+        {report.description && <p className="mt-2 line-clamp-2 text-sm text-fg-muted">{report.description}</p>}
         {report.tags && report.tags.length > 0 && (
-          <p className="mb-2 flex flex-wrap gap-1">
+          <p className="mt-4 flex flex-wrap gap-1">
             {report.tags.map((tag) => (
               <Badge key={tag}>{tag}</Badge>
             ))}
           </p>
         )}
+        <span className="flex-1" />
+        <div className="mt-5 flex flex-wrap items-center justify-between gap-2 border-t border-line pt-4">
         {report.status === 'ready' ? (
-          <span className="text-sm text-fg-muted">
+          <span className="text-xs text-fg-muted">
             Обновлён: {report.updatedAt}
             {report.author && ` · ${report.author}`}
           </span>
@@ -62,14 +66,17 @@ export function ReportCard({ report }: { report: ReportMeta }) {
         ) : (
           <Badge tone="warn">Сборка… ({report.status})</Badge>
         )}
+        <span className="text-sm font-semibold text-accent">Открыть →</span>
+        </div>
       </Link>
     </Card>
   )
 }
 
+/** Адаптивная сетка страниц каталога. */
 export function ReportGrid({ reports }: { reports: ReportMeta[] }) {
   return (
-    <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-4">
+    <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,340px),1fr))] gap-4 lg:gap-5">
       {reports.map((r) => (
         <ReportCard key={r.slug} report={r} />
       ))}
@@ -105,11 +112,11 @@ export function ReportListPage() {
 
   const header = (
     <PageHeader
-      title="Отчёты"
-      subtitle={user ? `Доступны пользователю ${user.username}` : undefined}
-      actions={newReport}
+      title="Библиотека отчётов"
+      subtitle={user ? `Отчёты для ${user.username}: открывайте готовые или собирайте свои.` : undefined}
+      actions={<><Link to="/workspace" className="inline-flex min-h-10 items-center rounded-control border border-line bg-surface px-4 text-sm font-medium text-fg hover:bg-accent-soft">Задать вопрос</Link>{newReport}</>}
     >
-      <div className="mt-4 flex flex-wrap items-center gap-2">
+      <div className="mt-6 flex flex-wrap items-center gap-3 rounded-card border border-line bg-surface p-3 shadow-card sm:p-4">
         <Input
           className="w-auto min-w-56 flex-1 py-1.5"
           type="search"
@@ -127,7 +134,7 @@ export function ReportListPage() {
             { value: 'title', label: 'По названию' },
           ]}
         />
-        <span className="text-sm text-fg-muted tabular-nums">
+        <span className="text-xs font-medium text-fg-muted tabular-nums">
           {search.trim() ? `Найдено: ${total}` : `Всего: ${facets?.total ?? total}`}
         </span>
       </div>

@@ -20,6 +20,7 @@ export function WorkspacePage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
+  const [sourcesOpen, setSourcesOpen] = useState(false)
   const mode: Mode = reportSlug || params.get('mode') === 'report' ? 'report' : 'question'
   const [reportOpened, setReportOpened] = useState(mode === 'report')
   const [suggestedPrompt, setSuggestedPrompt] = useState<{ id: number; text: string } | null>(null)
@@ -84,7 +85,7 @@ export function WorkspacePage() {
     <Page className="max-w-none">
       <PageHeader
         title="Рабочее окно"
-        subtitle="Спросите о данных или соберите отчёт — выбранный датасет остаётся с вами."
+        subtitle="Один источник для вопроса и отчёта. Выберите данные, получите ответ и при необходимости сохраните его как отчёт."
       >
         <Segmented className="mt-4" ariaLabel="Режим рабочего окна" value={mode}
           onChange={selectMode} options={[
@@ -94,69 +95,77 @@ export function WorkspacePage() {
       </PageHeader>
 
       {error && <Alert className="mb-4">{error}</Alert>}
-      <Card className="mb-6 p-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="text-sm font-semibold">Датасет</h2>
-            <p className="text-xs text-fg-muted">Выберите данные, с которых хотите начать.</p>
-          </div>
-          <Input className="w-auto min-w-56 sm:min-w-72" type="search"
-            aria-label="Поиск датасета" placeholder="Название, поле или таблица"
-            value={search} onChange={(event) => setSearch(event.target.value)} />
-        </div>
-        {loading ? (
-          <p className="mt-3 text-sm text-fg-muted">Загружаю датасеты…</p>
-        ) : datasets.length === 0 ? (
-          <EmptyState title="Датасетов пока нет"
-            description={isAdmin ? 'Добавьте датасет в админке.' : 'Попросите администратора подготовить датасет.'} />
-        ) : (
-          <>
-            <div className="mt-3 flex flex-wrap gap-2">
-              {matches.visible.map((dataset) => (
-                <button key={dataset.slug} type="button" onClick={() => selectDataset(dataset.slug)}
-                  aria-pressed={selectedSlug === dataset.slug}
-                  className={cn(
-                    'cursor-pointer rounded-control border px-3 py-2 text-left text-sm transition-colors',
-                    selectedSlug === dataset.slug
-                      ? 'border-accent bg-accent-soft font-semibold text-accent'
-                      : 'border-line bg-bg hover:border-accent hover:text-accent',
-                  )}>
-                  {dataset.title}
-                  <span className="ml-2 text-xs opacity-70">{dataset.fields.length} полей</span>
-                </button>
-              ))}
+      <div className={cn('gap-6', mode === 'question' ? 'grid items-start xl:grid-cols-[280px_minmax(0,1fr)]' : 'flex flex-col')}>
+        <Card className={cn('min-w-0 p-4 sm:p-5', mode === 'question' && 'xl:sticky xl:top-6')}>
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <p className="text-[11px] font-semibold tracking-[0.14em] text-accent uppercase">01 · Источник</p>
+              <h2 className="mt-1 text-lg font-semibold">{mode === 'question' ? 'Данные для работы' : 'Данные отчёта'}</h2>
             </div>
-            {matches.total === 0 && <p className="mt-3 text-sm text-fg-muted">По запросу датасетов нет.</p>}
-            {matches.total > matches.visible.length && (
-              <p className="mt-2 text-xs text-fg-muted">
-                Показаны первые {matches.visible.length} из {matches.total}. Уточните поиск.
-              </p>
-            )}
-            {selected && (
-              <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-line pt-3 text-xs text-fg-muted">
-                <strong className="text-fg">{selected.title}</strong>
-                <Badge>{selected.source}</Badge>
-                <span>{selected.description || 'Подготовленный датасет'}</span>
-              </div>
-            )}
-          </>
-        )}
-      </Card>
+            {mode === 'report' ? (
+              <button type="button" onClick={() => setSourcesOpen((open) => !open)}
+                aria-expanded={sourcesOpen} className="cursor-pointer text-sm font-medium text-accent hover:underline">
+                {sourcesOpen ? 'Скрыть выбор' : selected ? 'Сменить' : 'Выбрать'}
+              </button>
+            ) : <Badge>{datasets.length}</Badge>}
+          </div>
+          {(mode === 'question' || sourcesOpen) && <Input className="mt-4" type="search"
+            aria-label="Поиск датасета" placeholder="Найти датасет или поле"
+            value={search} onChange={(event) => setSearch(event.target.value)} />}
+          {loading ? (
+            <p className="mt-4 text-sm text-fg-muted">Загружаю датасеты…</p>
+          ) : datasets.length === 0 ? (
+            <EmptyState title="Датасетов пока нет"
+              description={isAdmin ? 'Добавьте датасет в админке.' : 'Попросите администратора подготовить датасет.'} />
+          ) : (
+            <>
+              {(mode === 'question' || sourcesOpen) && <div className={cn('mt-3 gap-2', mode === 'question' ? 'flex flex-col' : 'flex flex-wrap')}>
+                {matches.visible.map((dataset) => (
+                  <button key={dataset.slug} type="button" onClick={() => selectDataset(dataset.slug)}
+                    aria-pressed={selectedSlug === dataset.slug}
+                    className={cn(
+                      'min-w-0 cursor-pointer rounded-control border px-3 py-2.5 text-left text-sm transition-colors',
+                      mode === 'question' && 'w-full',
+                      selectedSlug === dataset.slug
+                        ? 'border-accent bg-accent-soft font-semibold text-accent'
+                        : 'border-line bg-bg hover:border-line-strong hover:bg-surface-sunken',
+                    )}>
+                    <span className="block truncate">{dataset.title}</span>
+                    <span className="block text-xs font-normal text-fg-muted">{dataset.fields.length} полей · {dataset.source}</span>
+                  </button>
+                ))}
+              </div>}
+              {(mode === 'question' || sourcesOpen) && matches.total === 0 && <p className="mt-3 text-sm text-fg-muted">По запросу датасетов нет.</p>}
+              {(mode === 'question' || sourcesOpen) && matches.total > matches.visible.length && (
+                <p className="mt-2 text-xs text-fg-muted">Показаны {matches.visible.length} из {matches.total}. Уточните поиск.</p>
+              )}
+              {selected && <div className={cn('text-sm', mode === 'question' || sourcesOpen ? 'mt-4 border-t border-line pt-4' : 'mt-3')}>
+                <p className="text-xs text-fg-muted">Выбранный источник</p>
+                <p className="mt-1 font-semibold">{selected.title}</p>
+                <p className="mt-1 text-xs text-fg-muted">{selected.description || selected.tableName || 'Подготовленный датасет'}</p>
+              </div>}
+              {mode === 'report' && !selected && !sourcesOpen && <p className="mt-3 text-sm text-fg-muted">Выберите датасет здесь или на шаге «Данные» ниже.</p>}
+            </>
+          )}
+        </Card>
 
-      <div className={mode === 'question' ? '' : 'hidden'}>
-        {selected ? (
-          <DatasetQuestionPanel key={selected.slug} dataset={selected} isAdmin={isAdmin}
-            onCreateReport={createFromQuestion} />
-        ) : (
-          <EmptyState title="Выберите датасет" description="После выбора здесь можно задать вопрос по данным." />
-        )}
-      </div>
+        <div className="min-w-0">
+          <div className={mode === 'question' ? '' : 'hidden'}>
+            {selected ? (
+              <DatasetQuestionPanel key={selected.slug} dataset={selected} isAdmin={isAdmin}
+                onCreateReport={createFromQuestion} />
+            ) : (
+              <EmptyState title="Выберите источник" description="После выбора датасета здесь появится поле для вопроса и история ответов." />
+            )}
+          </div>
 
-      {(mode === 'report' || reportOpened) && (
-        <div className={mode === 'report' ? '' : 'hidden'}>
-          <BuilderPage embedded suggestedPrompt={suggestedPrompt} />
+          {(mode === 'report' || reportOpened) && (
+            <div className={mode === 'report' ? '' : 'hidden'}>
+              <BuilderPage embedded suggestedPrompt={suggestedPrompt} />
+            </div>
+          )}
         </div>
-      )}
+      </div>
     </Page>
   )
 }

@@ -7,21 +7,21 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 :root {
-  --bg: #f7f7fb;
+  --bg: #f4f7f5;
   --surface: #ffffff;
-  --surface-sunken: #f2f2f7;
-  --line: #e6e6ee;
+  --surface-sunken: #eaf0ed;
+  --line: #dce5df;
   /* Заливка колонок-родителей в таблице с вложенной группировкой:
      верхний уровень темнее, вложенные светлее — глубина видна оттенком. */
-  --group-level-1: #ebebf3;
-  --group-level-2: #f3f3f8;
-  --line-strong: #d3d3e0;
-  --fg: #2b2b33;
-  --fg-muted: #5f5f6e;
-  --accent: #4f46e5;
-  --accent-hover: #4338ca;
+  --group-level-1: #e5ece8;
+  --group-level-2: #eef3f0;
+  --line-strong: #bfd0c6;
+  --fg: #172b25;
+  --fg-muted: #60736b;
+  --accent: #0a725e;
+  --accent-hover: #075b4b;
   --accent-fg: #ffffff;
-  --accent-soft: #eef2ff;
+  --accent-soft: #e2f3eb;
   --good: #15803d;
   --good-soft: rgb(22 163 74 / 0.1);
   --bad: #dc2626;
@@ -48,26 +48,26 @@
   --cluster-7-soft: rgb(162 28 175 / 0.1);
   --cluster-8: #92400e;
   --cluster-8-soft: rgb(146 64 14 / 0.1);
-  --overlay: rgb(20 20 35 / 0.45);
-  --shadow-card: 0 1px 2px rgb(15 15 30 / 0.04);
-  --shadow-pop: 0 10px 30px rgb(15 15 30 / 0.08);
-  --shadow-modal: 0 20px 50px rgb(15 23 42 / 0.25);
+  --overlay: rgb(13 34 26 / 0.5);
+  --shadow-card: 0 1px 2px rgb(19 47 34 / 0.035);
+  --shadow-pop: 0 16px 40px rgb(19 47 34 / 0.09);
+  --shadow-modal: 0 24px 60px rgb(12 33 23 / 0.26);
 }
 
 .dark {
-  --bg: #0f1014;
-  --surface: #17181f;
-  --surface-sunken: #1e1f28;
-  --line: #2a2b35;
-  --group-level-1: #23242f;
-  --group-level-2: #1c1d26;
-  --line-strong: #3a3b48;
-  --fg: #e8e8ee;
-  --fg-muted: #9a9aa8;
-  --accent: #8b83f7;
-  --accent-hover: #a49df9;
-  --accent-fg: #14131f;
-  --accent-soft: #21203a;
+  --bg: #0d1713;
+  --surface: #15231c;
+  --surface-sunken: #1d3127;
+  --line: #30483b;
+  --group-level-1: #253b30;
+  --group-level-2: #1c3025;
+  --line-strong: #4a6655;
+  --fg: #e9f2eb;
+  --fg-muted: #a3b9a9;
+  --accent: #79ddae;
+  --accent-hover: #9ce9c4;
+  --accent-fg: #0e2519;
+  --accent-soft: #1c3d2d;
   --good: #4ade80;
   --good-soft: rgb(74 222 128 / 0.14);
   --bad: #f87171;
@@ -138,14 +138,14 @@
   --container-page: 90rem;
 
   /* 14px — карточки и секции; 8px — кнопки, поля, чипы */
-  --radius-card: 0.875rem;
-  --radius-control: 0.5rem;
+  --radius-card: 1.125rem;
+  --radius-control: 0.625rem;
 
   --shadow-card: var(--shadow-card);
   --shadow-pop: var(--shadow-pop);
   --shadow-modal: var(--shadow-modal);
 
-  --font-sans: system-ui, 'Segoe UI', Roboto, sans-serif;
+  --font-sans: 'Avenir Next', 'Segoe UI', system-ui, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 

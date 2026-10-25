@@ -952,9 +952,10 @@ function Builder({ embedded, suggestedPrompt }: {
 
   return (
     <BuilderFrame embedded={embedded}>
-      <div className="flex flex-wrap items-start justify-between gap-4">
+      <div className="flex flex-wrap items-start justify-between gap-4 border-b border-line pb-5">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">{editing ? 'Правка отчёта' : 'Конструктор отчёта'}</h1>
+          <p className="text-[11px] font-semibold tracking-[0.14em] text-accent uppercase">Редактор</p>
+          <h2 className="mt-1 text-2xl font-semibold tracking-tight">{editing ? 'Правка отчёта' : 'Новый отчёт'}</h2>
           <ol className="mt-2 flex list-none items-center gap-1.5 p-0">
             <StepLink n={1} label="Данные" current={step === 1} done={step > 1} onClick={() => setStep(1)} />
             <li aria-hidden="true" className="text-fg-muted">

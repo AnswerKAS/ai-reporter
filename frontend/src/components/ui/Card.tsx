@@ -12,7 +12,7 @@ export function Card({ interactive = false, className, ...props }: CardProps) {
       className={cn(
         'rounded-card border border-line bg-surface p-5 shadow-card',
         interactive &&
-          'transition-[border-color,box-shadow,transform] hover:-translate-y-0.5 hover:border-accent hover:shadow-pop',
+          'transition-[border-color,box-shadow,transform] hover:-translate-y-0.5 hover:border-line-strong hover:shadow-pop',
         className,
       )}
       {...props}
