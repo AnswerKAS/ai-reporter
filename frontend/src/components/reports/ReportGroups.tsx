@@ -60,8 +60,8 @@ export function ReportGroups({
                 )
               }
               className={cn(
-                'flex w-full cursor-pointer items-center gap-1.5 rounded-control px-2 py-1.5',
-                'text-left text-sm text-fg transition-colors hover:bg-bg',
+                'flex min-h-10 w-full cursor-pointer items-center gap-2 rounded-control px-3 py-1.5',
+                'text-left text-sm text-fg transition-colors hover:bg-surface-sunken',
               )}
             >
               <span aria-hidden="true" className="w-2 shrink-0 text-xs text-fg-muted">

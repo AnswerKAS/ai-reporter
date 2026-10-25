@@ -94,7 +94,7 @@ export function SidebarPanel({ className }: { className?: string }) {
       className={cn('sticky top-0 hidden h-dvh shrink-0 xl:flex', className)}
       style={{ width }}
     >
-      <Sidebar className="min-w-0 flex-1 overflow-y-auto border-r border-line bg-surface p-4" />
+      <Sidebar className="min-w-0 flex-1 overflow-y-auto border-r border-line bg-surface" />
       <div
         role="separator"
         aria-orientation="vertical"

@@ -20,9 +20,8 @@ function StatusDot({ status }: { status?: string }) {
 /**
  * Строка отчёта в меню: ссылка, закрепление и действия.
  *
- * Кнопки конструктора, переименования и удаления остаются на своих местах и
- * появляются по наведению, а те же действия дублируются в меню «…», которое
- * видно всегда: на тач-устройстве наведения нет вовсе.
+ * Название занимает основную ширину; закрепление и меню действий доступны
+ * постоянно, в том числе с клавиатуры и на сенсорном экране.
  */
 export function ReportRow({
   report,
@@ -58,31 +57,15 @@ export function ReportRow({
   ]
 
   return (
-    <div className="group/row flex items-center gap-0.5">
-      <button
-        type="button"
-        aria-label={favorite ? `Открепить «${report.title}»` : `Закрепить «${report.title}»`}
-        aria-pressed={favorite}
-        title={favorite ? 'Открепить' : 'Закрепить'}
-        onClick={onToggleFavorite}
-        className={cn(
-          'shrink-0 cursor-pointer rounded-control px-1 py-1 text-xs transition-colors',
-          favorite
-            ? 'text-warn'
-            : 'text-fg-muted opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 hover:text-fg',
-        )}
-      >
-        <span aria-hidden="true">{favorite ? '★' : '☆'}</span>
-      </button>
-
+    <div className="group/row flex min-w-0 items-center gap-1 rounded-control transition-colors hover:bg-surface-sunken">
       <NavLink
         to={`/reports/${report.slug}`}
         onClick={onNavigate}
         title={report.description ? `${report.title} — ${report.description}` : report.title}
         className={({ isActive }) =>
           cn(
-            'flex min-w-0 flex-1 items-center gap-2 rounded-control px-2 py-1.5 text-sm transition-colors',
-            isActive ? 'bg-accent-soft font-semibold text-accent' : 'text-fg hover:bg-bg',
+            'flex min-h-10 min-w-0 flex-1 items-center gap-2 rounded-control px-3 py-1.5 text-sm transition-colors',
+            isActive ? 'bg-accent-soft font-semibold text-accent' : 'text-fg',
           )
         }
       >
@@ -90,42 +73,17 @@ export function ReportRow({
         <span className="truncate">{report.title}</span>
       </NavLink>
 
-      <span className="flex shrink-0 items-center">
-        <span className="hidden items-center opacity-0 transition-opacity group-hover/row:opacity-100 focus-within:opacity-100 md:flex">
-          {canEdit && <NavLink
-            to={`/workspace/${report.slug}`}
-            onClick={onNavigate}
-            aria-label={`Открыть «${report.title}» в конструкторе`}
-            title="Открыть в конструкторе"
-            className="rounded-control px-1.5 py-1 text-xs text-fg-muted hover:bg-bg hover:text-fg"
-          >
-            <span aria-hidden="true">⚙</span>
-          </NavLink>}
-          {canEdit && <button
-            type="button"
-            aria-label={`Переименовать «${report.title}»`}
-            title="Переименовать"
-            onClick={onRename}
-            className="cursor-pointer rounded-control px-1.5 py-1 text-xs text-fg-muted hover:bg-bg hover:text-fg"
-          >
-            <span aria-hidden="true">✎</span>
-          </button>}
-          {isAdmin && (
-            <button
-              type="button"
-              aria-label={`Удалить «${report.title}»`}
-              title="Удалить"
-              onClick={onDelete}
-              className="cursor-pointer rounded-control px-1.5 py-1 text-xs text-fg-muted hover:bg-bad-soft hover:text-bad"
-            >
-              <span aria-hidden="true">✕</span>
-            </button>
-          )}
-        </span>
-        <span className="flex items-center md:opacity-0 md:transition-opacity md:group-hover/row:opacity-100 md:focus-within:opacity-100">
-          <RowMenu label={`Действия с отчётом «${report.title}»`} actions={actions} />
-        </span>
-      </span>
+      <button
+        type="button"
+        aria-label={favorite ? `Открепить «${report.title}»` : `Закрепить «${report.title}»`}
+        aria-pressed={favorite}
+        title={favorite ? 'Открепить' : 'Закрепить'}
+        onClick={onToggleFavorite}
+        className={cn('flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-control text-sm transition-colors hover:bg-accent-soft', favorite ? 'text-warn' : 'text-fg-muted hover:text-fg')}
+      >
+        <span aria-hidden="true">{favorite ? '★' : '☆'}</span>
+      </button>
+      <RowMenu label={`Действия с отчётом «${report.title}»`} actions={actions} />
     </div>
   )
 }

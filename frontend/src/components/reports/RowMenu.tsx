@@ -11,9 +11,8 @@ export interface RowAction {
 /**
  * Меню действий строки за кнопкой «…».
  *
- * Кнопки на строке видны по наведению — на мыши это правильно, места в узком
- * меню нет. Но наведения не бывает ни на тач-устройстве, ни с клавиатуры,
- * поэтому те же действия обязаны быть и здесь.
+ * Постоянная кнопка сохраняет действия доступными на мыши, клавиатуре и
+ * сенсорном экране.
  *
  * Список позиционируется `fixed` по месту кнопки: меню слева прокручивается
  * (`overflow-y: auto`), и абсолютно позиционированный список в нём обрезается.
@@ -68,9 +67,9 @@ export function RowMenu({ label, actions }: { label: string; actions: RowAction[
         title={label}
         onClick={() => (at ? setAt(null) : open())}
         className={cn(
-          'cursor-pointer rounded-control px-1.5 py-1 text-xs text-fg-muted',
-          'hover:bg-bg hover:text-fg',
-          at && 'bg-bg text-fg',
+          'mr-1 flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-control text-base text-fg-muted',
+          'hover:bg-accent-soft hover:text-fg',
+          at && 'bg-accent-soft text-fg',
         )}
       >
         <span aria-hidden="true">⋯</span>

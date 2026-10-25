@@ -45,12 +45,12 @@ export function CatalogControls({
   const statuses = facets?.statuses ?? []
 
   return (
-    <div className="mb-2 flex flex-col gap-1.5">
+    <div className="flex flex-col gap-2">
       <Input
         type="search"
         value={query}
         onChange={(e) => onQuery(e.target.value)}
-        placeholder="Поиск отчёта"
+        placeholder="Найти отчёт…"
         aria-label="Поиск отчёта"
       />
 
@@ -60,7 +60,7 @@ export function CatalogControls({
           variant={open ? 'default' : 'ghost'}
           aria-expanded={open}
           onClick={() => onOpen(!open)}
-          className="flex-1"
+          className="min-w-0 flex-1 justify-start"
         >
           Фильтры{active > 0 && <span className="tabular-nums">({active})</span>}
         </Button>
@@ -93,7 +93,7 @@ export function CatalogControls({
                 <Select
                   value={state[key]}
                   onChange={(e) => onChange({ ...state, [key]: e.target.value })}
-                  className="py-1.5"
+          className="py-1.5"
                 >
                   <option value="">Все</option>
                   {items.map((item) => (
