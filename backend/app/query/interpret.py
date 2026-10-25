@@ -125,10 +125,9 @@ def available() -> bool:
 def _ask(prompt_text: str, model: str, key: str, timeout: int | None = None) -> str:
     """Один запрос к модели через LangChain.
 
-    Модель получает готовый текст и возвращает JSON: ни инструментов, ни
-    сессий у провайдера мы не заводим — переписку диалога склеивает
-    вызывающий, поэтому обёртка нужна самая тонкая. Предел ожидания
-    передаётся параметром: у диалога он свой, больше разборного.
+    Модель получает готовый текст и возвращает JSON. Инструментами и памятью
+    диалога управляет LangGraph в `app.agent`; провайдер получает только
+    текст текущего решения. Предел ожидания задаёт вызывающий.
     """
     from langchain_core.messages import HumanMessage
     from langchain_openai import ChatOpenAI
@@ -543,7 +542,7 @@ def _validate(data: dict, metrics: dict, dimensions: dict) -> dict:
     sections = [s for s in raw_sections
                 if isinstance(s, dict)
                 and s.get('type') in ('kpi', 'chart', 'table')
-                and (s.get('metrics') or [])]
+                and ((s.get('metrics') or []) or s.get('sql'))]
     if not sections:
         raise DatasetError(
             'из описания не вышло ни одной секции. Скажите, что считать и в каком '
@@ -559,6 +558,12 @@ def _validate(data: dict, metrics: dict, dimensions: dict) -> dict:
             section['metrics'] = [renamed.get(m, m) for m in (section.get('metrics') or [])]
 
     for section in sections:
+        if section.get('sql'):
+            from ..agent.readonly import validate_readonly_sql
+            validate_readonly_sql(str(section['sql']))
+            if not section.get('datasetSlug'):
+                raise DatasetError('для SQL-блока укажите datasetSlug')
+            continue
         for slug in list(section.get('metrics') or []):
             if slug not in known_metrics:
                 invented.append(slug)

@@ -17,6 +17,7 @@ from ..schemas.report import FiltersPatch, ReportMeta, ReportUpdate
 from ..datasets.base import DatasetError
 from ..query import builder as query_builder
 from ..query import interpret
+from ..agent import store as agent_store
 from ..mail import registry as mail_registry
 from ..reports import drilldown, executor
 from ..schemas.definition import ReportDefinition
@@ -139,23 +140,54 @@ def chat_report(payload: dict, user: dict = Depends(get_current_user)) -> dict:
     модель правит уже собранное определение, а не пересобирает его с нуля.
     Поэтому текущее определение приезжает вместе с перепиской.
 
-    Состояния на сервере нет: переписку держит клиент и присылает целиком,
-    в модель уходит её хвост. Ошибка сверки со словарём возвращается ответом
-    собеседника, а не 422, — иначе диалог обрывался бы там, где ради него и
-    затевался.
+    История хранится в метабазе по владельцу и цели диалога; клиент присылает
+    новую реплику и может восстановить переписку после перезагрузки страницы.
     """
     messages = payload.get('messages') or []
     fields = payload.get('fields') or []
     computed = payload.get('computed') or []
     datasets = payload.get('datasets') or []
     definition = payload.get('definition') or None
+    latest = next((item for item in reversed(messages)
+                   if item.get('role') == 'user' and str(item.get('text') or '').strip()), None)
+    if latest is None:
+        raise HTTPException(422, 'напишите, какой отчёт нужен — обычными словами')
+    target = str(payload.get('target') or 'new')[:120]
+    try:
+        conversation = agent_store.conversation(
+            user['id'], 'report', target, payload.get('conversationId'), create=True)
+    except DatasetError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    stored = agent_store.messages(conversation['id'])
+    context = ([{'role': item['role'], 'text': item['text']} for item in stored]
+               + [latest]) if stored else messages
     catalog = query_builder.Catalog()
     try:
-        return interpret.chat(messages, catalog, fields, computed, datasets, definition)
+        from ..agent.runner import chat_report as agent_chat_report
+        result = agent_chat_report(context, catalog, fields, computed, datasets, definition)
+        agent_store.save_exchange(conversation['id'], latest['text'], result['reply'], result)
+        return {**result, 'conversationId': conversation['id']}
     except DatasetError as exc:
         raise HTTPException(422, str(exc))
     finally:
         catalog.close()
+
+
+@router.get('/reports/chat/history')
+def report_chat_history(target: str = 'new', conversation_id: str | None = None,
+                        user: dict = Depends(get_current_user)) -> dict:
+    """Restore a report conversation belonging to the authenticated user."""
+    try:
+        item = agent_store.conversation(user['id'], 'report', target,
+                                        conversation_id)
+    except DatasetError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    if item is None:
+        return {'conversationId': None, 'messages': []}
+    stored = agent_store.messages(item['id'])
+    return {'conversationId': item['id'], 'messages': [
+        {'role': message['role'], 'text': message['text']} for message in stored
+    ]}
 
 
 @router.post('/reports/recommendations')

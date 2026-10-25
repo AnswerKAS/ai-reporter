@@ -36,8 +36,10 @@ class SectionDefinition(CamelModel):
     kind: Literal['bar', 'bar_horizontal', 'bar_stacked', 'line', 'area', 'area_stacked', 'pie', 'combo'] | None = None
     series_types: dict[str, Literal['bar', 'line']] = Field(default_factory=dict)
     per_row: Literal[1, 2] | None = None
-    metrics: list[str]
+    metrics: list[str] = []
     by: list[str] = []
+    dataset_slug: str | None = None
+    sql: str | None = None
     grain: GRAINS | None = None
     order_by: str | None = None
     order_dir: Literal['asc', 'desc'] = 'desc'
@@ -62,6 +64,12 @@ class SectionDefinition(CamelModel):
     @model_validator(mode='after')
     def _check_group_by(self):
         """Разрезы: без дублей и в пределах, которые секция способна показать."""
+        if self.sql:
+            if not self.dataset_slug:
+                raise ValueError('для SQL-блока нужен датасет')
+            return self
+        if not self.metrics:
+            raise ValueError('для блока нужен показатель или SQL-запрос')
         seen: list[str] = []
         for slug in self.by:
             if slug not in seen:

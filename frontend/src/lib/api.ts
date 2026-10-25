@@ -392,8 +392,67 @@ export async function askDataset(slug: string, question: string,
   return await request<DatasetQuestionTurn>(`/datasets/${slug}/ask`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ question, history: history.map(({ question, plan }) => ({ question, plan })) }),
+    body: JSON.stringify({ question, history: history.map(({ question, answer, sql, plan }) => (
+      { question, answer, sql, plan })) }),
   })
+}
+
+export interface DatasetStreamEvent {
+  type: 'status' | 'delta' | 'done' | 'error'
+  text?: string
+  message?: string
+  conversationId?: string
+  result?: DatasetQuestionTurn
+}
+
+/** Read a saved dataset conversation after reopening or switching datasets. */
+export async function fetchDatasetConversation(slug: string): Promise<{
+  conversationId: string | null
+  turns: DatasetQuestionTurn[]
+}> {
+  return request(`/datasets/${encodeURIComponent(slug)}/conversation`)
+}
+
+/** Read newline-delimited agent events as soon as the server sends them. */
+export async function streamDatasetAnswer(
+  slug: string,
+  question: string,
+  conversationId: string | null,
+  onEvent: (event: DatasetStreamEvent) => void,
+): Promise<void> {
+  const response = await fetch(`${BASE}/datasets/${encodeURIComponent(slug)}/ask/stream`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}),
+    },
+    body: JSON.stringify({ question, conversationId }),
+  })
+  if (response.status === 401) {
+    setToken(null)
+    onUnauthorized?.()
+    throw new ApiError(401, 'требуется авторизация')
+  }
+  if (!response.ok || !response.body) {
+    let detail = `HTTP ${response.status}`
+    try { detail = describeDetail((await response.json() as { detail?: unknown }).detail) } catch { /* no JSON body */ }
+    throw new ApiError(response.status, detail)
+  }
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let pending = ''
+  while (true) {
+    const { value, done } = await reader.read()
+    pending += decoder.decode(value, { stream: !done })
+    const lines = pending.split('\n')
+    pending = lines.pop() ?? ''
+    for (const line of lines) {
+      if (!line.trim()) continue
+      onEvent(JSON.parse(line) as DatasetStreamEvent)
+    }
+    if (done) break
+  }
+  if (pending.trim()) onEvent(JSON.parse(pending) as DatasetStreamEvent)
 }
 
 export async function createDataset(input: DatasetCreateInput): Promise<DatasetSaveResult> {
@@ -764,8 +823,7 @@ export interface ParseResult {
   fallbackReason?: string
 }
 
-/** Реплика переписки о будущем отчёте. Историю держит клиент: сервер
- *  диалоговых сессий не заводит, вся переписка уходит с каждым обращением. */
+/** Реплика переписки о будущем отчёте, сохранённая в метабазе. */
 export interface ChatMessage {
   role: 'user' | 'assistant'
   text: string
@@ -806,6 +864,15 @@ export interface ChatAnswer {
   source?: 'llm' | 'parser'
   /** Какая модель ответила: у диалога и разбора они разные. */
   model?: string
+  conversationId?: string
+}
+
+/** Restore the authenticated user's saved report conversation. */
+export async function fetchReportChatHistory(target: string): Promise<{
+  conversationId: string | null
+  messages: ChatMessage[]
+}> {
+  return request(`/reports/chat/history?target=${encodeURIComponent(target)}`)
 }
 
 /** Ход диалога об отчёте. Текущее определение уходит вместе с перепиской:
@@ -817,6 +884,8 @@ export async function chatReport(
     computed?: ComputedField[]
     datasets?: string[]
     definition?: ReportDefinition | null
+    conversationId?: string | null
+    target?: string
   } = {},
 ): Promise<ChatAnswer> {
   return request<ChatAnswer>('/reports/chat', {
@@ -828,6 +897,8 @@ export async function chatReport(
       computed: context.computed ?? [],
       datasets: context.datasets ?? [],
       definition: context.definition ?? null,
+      conversationId: context.conversationId ?? null,
+      target: context.target ?? 'new',
     }),
   })
 }

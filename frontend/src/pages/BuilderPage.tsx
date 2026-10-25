@@ -29,7 +29,7 @@ import {
 } from '../lib/api'
 import { SectionsGrid } from '../components/SectionsGrid'
 import { ReportFilters } from '../components/ReportFilters'
-import { Alert, Button, Field, Input, Modal, Page, PageHeader, Segmented, Select, SkeletonRows, useConfirm } from '../components/ui'
+import { Alert, Button, Field, Input, Modal, Page, PageHeader, Segmented, Select, SkeletonRows, Textarea, useConfirm } from '../components/ui'
 import { cn } from '../lib/cn'
 import type { LinkIndex } from '../lib/dataset-links'
 import { buildLinkIndex, reachableFrom } from '../lib/dataset-links'
@@ -504,7 +504,7 @@ function Builder({ embedded, suggestedPrompt }: {
   const definition = useMemo<ReportDefinition>(
     () => ({
       drilldown,
-      sections: sections.filter((s) => s.metrics.length > 0),
+      sections: sections.filter((s) => Boolean(s.sql?.trim()) || s.metrics.length > 0),
       filters,
       fields: ownFields,
       computed,
@@ -838,6 +838,9 @@ function Builder({ embedded, suggestedPrompt }: {
       ])
       setPickedDatasets((prev) => {
         const next = new Set(prev)
+        parsed.sections.forEach((section) => {
+          if (section.sql && section.datasetSlug) next.add(section.datasetSlug)
+        })
         usedM.forEach((m) => {
           const d = metricsBySlug.get(m)?.datasetSlug ?? ownByKey.get(m)?.datasetSlug
             ?? proposedFields.find((field) => field.key === m)?.datasetSlug
@@ -984,6 +987,7 @@ function Builder({ embedded, suggestedPrompt }: {
           показателя недоступен — там диалог был бы заперт за тем самым
           выбором, который он и должен избавить делать руками. */}
       <ReportChat
+        target={slug ?? 'new'}
         fields={ownFields}
         computed={computed}
         datasets={pickedDatasets}
@@ -1128,6 +1132,36 @@ function Builder({ embedded, suggestedPrompt }: {
                   active &&
                   dragging?.kind === 'dimension' &&
                   (section.type === 'kpi' || !dimensionFits(section, dragging.slug))
+                if (section.sql) return (
+                  <section key={index} className="space-y-3 rounded-card border border-line bg-surface p-3.5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-xs font-semibold text-fg-muted">SQL-блок {index + 1}</span>
+                      <Select fit aria-label="Вид SQL-блока" value={section.type}
+                        onChange={(event) => patchSection(index, { type: event.target.value as SectionDefinition['type'] })}>
+                        {SECTION_TYPES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+                      </Select>
+                      <Select fit aria-label="Ширина SQL-блока"
+                        value={section.perRow ?? DEFAULT_PER_ROW[section.type]}
+                        onChange={(event) => patchSection(index, { perRow: Number(event.target.value) as 1 | 2 })}>
+                        {PER_ROW_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+                      </Select>
+                      <Button variant="ghost" size="sm" className="ml-auto"
+                        onClick={() => setSections((previous) => previous.filter((_, position) => position !== index))}>
+                        удалить
+                      </Button>
+                    </div>
+                    {section.type === 'chart' && <ChartKindPicker value={section.kind ?? 'bar'}
+                      onChange={(kind) => patchSection(index, { kind })} />}
+                    <Field label="Название блока"><Input value={section.title ?? ''}
+                      onChange={(event) => patchSection(index, { title: event.target.value })} /></Field>
+                    <p className="text-xs text-fg-muted">Датасет: {datasetTitle(section.datasetSlug ?? '')}</p>
+                    <details className="rounded-control border border-line px-3 py-2 text-sm">
+                      <summary className="cursor-pointer">SQL-запрос</summary>
+                      <Textarea className="mt-2 font-mono text-xs" rows={8} value={section.sql}
+                        onChange={(event) => patchSection(index, { sql: event.target.value })} />
+                    </details>
+                  </section>
+                )
                 return (
                   <section
                     key={index}

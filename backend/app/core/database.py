@@ -242,6 +242,38 @@ def init_db() -> None:
         )
         conn.execute(
             '''
+            CREATE TABLE IF NOT EXISTS agent_conversations (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                target TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            '''
+        )
+        conn.execute(
+            'CREATE INDEX IF NOT EXISTS agent_conversations_owner_idx '
+            'ON agent_conversations (user_id, kind, target, updated_at)'
+        )
+        conn.execute(
+            '''
+            CREATE TABLE IF NOT EXISTS agent_messages (
+                id TEXT PRIMARY KEY,
+                conversation_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                text TEXT NOT NULL,
+                payload TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL
+            )
+            '''
+        )
+        conn.execute(
+            'CREATE INDEX IF NOT EXISTS agent_messages_conversation_idx '
+            'ON agent_messages (conversation_id, created_at, id)'
+        )
+        conn.execute(
+            '''
             CREATE TABLE IF NOT EXISTS datasets (
                 slug TEXT PRIMARY KEY,
                 title TEXT NOT NULL,

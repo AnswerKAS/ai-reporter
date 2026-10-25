@@ -10,6 +10,7 @@ from datetime import date, datetime
 from decimal import Decimal
 
 from ..datasets.base import DatasetError
+from ..agent.readonly import execute_readonly_sql, scope_dataset_sql
 from ..query import builder
 from ..schemas.definition import ReportDefinition, SectionDefinition
 
@@ -212,6 +213,9 @@ def build_section(section: SectionDefinition, filter_values: dict,
                   catalog: builder.Catalog | None = None,
                   computed: list[dict] | None = None,
                   fields: list[dict] | None = None) -> dict:
+    """Execute either a semantic block or an agent-authored SQL block."""
+    if section.sql:
+        return _build_sql_section(section, catalog or builder.Catalog(), filter_values)
     query_obj = _section_query(section, filter_values,
                                catalog or builder.Catalog(), computed, fields)
     query = query_obj.build()
@@ -241,6 +245,38 @@ def build_section(section: SectionDefinition, filter_values: dict,
             f'Показаны первые {MAX_SECTION_ROWS:,} строк — в этом разрезе их больше. '
             'Возьмите разрез покрупнее или задайте своё ограничение.'
         ).replace(',', ' ')
+    return built
+
+
+def _build_sql_section(section: SectionDefinition, catalog: builder.Catalog,
+                       filter_values: dict) -> dict:
+    """Render a read-only SQL result as a table, chart or KPI block."""
+    dataset = catalog.dataset(section.dataset_slug)
+    sql = scope_dataset_sql(dataset, section.sql)
+    columns, rows, truncated = execute_readonly_sql(
+        dataset, sql, visible_rows=min(section.limit or MAX_SECTION_ROWS, MAX_SECTION_ROWS))
+    data = [{name: _cell(value) for name, value in zip(columns, row)} for row in rows]
+    title = section.title or 'Результат SQL-запроса'
+    if section.type == 'kpi':
+        first = data[0] if data else {}
+        built = {'type': 'kpi', 'title': title,
+                 'items': [{'label': name, 'value': first.get(name), 'format': 'number'}
+                           for name in columns]}
+    elif section.type == 'chart':
+        x_key = columns[0] if columns else None
+        series = [{'key': name, 'name': name} for name in columns[1:]]
+        built = {'type': 'chart', 'kind': section.kind or 'bar', 'title': title,
+                 'data': data, 'xKey': x_key, 'series': series}
+    else:
+        built = {'type': 'table', 'title': title,
+                 'columns': [{'key': name, 'header': name} for name in columns],
+                 'rows': data}
+    built['perRow'] = section.row_width
+    built['dataOrigin'] = 'live'
+    if filter_values:
+        built['filterNote'] = 'Фильтры отчёта не применены к SQL-блоку.'
+    if truncated:
+        built['rowsNote'] = 'Показаны первые строки результата — задайте ограничение в SQL для полного анализа.'
     return built
 
 

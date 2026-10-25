@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ChatMessage, ReportRecommendation } from '../../lib/api'
-import { ApiError, chatReport, parsePhrase, recommendReports } from '../../lib/api'
+import { ApiError, chatReport, fetchReportChatHistory, parsePhrase, recommendReports } from '../../lib/api'
 import type { ComputedField, ReportDefinition, ReportField } from '../../types/semantic'
 import type { Dataset } from '../../types/dataset'
 import { Alert, Button, Card, Input, Modal, Textarea } from '../ui'
@@ -15,11 +15,9 @@ import { DatasetDataDialog } from './DatasetDataDialog'
  * реплика, и собеседник правит уже собранную раскладку, а не пересобирает её
  * с нуля. Поэтому текущее определение уходит вместе с перепиской.
  *
- * Переписка живёт в модалке, а предложение — на странице: разговаривают в
- * одном месте, смотрят в другом. Как только раскладка предложена, модалка
- * закрывается сама — иначе предпросмотр, ради которого всё и затевалось,
- * остаётся за ней. Компонент со страницы не снимается, поэтому переписка
- * переживает закрытие и «доработать» открывает её же, а не пустой лист.
+ * Переписка показывается в модалке и сохраняется сервером, а предложение —
+ * на странице. Как только раскладка предложена, модалка закрывается; при
+ * повторном открытии или обновлении страницы реплики восстанавливаются.
  */
 export function ReportChat({
   fields,
@@ -36,6 +34,7 @@ export function ReportChat({
   onSave,
   onVocabulary,
   compact = false,
+  target,
 }: {
   fields: ReportField[]
   computed: ComputedField[]
@@ -53,10 +52,12 @@ export function ReportChat({
   /** Показать словарь отчёта: словами можно назвать только то, что в нём есть. */
   onVocabulary: () => void
   compact?: boolean
+  target: string
 }) {
   const [open, setOpen] = useState(false)
   const [dataOpen, setDataOpen] = useState(false)
   const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [conversationId, setConversationId] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -70,6 +71,16 @@ export function ReportChat({
   /** Последняя реплика человека — её разбирает запасной путь без модели. */
   const [lastSaid, setLastSaid] = useState('')
   const tail = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    let active = true
+    void fetchReportChatHistory(target).then((saved) => {
+      if (!active) return
+      setConversationId(saved.conversationId)
+      setMessages(saved.messages)
+    }).catch(() => { /* Chat stays usable when history is unavailable. */ })
+    return () => { active = false }
+  }, [target])
 
   // Переход из ответа по датасету открывает тот же диалог с готовым вопросом.
   useEffect(() => {
@@ -121,7 +132,9 @@ export function ReportChat({
     setRecommendations([])
     setBusy(true)
     try {
-      const answer = await chatReport(next, { fields, computed, datasets, definition })
+      const answer = await chatReport(next, { fields, computed, datasets, definition,
+        conversationId, target })
+      setConversationId(answer.conversationId ?? null)
       setMessages([...next, { role: 'assistant', text: answer.reply }])
       setModel(answer.model ?? null)
       setParserMode(answer.source === 'parser')

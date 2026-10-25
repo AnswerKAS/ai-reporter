@@ -1,9 +1,12 @@
 """Роутер датасетов: просмотр (все пользователи), CRUD и CSV (админ)."""
 
 import re
+import json
+import queue
+import threading
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from ..core.security import get_current_user, require_admin
 from ..core.config import connection as db_connection, connections as db_connections
@@ -11,6 +14,8 @@ from ..datasets import registry as ds_registry
 from ..datasets import answer as dataset_answer
 from ..datasets import servers as ds_servers
 from ..datasets import sqlsource
+from ..agent import store as agent_store
+from ..agent.runner import ask_dataset as agent_ask_dataset
 from ..datasets.base import DatasetError, sanitize_error
 from ..schemas.dataset import (
     DatasetCreate,
@@ -207,6 +212,65 @@ def ask_dataset(slug: str, payload: dict, user: dict = Depends(get_current_user)
                                      reveal_sql=_is_admin(user))
     except DatasetError as exc:
         raise HTTPException(422, sanitize_error(str(exc))) from exc
+
+
+@router.get('/{slug}/conversation')
+def get_dataset_conversation(slug: str,
+                             user: dict = Depends(get_current_user)) -> dict:
+    """Load the current user's saved question history for one dataset."""
+    _get_or_404(slug)
+    item = agent_store.conversation(user['id'], 'dataset', slug)
+    if item is None:
+        return {'conversationId': None, 'turns': []}
+    return {'conversationId': item['id'], 'turns': [
+        turn['payload']
+        for turn in agent_store.messages(item['id'])
+        if turn['role'] == 'assistant' and turn['payload'].get('question')
+    ]}
+
+
+@router.post('/{slug}/ask/stream')
+def stream_dataset_answer(slug: str, payload: dict,
+                          user: dict = Depends(get_current_user)) -> StreamingResponse:
+    """Stream agent progress and its answer while saving the completed turn."""
+    dataset = _get_or_404(slug)
+    question = payload.get('question')
+    if (not isinstance(question, str) or not question.strip()
+            or len(question) > 1000 or not any(char.isalnum() for char in question)):
+        raise HTTPException(422, 'вопрос должен быть непустым и не длиннее 1000 символов')
+    try:
+        item = agent_store.conversation(
+            user['id'], 'dataset', slug, payload.get('conversationId'), create=True)
+    except DatasetError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    history = agent_store.dataset_history(item['id'])
+    events: queue.Queue[dict | None] = queue.Queue()
+
+    def worker() -> None:
+        """Run the blocking LangGraph agent outside the response generator."""
+        try:
+            result = agent_ask_dataset(dataset, question.strip(), history,
+                                       reveal_sql=_is_admin(user), on_event=events.put)
+            agent_store.save_exchange(item['id'], question.strip(), result['answer'],
+                                      {'question': question.strip(), **result})
+            events.put({'type': 'done', 'conversationId': item['id'], 'result': result})
+        except Exception as exc:
+            events.put({'type': 'error', 'message': sanitize_error(str(exc))})
+        finally:
+            events.put(None)
+
+    def stream():
+        """Serialize queued progress events as newline-delimited JSON."""
+        threading.Thread(target=worker, daemon=True).start()
+        while True:
+            event = events.get()
+            if event is None:
+                break
+            yield json.dumps(event, ensure_ascii=False, default=str) + '\n'
+
+    return StreamingResponse(stream(), media_type='application/x-ndjson',
+                             headers={'Cache-Control': 'no-cache',
+                                      'X-Accel-Buffering': 'no'})
 
 
 @router.post('', status_code=201)

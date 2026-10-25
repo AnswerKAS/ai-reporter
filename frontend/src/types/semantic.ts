@@ -61,6 +61,9 @@ export interface SectionDefinition {
   perRow?: 1 | 2 | null
   metrics: string[]
   by: string[]
+  /** SQL authored by the agent; dataset is available as the dataset relation. */
+  sql?: string | null
+  datasetSlug?: string | null
   grain?: Grain | null
   orderBy?: string | null
   orderDir: 'asc' | 'desc'
