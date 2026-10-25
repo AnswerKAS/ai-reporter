@@ -297,11 +297,11 @@ _CHAT_INSTRUCTIONS = ("""Ты помогаешь человеку собрать
 
 
 def vocabulary_of(catalog, fields=None, computed=None, datasets=None) -> tuple[dict, dict]:
-    """Показатели и разрезы, доступные этому отчёту.
+    """Показатели и разрезы из словаря, отчёта и схем датасетов.
 
-    Кроме общего словаря — поля, заведённые автором прямо в отчёте, и его
-    формулы. Без них модель честно отвечает «такого показателя нет», хотя
-    в палитре он есть: для отчёта они настоящие поля.
+    Кроме общего словаря — поля, заведённые автором прямо в отчёте, его
+    формулы и безопасные кандидаты из схем датасетов без общих метрик.
+    Последние вкладываются в определение, только если разбор их использовал.
 
     Если автор уже выбрал датасеты, словарь сужается до них. Это не
     оптимизация, а условие работоспособности: на установке с тремя десятками
@@ -324,6 +324,8 @@ def vocabulary_of(catalog, fields=None, computed=None, datasets=None) -> tuple[d
             'description': None,
             'status': 'ok',
         }
+        if item.get('field') and entry['dataset_slug']:
+            entry['_report_field'] = item
         if (item.get('role') or 'metric') == 'dimension':
             entry['type'] = item.get('type') or 'string'
             dimensions[key] = entry
@@ -337,6 +339,10 @@ def vocabulary_of(catalog, fields=None, computed=None, datasets=None) -> tuple[d
             'dataset_slug': '', 'description': 'формула отчёта',
             'status': 'ok', 'expression': '',
         }
+    schema_metrics, schema_dimensions = _schema_fields(
+        catalog, metrics, dimensions, datasets)
+    metrics.update(schema_metrics)
+    dimensions.update(schema_dimensions)
     return metrics, dimensions
 
 
@@ -499,6 +505,31 @@ def _computed(data: dict, metrics: dict, invented: list[str]) -> tuple[list[dict
     return out, renamed
 
 
+def _attach_report_fields(definition: dict, metrics: dict,
+                          dimensions: dict) -> dict:
+    """Вкладывает проверенные поля схемы, нужные секциям и формулам отчёта."""
+    used_metrics = {key for section in definition.get('sections') or []
+                    for key in section.get('metrics') or []}
+    used_dimensions = {key for section in definition.get('sections') or []
+                       for key in section.get('by') or []}
+    used_dimensions.update(item['dimension'] for item in definition.get('filters') or []
+                           if item.get('dimension'))
+    for item in definition.get('computed') or []:
+        used_metrics.update((item.get('left'), item.get('right')))
+    report_fields = []
+    for key in used_metrics:
+        field = metrics.get(key, {}).get('_report_field')
+        if field:
+            report_fields.append(field)
+    for key in used_dimensions:
+        field = dimensions.get(key, {}).get('_report_field')
+        if field:
+            report_fields.append(field)
+    if report_fields:
+        definition['fields'] = sorted(report_fields, key=lambda item: item['key'])
+    return definition
+
+
 def _validate(data: dict, metrics: dict, dimensions: dict) -> dict:
     """Сверяет ответ модели со словарём: выдуманное сюда не проходит."""
     known_metrics, known_dims = set(metrics), set(dimensions)
@@ -554,8 +585,9 @@ def _validate(data: dict, metrics: dict, dimensions: dict) -> dict:
             section['kind'] = None
         if not section['by']:
             section['grain'] = None
-    return {'sections': sections, 'filters': _filters(data, dimensions),
-            'computed': computed}
+    return _attach_report_fields(
+        {'sections': sections, 'filters': _filters(data, dimensions),
+         'computed': computed}, metrics, dimensions)
 
 
 def _filters(data: dict, dimensions: dict) -> list[dict]:
@@ -619,7 +651,7 @@ def parse(text: str, catalog, fields=None, computed=None, datasets=None) -> dict
     if not metrics:
         raise DatasetError(
             'ни одного показателя не выбрано: описывать нечего. Отметьте поля '
-            'на шаге «Данные» — или заведите их в «Модели данных»'
+            'на шаге «Данные» или проверьте схему датасета'
         )
 
     prompt_text = (f'{_INSTRUCTIONS}\n\n{_vocabulary(metrics, dimensions)}\n\n'
@@ -658,6 +690,8 @@ def parse(text: str, catalog, fields=None, computed=None, datasets=None) -> dict
         print('[interpret] модель не сработала: ' + ' | '.join(p[:200] for p in problems))
 
     parsed = phrase.parse(text, _Vocabulary(metrics, dimensions))
+    parsed['definition'] = _attach_report_fields(
+        parsed['definition'], metrics, dimensions)
     parsed['source'] = 'parser'
     # честно говорим, что разбирала не модель: иначе разница в качестве
     # разбора выглядит необъяснимой
@@ -702,9 +736,9 @@ def _history(messages, limit: int) -> str:
     return '\n'.join(lines)
 
 
-def _schema_recommendations(catalog, metrics: dict, dimensions: dict,
-                            datasets) -> tuple[dict, dict]:
-    """Поля подготовленных датасетов для вариантов без общего словаря.
+def _schema_fields(catalog, metrics: dict, dimensions: dict,
+                   datasets) -> tuple[dict, dict]:
+    """Поля подготовленных датасетов для словаря без общих метрик.
 
     Это только кандидаты для рекомендации: в общий словарь они не пишутся.
     Выбранные поля вкладываются в определение конкретного отчёта.
@@ -789,13 +823,10 @@ def _recommendations(catalog, metrics: dict, dimensions: dict,
              if len(word) >= 4 and word not in generic}
 
     def matches(title: str) -> int:
+        """Считает слова запроса, похожие на название кандидата."""
         return sum(any(phrase._similar(word, candidate) >= 0.9
                        for candidate in phrase._tokens(title)) for word in words)
 
-    schema_metrics, schema_dimensions = _schema_recommendations(
-        catalog, metrics, dimensions, datasets)
-    metrics = {**metrics, **schema_metrics}
-    dimensions = {**dimensions, **schema_dimensions}
     candidates = []
     for metric in metrics.values():
         if not isinstance(metric.get('slug'), str) or not metric['slug']:
@@ -865,10 +896,6 @@ def _recommendations(catalog, metrics: dict, dimensions: dict,
              'kind': 'daterange' if dim.get('type') == 'date' else 'select'}
             for dim in used_dimensions]}
         definition = _validate(raw, metrics, dimensions)
-        report_fields = [entry['_report_field'] for entry in [metric, *used_dimensions]
-                         if '_report_field' in entry]
-        if report_fields:
-            definition['fields'] = report_fields
         result.append({'title': f"{metric['title']} · {dataset_title}",
                        'datasetTitle': dataset_title,
                        'description': ', '.join(details).capitalize(),
@@ -880,6 +907,11 @@ def recommend(catalog, fields=None, computed=None, datasets=None,
               request: str = '') -> dict:
     """Варианты по словарю и схеме датасетов до первой реплики."""
     metrics, dimensions = vocabulary_of(catalog, fields, computed)
+    if datasets:
+        preferred_metrics, preferred_dimensions = vocabulary_of(
+            catalog, fields, computed, datasets)
+        metrics.update(preferred_metrics)
+        dimensions.update(preferred_dimensions)
     recommendations = _recommendations(catalog, metrics, dimensions,
                                         datasets, request)
     if not recommendations:
@@ -949,10 +981,15 @@ def chat(messages, catalog, fields=None, computed=None, datasets=None,
     # хотя в установке они есть. Датасеты выбранного шага остаются
     # предпочтением, а не границей: собеседник обязан собрать отчёт.
     metrics, dimensions = vocabulary_of(catalog, fields, computed)
+    if datasets:
+        preferred_metrics, preferred_dimensions = vocabulary_of(
+            catalog, fields, computed, datasets)
+        metrics.update(preferred_metrics)
+        dimensions.update(preferred_dimensions)
     if not metrics:
         raise DatasetError(
-            'в словаре нет ни одного показателя: собирать не из чего. '
-            'Заведите показатели в «Модели данных»'
+            'в доступных данных нет ни одного показателя: собирать не из чего. '
+            'Проверьте схему датасета'
         )
 
     preferred = ''

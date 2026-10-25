@@ -340,6 +340,51 @@ def test_recommendation_counts_values_without_numeric_columns(catalog):
     assert metric['agg'] == 'count'
 
 
+def test_chat_parses_selected_dataset_without_shared_vocabulary(catalog, monkeypatch):
+    """The conversation falls back to dataset fields when shared metrics are absent."""
+    catalog.metrics = {}
+    catalog.dimensions = {}
+    catalog.datasets = {'sales': {
+        'slug': 'sales', 'title': 'Продажи', 'source': 'postgres', 'status': 'ok',
+        'schema': [
+            {'name': 'revenue', 'type': 'numeric', 'comment': 'Выручка'},
+            {'name': 'city', 'type': 'text', 'comment': 'Город'},
+        ],
+    }}
+    monkeypatch.setattr(interpret, '_openrouter_key', lambda: None)
+
+    result = interpret.chat([{'role': 'user', 'text': 'выручка по городам'}],
+                            catalog, datasets=['sales'])
+
+    assert result['source'] == 'parser'
+    assert result['definition'] is not None
+    assert {field['field'] for field in result['definition']['fields']} == {
+        'revenue', 'city'}
+
+
+def test_chat_includes_selected_dataset_beyond_initial_catalog_window(catalog, monkeypatch):
+    """A selected dataset remains available even when it follows the first 12."""
+    catalog.metrics = {}
+    catalog.dimensions = {}
+    catalog.datasets = {
+        f'other_{index}': {'slug': f'other_{index}', 'title': 'Другой',
+                           'source': 'postgres', 'status': 'ok',
+                           'schema': [{'name': 'value', 'type': 'numeric'}]}
+        for index in range(12)
+    }
+    catalog.datasets['sales'] = {
+        'slug': 'sales', 'title': 'Продажи', 'source': 'postgres', 'status': 'ok',
+        'schema': [{'name': 'revenue', 'type': 'numeric', 'comment': 'Выручка'}],
+    }
+    monkeypatch.setattr(interpret, '_openrouter_key', lambda: None)
+
+    result = interpret.chat([{'role': 'user', 'text': 'выручка'}],
+                            catalog, datasets=['sales'])
+
+    assert result['definition'] is not None
+    assert result['definition']['fields'][0]['datasetSlug'] == 'sales'
+
+
 def test_без_ключа_ищет_за_пределами_выбранного_датасета(catalog, monkeypatch):
     monkeypatch.setattr(interpret, '_openrouter_key', lambda: None)
     catalog.metrics['margin'] = {'slug': 'margin', 'title': 'Маржа',

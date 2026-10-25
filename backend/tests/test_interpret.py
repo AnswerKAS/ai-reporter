@@ -211,6 +211,57 @@ def test_null_от_модели_читается_как_не_указано():
 
 # --- разбор целиком -------------------------------------------------------------------
 
+def test_parser_uses_dataset_fields_without_shared_vocabulary(catalog, monkeypatch):
+    """The fallback parser returns a self contained definition from dataset columns."""
+    catalog.metrics = {}
+    catalog.dimensions = {}
+    catalog.datasets = {'sales': {
+        'slug': 'sales', 'title': 'Продажи', 'source': 'postgres', 'status': 'ok',
+        'schema': [
+            {'name': 'revenue', 'type': 'numeric', 'comment': 'Выручка'},
+            {'name': 'city', 'type': 'text', 'comment': 'Город'},
+        ],
+    }}
+    monkeypatch.setattr(interpret, '_openrouter_key', lambda: None)
+
+    result = interpret.parse('выручка по городам', catalog, datasets=['sales'])
+
+    assert result['source'] == 'parser'
+    definition = result['definition']
+    assert {field['field'] for field in definition['fields']} == {'revenue', 'city'}
+    assert definition['sections'][0]['metrics'][0] in {
+        field['key'] for field in definition['fields'] if field['role'] == 'metric'}
+
+
+def test_model_uses_only_referenced_dataset_fields(catalog, model_answer):
+    """Validated model output carries its used columns without unused schema fields."""
+    catalog.metrics = {}
+    catalog.dimensions = {}
+    catalog.datasets = {'sales': {
+        'slug': 'sales', 'title': 'Продажи', 'source': 'postgres', 'status': 'ok',
+        'schema': [
+            {'name': 'revenue', 'type': 'numeric', 'comment': 'Выручка'},
+            {'name': 'cost', 'type': 'numeric', 'comment': 'Расходы'},
+            {'name': 'city', 'type': 'text', 'comment': 'Город'},
+        ],
+    }}
+    metrics, dimensions = interpret.vocabulary_of(catalog, datasets=['sales'])
+    revenue = next(key for key, item in metrics.items()
+                   if item.get('_report_field', {}).get('field') == 'revenue')
+    city = next(key for key, item in dimensions.items()
+                if item.get('_report_field', {}).get('field') == 'city')
+    model_answer['raw'] = json.dumps({
+        'sections': [{'type': 'table', 'metrics': [revenue], 'by': [city]}],
+    })
+
+    result = interpret.parse('выручка по городам', catalog, datasets=['sales'])
+
+    assert result['source'] == 'llm'
+    assert {field['field'] for field in result['definition']['fields']} == {
+        'revenue', 'city'}
+    assert revenue in model_answer['asked'][0][0]
+
+
 def test_разбор_моделью(catalog, model_answer):
     model_answer['raw'] = json.dumps(
         {'sections': [{'type': 'table', 'metrics': ['revenue'], 'by': ['city']}]})
