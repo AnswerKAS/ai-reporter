@@ -63,7 +63,7 @@ export function ReportViewPage() {
   const { slug } = useParams<{ slug: string }>()
   const navigate = useNavigate()
   const { isAdmin, user } = useAuth()
-  const { reload: reloadReports, markVisited } = useReports()
+  const { reload: reloadReports, markVisited, removeRecent } = useReports()
   const [report, setReport] = useState<Report | null>(null)
   const [status, setStatus] = useState<string>('loading')
   const [failure, setFailure] = useState<string | null>(null)
@@ -237,6 +237,7 @@ export function ReportViewPage() {
           onClose={() => setConfirming(false)}
           onConfirm={async () => {
             await deleteReport(report.slug)
+            removeRecent(report.slug)
             await reloadReports()
             navigate('/reports')
           }}

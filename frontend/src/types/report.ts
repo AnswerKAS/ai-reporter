@@ -162,6 +162,7 @@ export interface ReportFacets {
 /** Запрос к каталогу: поиск, фильтры, порядок и страница. */
 export interface ReportQuery {
   q?: string
+  slugs?: string[]
   group?: string
   author?: string
   tag?: string

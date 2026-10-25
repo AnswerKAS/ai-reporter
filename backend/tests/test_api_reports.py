@@ -23,6 +23,24 @@ def test_список_отчётов_админу(client, report, admin_headers)
     assert [r['slug'] for r in body['reports']] == ['sales-report']
 
 
+def test_catalog_exact_slug_lookup_omits_deleted_reports(client, report, admin_headers):
+    """A small recent-list lookup returns only existing exact slugs."""
+    body = client.get('/api/reports?slug=sales-report&slug=deleted-report&limit=8',
+                      headers=admin_headers).json()
+
+    assert [item['slug'] for item in body['reports']] == ['sales-report']
+    assert body['total'] == 1
+    assert client.get('/api/reports?slug=sales', headers=admin_headers).json()['reports'] == []
+
+
+def test_catalog_exact_slug_lookup_respects_access(client, report, user_headers):
+    """A saved slug does not expose a report after access is revoked."""
+    body = client.get('/api/reports?slug=sales-report', headers=user_headers).json()
+
+    assert body['reports'] == []
+    assert body['total'] == 0
+
+
 def test_список_не_содержит_определения(client, report, admin_headers):
     body = client.get('/api/reports', headers=admin_headers).json()
 

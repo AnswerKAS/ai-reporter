@@ -47,6 +47,15 @@ function readRecent(): RecentReport[] {
   }
 }
 
+/** Persist the small recent list without making storage availability a UI error. */
+function writeRecent(reports: RecentReport[]): void {
+  try {
+    localStorage.setItem(RECENT_KEY, JSON.stringify(reports))
+  } catch {
+    // хранилище недоступно — недавние просто не переживут перезагрузку
+  }
+}
+
 interface ReportsContextValue {
   /** Разрезы каталога со счётчиками; null — ещё едут. */
   facets: ReportFacets | null
@@ -68,6 +77,8 @@ interface ReportsContextValue {
   toggleFavorite: (report: ReportMeta) => Promise<void>
   /** Отметить отчёт открытым — попадёт в «недавние». */
   markVisited: (report: { slug: string; title: string }) => void
+  /** Убрать успешно удалённый отчёт из «недавних» сразу. */
+  removeRecent: (slug: string) => void
 }
 
 const ReportsContext = createContext<ReportsContextValue | null>(null)
@@ -85,10 +96,13 @@ export function ReportsProvider({ children }: { children: ReactNode }) {
   const [facets, setFacets] = useState<ReportFacets | null>(null)
   const [favorites, setFavorites] = useState<ReportMeta[]>([])
   const [recent, setRecent] = useState<RecentReport[]>(readRecent)
+  const [recentForUser, setRecentForUser] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [version, setVersion] = useState(0)
   const alive = useRef(true)
+  const currentUserId = useRef(user?.id)
+  currentUserId.current = user?.id
 
   useEffect(() => {
     alive.current = true
@@ -123,11 +137,42 @@ export function ReportsProvider({ children }: { children: ReactNode }) {
     }
   }, [user])
 
+  /** Reconcile browser history with exact, access checked catalog rows. */
+  const refreshRecent = useCallback(async () => {
+    if (!user) {
+      setRecentForUser(null)
+      return
+    }
+    const requested = readRecent()
+    if (requested.length === 0) {
+      setRecent([])
+      setRecentForUser(user.id)
+      return
+    }
+    try {
+      const page = await searchReports({ slugs: requested.map((item) => item.slug), limit: RECENT_MAX })
+      if (!alive.current || currentUserId.current !== user.id) return
+      const allowed = new Map(page.reports.map((item) => [item.slug, item.title]))
+      const checked = new Set(requested.map((item) => item.slug))
+      setRecent((previous) => {
+        const next = previous
+          .filter((item) => !checked.has(item.slug) || allowed.has(item.slug))
+          .map((item) => ({ ...item, title: allowed.get(item.slug) ?? item.title }))
+          .slice(0, RECENT_MAX)
+        writeRecent(next)
+        return next
+      })
+      setRecentForUser(user.id)
+    } catch {
+      if (alive.current && currentUserId.current === user.id) setRecentForUser(null)
+    }
+  }, [user])
+
   /** Перечитать каталог и подтолкнуть все открытые выдачи. */
   const reload = useCallback(async () => {
-    await refresh()
+    await Promise.all([refresh(), refreshRecent()])
     if (alive.current) setVersion((n) => n + 1)
-  }, [refresh])
+  }, [refresh, refreshRecent])
 
   useEffect(() => {
     if (!user) {
@@ -135,13 +180,20 @@ export function ReportsProvider({ children }: { children: ReactNode }) {
       setFavorites([])
       setError(null)
       setLoading(false)
+      setRecentForUser(null)
       return
     }
     setLoading(true)
-    refresh().finally(() => {
+    Promise.all([refresh(), refreshRecent()]).finally(() => {
       if (alive.current) setLoading(false)
     })
-  }, [user, refresh])
+  }, [user, refresh, refreshRecent])
+
+  useEffect(() => {
+    if (!user) return
+    window.addEventListener('focus', refreshRecent)
+    return () => window.removeEventListener('focus', refreshRecent)
+  }, [user, refreshRecent])
 
   const isFavorite = useCallback(
     (slug: string) => favorites.some((r) => r.slug === slug),
@@ -175,21 +227,26 @@ export function ReportsProvider({ children }: { children: ReactNode }) {
         { slug: report.slug, title: report.title },
         ...prev.filter((r) => r.slug !== report.slug),
       ].slice(0, RECENT_MAX)
-      try {
-        localStorage.setItem(RECENT_KEY, JSON.stringify(next))
-      } catch {
-        // хранилище недоступно — недавние просто не переживут перезагрузку
-      }
+      writeRecent(next)
+      return next
+    })
+  }, [])
+
+  const removeRecent = useCallback((slug: string) => {
+    setRecent((previous) => {
+      const next = previous.filter((item) => item.slug !== slug)
+      writeRecent(next)
       return next
     })
   }, [])
 
   const value = useMemo(
     () => ({
-      facets, favorites, recent, loading, error, version,
-      reload, isFavorite, toggleFavorite, markVisited,
+      facets, favorites, recent: recentForUser === user?.id ? recent : [], loading, error, version,
+      reload, isFavorite, toggleFavorite, markVisited, removeRecent,
     }),
-    [facets, favorites, recent, loading, error, version, reload, isFavorite, toggleFavorite, markVisited],
+    [facets, favorites, recent, recentForUser, user?.id, loading, error, version,
+     reload, isFavorite, toggleFavorite, markVisited, removeRecent],
   )
 
   return <ReportsContext.Provider value={value}>{children}</ReportsContext.Provider>

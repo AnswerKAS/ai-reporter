@@ -7,7 +7,7 @@
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from starlette.concurrency import run_in_threadpool
 
 from ..core import database as db
@@ -63,6 +63,7 @@ async def _db(fn, *args, **kwargs):
 @router.get('/reports')
 def list_reports(
     q: str | None = None,
+    slug: list[str] | None = Query(default=None),
     group: str | None = None,
     author: str | None = None,
     tag: str | None = None,
@@ -78,12 +79,13 @@ def list_reports(
     Права, поиск и фильтры считаются в SQL: на десяти тысячах отчётов список
     нельзя ни прочитать в память целиком, ни отдать наружу одним куском.
     Без `limit` метод отвечает как до каталога — всей доступной выдачей.
+    Повторяемый `slug` даёт точную выборку нескольких отчётов для недавних.
 
     Значение `-` у `group`, `author` и `tag` означает «ни одной»: отчёты без
     группы доступа, без автора, без темы.
     """
     reports, total = db.search_reports(
-        user, q=q, group=group, author=author, tag=tag, status=status,
+        user, q=q, slugs=slug, group=group, author=author, tag=tag, status=status,
         favorite=favorite, sort=sort, limit=limit, offset=offset,
     )
     return {'reports': [_report_meta(r) for r in reports], 'total': total,

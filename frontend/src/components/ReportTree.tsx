@@ -59,7 +59,7 @@ function Section({
  * управляли с трёх разных экранов.
  */
 export function ReportTree({ className, onNavigate }: { className?: string; onNavigate?: () => void }) {
-  const { facets, favorites, recent, error, reload, isFavorite, toggleFavorite } = useReports()
+  const { facets, favorites, recent, error, reload, isFavorite, toggleFavorite, removeRecent } = useReports()
   const { isAdmin } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
@@ -96,6 +96,7 @@ export function ReportTree({ className, onNavigate }: { className?: string; onNa
       description: `Отчёт «${report.title}» будет удалён вместе с назначениями доступа. Действие необратимо.`,
       onConfirm: async () => {
         await deleteReport(report.slug)
+        removeRecent(report.slug)
         await reload()
         if (report.slug === activeSlug) navigate('/reports')
       },

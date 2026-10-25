@@ -192,6 +192,7 @@ export async function fetchReports(): Promise<ReportMeta[]> {
 function catalogParams(query: ReportQuery): string {
   const params = new URLSearchParams()
   if (query.q?.trim()) params.set('q', query.q.trim())
+  for (const slug of query.slugs ?? []) params.append('slug', slug)
   for (const key of ['group', 'author', 'tag', 'status'] as const) {
     const value = query[key]
     if (value) params.set(key, value)

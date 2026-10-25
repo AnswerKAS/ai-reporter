@@ -654,6 +654,7 @@ def _catalog_filters(
     user: dict,
     *,
     q: str | None = None,
+    slugs: list[str] | None = None,
     group: str | None = None,
     author: str | None = None,
     tag: str | None = None,
@@ -672,6 +673,10 @@ def _catalog_filters(
     if q and q.strip():
         where.append("COALESCE(r.search_text, '') LIKE %s")
         params.append(f'%{q.strip().lower()}%')
+
+    if slugs is not None:
+        where.append('r.slug = ANY(%s)')
+        params.append(slugs)
 
     if group:
         if group == NONE_BUCKET:
