@@ -347,7 +347,7 @@ def to_pdf(report: dict) -> bytes:
             items = section.get('items') or []
             if not items:
                 continue
-            flow.append(Paragraph('Показатели', section_title))
+            flow.append(Paragraph(escape(_title(section, index)), section_title))
             cells = [[Paragraph(f"<font name='{_FONT_BOLD}' size=12>"
                                 f"{escape(_fmt(i.get('value'), i.get('format')))}</font><br/>"
                                 f"<font size=7 color='#5f5f6e'>{escape(str(i.get('label') or ''))}</font>",

@@ -71,6 +71,7 @@ def _section_query(section: SectionDefinition, filter_values: dict,
 
 
 def _kpi_section(section, metrics, data) -> dict:
+    """Собрать KPI-карточки и необязательный заголовок их блока."""
     row = data[0] if data else {}
     items = []
     for slug in section.metrics:
@@ -81,7 +82,12 @@ def _kpi_section(section, metrics, data) -> dict:
             'format': metric['format'],
             **({'hint': metric['unit']} if metric.get('unit') else {}),
         })
-    return {'type': 'kpi', 'items': items, 'dataOrigin': 'live'}
+    return {
+        'type': 'kpi',
+        **({'title': section.title} if section.title and section.title.strip() else {}),
+        'items': items,
+        'dataOrigin': 'live',
+    }
 
 
 def _sort_key(value):

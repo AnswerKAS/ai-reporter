@@ -1222,6 +1222,14 @@ function Builder({ embedded, suggestedPrompt }: {
                       )}
                     </div>
 
+                    <Field label="Название блока" className="w-full">
+                      <Input
+                        value={section.title ?? ''}
+                        placeholder={section.type === 'kpi' ? 'Например, Продажи' : 'Автоматически по данным'}
+                        onChange={(event) => patchSection(index, { title: event.target.value })}
+                      />
+                    </Field>
+
                     {section.type === 'chart' && (
                       <ChartKindPicker value={section.kind ?? 'bar'}
                         onChange={(kind) => patchSection(index, { kind })} />

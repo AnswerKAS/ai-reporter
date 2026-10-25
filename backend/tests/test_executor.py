@@ -51,6 +51,25 @@ def test_карточка_показывает_метрику_с_её_форма
     assert built['dataOrigin'] == 'live'
 
 
+def test_named_kpi_preserves_block_title(model, rows):
+    """A custom KPI title reaches the visual report without changing its metric label."""
+    rows(['m_revenue'], [[1234.5]])
+
+    built = executor.build_section(section(type='kpi', by=[], title='Продажи'), {})
+
+    assert built['title'] == 'Продажи'
+    assert built['items'][0]['label'] == 'Выручка'
+
+
+def test_unnamed_kpi_has_no_section_title(model, rows):
+    """An unnamed KPI keeps the existing layout without an extra heading."""
+    rows(['m_revenue'], [[1234.5]])
+
+    built = executor.build_section(section(type='kpi', by=[]), {})
+
+    assert 'title' not in built
+
+
 def test_карточка_без_данных_показывает_ноль(model, rows):
     rows(['m_revenue'], [])
 
@@ -101,6 +120,15 @@ def test_свой_заголовок_важнее_собранного(model, ro
     rows(['d_city', 'm_revenue'], [])
 
     assert executor.build_section(section(title='Мой отчёт'), {})['title'] == 'Мой отчёт'
+
+
+def test_named_chart_preserves_block_title(model, rows):
+    """A chart displays the author's title instead of its generated summary."""
+    rows(['d_day', 'm_revenue'], [])
+
+    built = executor.build_section(section(type='chart', kind='line', by=['day'], title='Продажи'), {})
+
+    assert built['title'] == 'Продажи'
 
 
 # --- график ----------------------------------------------------------------------

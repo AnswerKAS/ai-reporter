@@ -37,6 +37,7 @@ export interface MarkdownSection {
 
 export interface KpiSection {
   type: 'kpi'
+  title?: string
   items: KpiItem[]
   /** Фильтр отчёта, который к этой секции неприменим. */
   filterNote?: string

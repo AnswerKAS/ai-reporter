@@ -128,6 +128,20 @@ def test_создание_отчёта_201(client, model, admin_headers):
     assert response.json()['report']['slug'] == 'новый'
 
 
+def test_named_block_survives_report_save_and_reload(client, model, admin_headers):
+    """A saved block title returns in both the editor definition and report view."""
+    response = client.post('/api/reports/builder', headers=admin_headers, json={
+        'slug': 'named-block', 'title': 'Отчёт',
+        'definition': definition(sections=[{**KPI_SECTION, 'title': 'Продажи'}]),
+    })
+
+    assert response.status_code == 201
+    saved = client.get('/api/reports/named-block/definition', headers=admin_headers).json()
+    rendered = client.get('/api/reports/named-block', headers=admin_headers).json()['report']
+    assert saved['definition']['sections'][0]['title'] == 'Продажи'
+    assert rendered['sections'][0]['title'] == 'Продажи'
+
+
 def test_создание_отчёта_без_slug_генерирует_его(client, model, admin_headers):
     body = client.post('/api/reports/builder', headers=admin_headers, json={
         'title': 'Новый', 'definition': definition()}).json()

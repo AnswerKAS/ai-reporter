@@ -73,6 +73,16 @@ def test_заголовок_секции_по_умолчанию():
     assert render._title({'type': 'markdown'}, 3) == 'Секция 3'
 
 
+def test_named_kpi_title_is_used_by_exports():
+    """Excel and PDF section headings use the custom KPI title."""
+    section = {'type': 'kpi', 'title': 'Продажи', 'items': [{'label': 'Выручка', 'value': 1}]}
+
+    assert render._title(section, 1) == 'Продажи'
+    report = {'slug': 'named-kpi', 'title': 'Отчёт', 'sections': [section]}
+    assert 'Продажи' in sheets(render.to_xlsx(report))
+    assert render.to_pdf(report)[:5] == b'%PDF-'
+
+
 # --- Excel ------------------------------------------------------------------------
 
 def sheets(data: bytes) -> list[str]:

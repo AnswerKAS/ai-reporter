@@ -4,6 +4,7 @@ import { ChartSectionView } from './ChartSectionView'
 import { TableSectionView } from './TableSectionView'
 import { MarkdownSectionView } from './MarkdownSectionView'
 
+/** Заголовок секции в предпросмотре и готовом отчёте. */
 function SectionTitle({ title }: { title?: string }) {
   if (!title) return null
   return <h2 className="mb-3.5 text-base font-semibold text-fg">{title}</h2>
@@ -32,16 +33,18 @@ const SECTION = 'rounded-card border border-line bg-surface p-5'
 /** Обработчик детализации: точка (значения разрезов) и подпись для окна. */
 export type DrillHandler = (point: Record<string, string | number | null>, label: string) => void
 
+/** Общий рендер всех секций отчёта с их заголовками и пометками. */
 export function SectionRenderer({ section, onDrill }: { section: ReportSection; onDrill?: DrillHandler }) {
   switch (section.type) {
     case 'markdown':
       return <MarkdownSectionView content={section.content} />
     case 'kpi':
       return (
-        <>
+        <section>
+          <SectionTitle title={section.title} />
           <FilterNote note={section.filterNote} />
           <KpiSectionView items={section.items} onDrill={onDrill} />
-        </>
+        </section>
       )
     case 'chart':
       return (
