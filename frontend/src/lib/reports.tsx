@@ -212,10 +212,12 @@ export function ReportsProvider({ children }: { children: ReactNode }) {
       try {
         await setReportFavorite(report.slug, on)
         await refresh()
+        if (alive.current) setVersion((n) => n + 1)
       } catch (err) {
         if (!alive.current) return
         setError(err instanceof ApiError ? err.message : 'не удалось закрепить отчёт')
         await refresh() // вернуть список к тому, что на сервере
+        if (alive.current) setVersion((n) => n + 1)
       }
     },
     [favorites, refresh],
@@ -305,6 +307,44 @@ export interface ReportSearch {
   error: string | null
   hasMore: boolean
   loadMore: () => void
+}
+
+export interface ReportPage {
+  reports: ReportMeta[]
+  total: number
+  loading: boolean
+  error: string | null
+}
+
+/** Fetch one catalog page so navigation never accumulates hundreds of rows. */
+export function useReportPage(query: ReportQuery): ReportPage {
+  const { version } = useReports()
+  const key = JSON.stringify([
+    query.q?.trim() ?? '', query.group ?? '', query.author ?? '', query.tag ?? '',
+    query.status ?? '', Boolean(query.favorite), query.sort ?? 'updated',
+    query.limit ?? 30, query.offset ?? 0,
+  ])
+  const [page, setPage] = useState<ReportPage>({
+    reports: [], total: 0, loading: true, error: null,
+  })
+  const latest = useRef(query)
+  latest.current = query
+
+  useEffect(() => {
+    let current = true
+    setPage({ reports: [], total: 0, loading: true, error: null })
+    searchReports(latest.current)
+      .then((result) => {
+        if (current) setPage({ reports: result.reports, total: result.total, loading: false, error: null })
+      })
+      .catch((err) => {
+        if (current) setPage({ reports: [], total: 0, loading: false,
+          error: err instanceof ApiError ? err.message : 'API недоступен' })
+      })
+    return () => { current = false }
+  }, [key, version])
+
+  return page
 }
 
 /**

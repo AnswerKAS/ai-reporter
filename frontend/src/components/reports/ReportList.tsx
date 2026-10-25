@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, type ReactNode } from 'react'
+import { Link } from 'react-router-dom'
 import type { ReportMeta, ReportQuery } from '../../types/report'
 import { useAuth } from '../../lib/auth'
 import { useReports, useReportSearch } from '../../lib/reports'
 import { Alert, Skeleton } from '../ui'
 import { ReportRow } from './ReportRow'
+import { catalogHref } from './catalog'
 
 /** За сколько пикселей до конца списка просить следующую страницу. */
 const REACH = 240
@@ -31,6 +33,7 @@ export function ReportList({
   onEdit,
   onDelete,
   empty = 'Ничего не найдено',
+  preview = false,
 }: {
   query: ReportQuery
   onNavigate?: () => void
@@ -39,6 +42,8 @@ export function ReportList({
   /** Что показать, когда выдача пуста: у поиска и у пустого каталога это
       разные сообщения, и знает их вызывающий. */
   empty?: ReactNode
+  /** Sidebar search stops after one short page and links to the full catalog. */
+  preview?: boolean
 }) {
   const { isAdmin } = useAuth()
   const { isFavorite, toggleFavorite } = useReports()
@@ -49,7 +54,7 @@ export function ReportList({
 
   useEffect(() => {
     const node = sentinel.current
-    if (!node || !hasMore) return
+    if (!node || !hasMore || preview) return
     // наблюдатель, а не обработчик прокрутки: тот считал бы геометрию на
     // каждый кадр прокрутки списка в сотни строк. Смотрим за самой меткой —
     // раскрытых групп бывает несколько, и у каждой своя выдача в общем скролле
@@ -61,7 +66,7 @@ export function ReportList({
     )
     observer.observe(node)
     return () => observer.disconnect()
-  }, [hasMore, more])
+  }, [hasMore, more, preview])
 
   if (error) return <Alert className="text-xs">{error}</Alert>
 
@@ -89,10 +94,22 @@ export function ReportList({
           onRename={() => onEdit(report)}
           onDelete={() => onDelete(report)}
           onToggleFavorite={() => void toggleFavorite(report)}
+          variant={preview ? 'preview' : 'sidebar'}
         />
       ))}
 
-      {hasMore && (
+      {preview && (
+        <Link
+          to={catalogHref(query)}
+          onClick={onNavigate}
+          className="mt-2 flex min-h-10 items-center justify-between rounded-control bg-accent-soft px-3 text-sm font-medium text-accent hover:bg-surface-sunken"
+        >
+          <span>Открыть все результаты</span>
+          <span className="tabular-nums">{total} →</span>
+        </Link>
+      )}
+
+      {hasMore && !preview && (
         <button
           ref={sentinel}
           type="button"

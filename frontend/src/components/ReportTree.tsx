@@ -12,7 +12,7 @@ import { ReportEditDialog } from './reports/ReportEditDialog'
 import { ReportGroups } from './reports/ReportGroups'
 import { ReportList } from './reports/ReportList'
 import { ReportRow } from './reports/ReportRow'
-import { activeFilters, readCatalog, toQuery, writeCatalog, type CatalogState } from './reports/catalog'
+import { activeFilters, catalogHref, readCatalog, toQuery, writeCatalog, type CatalogState } from './reports/catalog'
 
 /** Свёрнутый блок меню: заголовок со счётчиком и содержимое. */
 function Section({
@@ -68,8 +68,8 @@ export function ReportTree({ className, onNavigate }: { className?: string; onNa
   const [state, setState] = useState<CatalogState>(readCatalog)
   const [filtersOpen, setFiltersOpen] = useState(false)
   const [query, setQuery] = useState('')
-  const [pinnedOpen, setPinnedOpen] = useState(true)
-  const [recentOpen, setRecentOpen] = useState(true)
+  const [pinnedOpen, setPinnedOpen] = useState(false)
+  const [recentOpen, setRecentOpen] = useState(false)
   const [editing, setEditing] = useState<ReportMeta | null>(null)
 
   const search = useDebounced(query)
@@ -77,7 +77,8 @@ export function ReportTree({ className, onNavigate }: { className?: string; onNa
   const total = facets?.total ?? 0
   // пока человек ищет или сузил выдачу фильтрами, блоки сверху молчат:
   // закреплённое и недавнее к его вопросу отношения не имеют
-  const narrowed = search.trim() !== '' || activeFilters(state) > 0
+  const narrowed = query.trim() !== '' || activeFilters(state) > 0 || state.groupBy !== 'none'
+  const searchPending = query.trim() !== search.trim()
   // заголовки групп берутся из фасетов, и без них группировать нечем. Но сам
   // список живёт своим запросом и работает — показываем его плоским, а не
   // пустое меню: упавший вспомогательный запрос не должен прятать отчёты
@@ -143,7 +144,7 @@ export function ReportTree({ className, onNavigate }: { className?: string; onNa
           open={pinnedOpen}
           onToggle={() => setPinnedOpen((v) => !v)}
         >
-          {favorites.map((report) => (
+          {favorites.slice(0, 5).map((report) => (
             <ReportRow
               key={report.slug}
               report={report}
@@ -155,6 +156,11 @@ export function ReportTree({ className, onNavigate }: { className?: string; onNa
               onToggleFavorite={() => void toggleFavorite(report)}
             />
           ))}
+          {favorites.length > 5 && (
+            <NavLink to="/reports?favorite=1" onClick={onNavigate} className="block px-3 py-2 text-sm font-medium text-accent hover:underline">
+              Все закреплённые ({favorites.length}) →
+            </NavLink>
+          )}
         </Section>
       )}
 
@@ -190,11 +196,22 @@ export function ReportTree({ className, onNavigate }: { className?: string; onNa
       )}
 
       <div className="mb-2 flex items-center justify-between gap-2 border-t border-line px-2 pt-4 text-xs font-semibold tracking-[0.1em] text-fg-muted uppercase">
-        <span>{narrowed ? 'Результаты' : 'Все отчёты'}</span>
-        {activeFilters(state) === 0 && <span className="rounded-control bg-surface-sunken px-2 py-0.5 text-[11px] font-medium tracking-normal tabular-nums">{narrowed ? (scoped?.total ?? total) : total}</span>}
+        <span>{narrowed ? 'Результаты поиска' : 'Каталог'}</span>
+        {!narrowed && <span className="rounded-control bg-surface-sunken px-2 py-0.5 text-[11px] font-medium tracking-normal tabular-nums">{total}</span>}
       </div>
 
-      {grouped ? (
+      {!narrowed ? (
+        <NavLink
+          to="/reports"
+          onClick={onNavigate}
+          className="flex min-h-12 items-center justify-between gap-2 rounded-control bg-accent-soft px-3 text-sm font-medium text-accent hover:bg-surface-sunken"
+        >
+          <span>Открыть все отчёты</span>
+          <span aria-hidden="true">→</span>
+        </NavLink>
+      ) : searchPending ? (
+        <p className="px-3 py-2 text-sm text-fg-muted">Ищем отчёты…</p>
+      ) : grouped ? (
         <ReportGroups
           dimension={state.groupBy as ReportDimension}
           base={toQuery(state, search)}
@@ -204,22 +221,12 @@ export function ReportTree({ className, onNavigate }: { className?: string; onNa
         />
       ) : (
         <ReportList
-          query={toQuery(state, search)}
+          query={{ ...toQuery(state, search), limit: 8 }}
           onNavigate={onNavigate}
           onEdit={setEditing}
           onDelete={askDelete}
-          empty={
-            narrowed ? (
-              'Ничего не найдено'
-            ) : (
-              <>
-                Отчётов пока нет.{' '}
-                <NavLink to="/workspace?mode=report" onClick={onNavigate} className="text-accent hover:underline">
-                  Собрать первый
-                </NavLink>
-              </>
-            )
-          }
+          empty={<>Ничего не найдено. <NavLink to={catalogHref(toQuery(state, search))} onClick={onNavigate} className="text-accent hover:underline">Открыть каталог</NavLink></>}
+          preview
         />
       )}
 

@@ -31,6 +31,7 @@ export function ReportRow({
   onRename,
   onDelete,
   onToggleFavorite,
+  variant = 'sidebar',
 }: {
   report: ReportMeta
   favorite: boolean
@@ -39,6 +40,7 @@ export function ReportRow({
   onRename: () => void
   onDelete: () => void
   onToggleFavorite: () => void
+  variant?: 'sidebar' | 'catalog' | 'preview'
 }) {
   const navigate = useNavigate()
   const { user } = useAuth()
@@ -57,23 +59,42 @@ export function ReportRow({
   ]
 
   return (
-    <div className="group/row flex min-w-0 items-center gap-1 rounded-control transition-colors hover:bg-surface-sunken">
+    <div className={cn(
+      'group/row flex min-w-0 items-center gap-1 transition-colors hover:bg-surface-sunken',
+      variant === 'catalog' ? 'border-b border-line px-2 py-1.5 last:border-b-0' : 'rounded-control',
+    )}>
       <NavLink
         to={`/reports/${report.slug}`}
         onClick={onNavigate}
         title={report.description ? `${report.title} — ${report.description}` : report.title}
         className={({ isActive }) =>
           cn(
-            'flex min-h-10 min-w-0 flex-1 items-center gap-2 rounded-control px-3 py-1.5 text-sm transition-colors',
+            'flex min-h-10 min-w-0 flex-1 items-center gap-2 rounded-control px-3 text-sm transition-colors',
+            variant === 'catalog' ? 'py-2.5' : 'py-1.5',
             isActive ? 'bg-accent-soft font-semibold text-accent' : 'text-fg',
           )
         }
       >
         <StatusDot status={report.status} />
-        <span className="min-w-0 whitespace-normal break-words">{report.title}</span>
+        <span className="min-w-0 flex-1">
+          <span className={cn('block min-w-0 break-words', variant === 'catalog' ? 'font-medium' : 'line-clamp-2')}>
+            {report.title}
+          </span>
+          {variant === 'catalog' && (
+            <span className="mt-1 block min-w-0 text-xs font-normal text-fg-muted">
+              {report.description && <span className="mb-1 block line-clamp-1">{report.description}</span>}
+              <span className="flex flex-wrap gap-x-2 gap-y-0.5">
+                {report.author && <span>{report.author}</span>}
+                <span>Обновлён {report.updatedAt.slice(0, 10)}</span>
+                {report.tags?.slice(0, 2).map((tag) => <span key={tag}>#{tag}</span>)}
+              </span>
+            </span>
+          )}
+        </span>
+        {variant === 'catalog' && <span aria-hidden="true" className="hidden shrink-0 text-xs text-accent sm:inline">Открыть →</span>}
       </NavLink>
 
-      <button
+      {variant !== 'preview' && <button
         type="button"
         aria-label={favorite ? `Открепить «${report.title}»` : `Закрепить «${report.title}»`}
         aria-pressed={favorite}
@@ -82,8 +103,8 @@ export function ReportRow({
         className={cn('flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-control text-sm transition-colors hover:bg-accent-soft', favorite ? 'text-warn' : 'text-fg-muted hover:text-fg')}
       >
         <span aria-hidden="true">{favorite ? '★' : '☆'}</span>
-      </button>
-      <RowMenu label={`Действия с отчётом «${report.title}»`} actions={actions} />
+      </button>}
+      {variant !== 'preview' && <RowMenu label={`Действия с отчётом «${report.title}»`} actions={actions} />}
     </div>
   )
 }

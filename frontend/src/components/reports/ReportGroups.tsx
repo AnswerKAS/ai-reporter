@@ -8,7 +8,8 @@ import { ReportList } from './ReportList'
 
 /** Страница внутри группы меньше корневой: группу раскрывают, чтобы посмотреть,
     что в ней, а не чтобы прокрутить её до конца. */
-const GROUP_PAGE = 50
+const GROUP_PAGE = 8
+const VISIBLE_GROUPS = 20
 
 /**
  * Отчёты по группам выбранного разреза.
@@ -47,7 +48,7 @@ export function ReportGroups({
 
   return (
     <div className="flex flex-col">
-      {items.map((item) => {
+      {items.slice(0, VISIBLE_GROUPS).map((item) => {
         const expanded = open.includes(item.id)
         return (
           <div key={item.id}>
@@ -81,12 +82,18 @@ export function ReportGroups({
                   onEdit={onEdit}
                   onDelete={onDelete}
                   empty="Ничего не найдено"
+                  preview
                 />
               </div>
             )}
           </div>
         )
       })}
+      {items.length > VISIBLE_GROUPS && (
+        <p className="px-3 py-2 text-xs text-fg-muted">
+          Показаны первые {VISIBLE_GROUPS} групп. Уточните поиск или выберите группу в фильтре.
+        </p>
+      )}
     </div>
   )
 }

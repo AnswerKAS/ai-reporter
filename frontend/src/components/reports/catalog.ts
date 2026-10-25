@@ -60,6 +60,18 @@ export function toQuery(state: CatalogState, q: string): ReportQuery {
   }
 }
 
+/** Carry the sidebar search and filters into the full catalog page. */
+export function catalogHref(query: ReportQuery): string {
+  const params = new URLSearchParams()
+  for (const key of ['q', 'group', 'author', 'tag', 'status'] as const) {
+    if (query[key]) params.set(key, query[key])
+  }
+  if (query.favorite) params.set('favorite', '1')
+  if (query.sort && query.sort !== 'updated') params.set('sort', query.sort)
+  const search = params.toString()
+  return search ? `/reports?${search}` : '/reports'
+}
+
 export const DIMENSIONS: Record<ReportDimension, { title: string; empty: string; by: string }> = {
   group: { title: 'Группа доступа', empty: 'Без группы', by: 'По группе доступа' },
   author: { title: 'Автор', empty: 'Без автора', by: 'По автору' },

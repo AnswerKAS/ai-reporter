@@ -671,8 +671,11 @@ def _catalog_filters(
         params += args
 
     if q and q.strip():
-        where.append("COALESCE(r.search_text, '') LIKE %s")
-        params.append(f'%{q.strip().lower()}%')
+        # Слова можно назвать в любом порядке: «маржа заказы» должно найти
+        # «Заказы · Маржа». Условие остаётся в SQL вместе с проверкой доступа.
+        for word in q.lower().split():
+            where.append("COALESCE(r.search_text, '') LIKE %s")
+            params.append(f'%{word}%')
 
     if slugs is not None:
         where.append('r.slug = ANY(%s)')

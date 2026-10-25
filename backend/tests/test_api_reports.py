@@ -688,6 +688,28 @@ def test_поиск_по_slug_и_по_теме(client, catalog, admin_headers):
     assert [r['slug'] for r in by_tag['reports']] == ['c-stock']
 
 
+def test_catalog_search_matches_words_in_any_order(client, catalog, admin_headers):
+    """Search all normalized words while retaining the report access rules."""
+    from app.core import database as db
+
+    db.update_report('a-sales', title='Заказы · Маржа')
+    body = client.get('/api/reports?q=МАРЖА%20заказы', headers=admin_headers).json()
+
+    assert [report['slug'] for report in body['reports']] == ['a-sales']
+    assert body['total'] == 1
+
+
+def test_catalog_multiword_search_keeps_access_filter(client, catalog, plain_user):
+    """A matching title does not reveal a report without an access grant."""
+    from app.core import database as db
+
+    db.update_report('a-sales', title='Заказы · Маржа')
+    body = client.get('/api/reports?q=маржа%20заказы', headers=auth(plain_user)).json()
+
+    assert body['reports'] == []
+    assert body['total'] == 0
+
+
 def test_фильтр_по_автору(client, catalog, admin, admin_headers):
     body = client.get(f'/api/reports?author={admin["id"]}&sort=title', headers=admin_headers).json()
 
