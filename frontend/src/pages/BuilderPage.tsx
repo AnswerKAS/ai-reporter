@@ -1032,6 +1032,74 @@ function Builder({ embedded, suggestedPrompt }: {
 
           <div className="mt-3 grid grid-cols-1 items-start gap-4 xl:grid-cols-2">
             <div className="flex min-w-0 flex-col gap-3">
+              <section className="min-w-0 rounded-card border border-line bg-surface p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="text-sm font-semibold">Фильтры отчёта</h3>
+                  {dimensionChoices.some((choice) => !filters.some((filter) => filter.dimension === choice.key)) ? (
+                    <Select fit value="" aria-label="Добавить фильтр" className="max-w-40 px-2 py-1 text-xs"
+                      onChange={(event) => {
+                        const key = event.target.value
+                        const info = dimensionInfo(key)
+                        if (key) setFilters((previous) => [...previous, {
+                          dimension: key, kind: info?.type === 'date' ? 'daterange' : 'select',
+                        }])
+                      }}>
+                      <option value="">+ Фильтр</option>
+                      {palette.map((group) => {
+                        const available = group.dimensions.filter((item) => !filters.some((filter) => filter.dimension === item.key))
+                        return available.length > 0 && <optgroup key={group.slug} label={group.title}>
+                          {available.map((item) => <option key={item.key} value={item.key}>{item.title}</option>)}
+                        </optgroup>
+                      })}
+                    </Select>
+                  ) : (
+                    <Button variant="ghost" size="sm" aria-label="Изменить набор данных для новых фильтров"
+                      onClick={() => setStep(1)}>Изменить данные</Button>
+                  )}
+                </div>
+                {filters.length === 0 ? (
+                  <p className="mt-2 text-xs text-fg-muted">Фильтров нет — отчёт покажет все данные.</p>
+                ) : (
+                  <div className="mt-2 divide-y divide-line border-t border-line">
+                    {filters.map((filter) => {
+                      const info = dimensionInfo(filter.dimension)
+                      const options = FILTER_KIND_OPTIONS[info?.type ?? 'string']
+                      return (
+                        <div key={filter.dimension}
+                          className="grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(100px,1.3fr)_2rem] items-center gap-2 py-1.5">
+                          <span className="min-w-0 truncate text-sm font-medium" title={info?.title ?? filter.dimension}>
+                            {info?.title ?? filter.dimension}
+                          </span>
+                          {options.length === 1 ? (
+                            <span className="min-w-0 truncate text-xs text-fg-muted" title={options[0].label}>
+                              {options[0].label}
+                            </span>
+                          ) : (
+                              <Select value={filter.kind} aria-label={`Как читатель выбирает ${info?.title ?? filter.dimension}`}
+                                className="min-w-0 px-2 py-1 text-xs" onChange={(event) => {
+                                const kind = event.target.value as FilterDefinition['kind']
+                                setFilters((previous) => previous.map((item) => item.dimension === filter.dimension ? { ...item, kind } : item))
+                                setPreviewFilters((previous) => Object.fromEntries(Object.entries(previous).filter(
+                                  ([key]) => key !== filter.dimension && !key.startsWith(`${filter.dimension}__`),
+                                )))
+                              }}>
+                                {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                              </Select>
+                          )}
+                          <Button variant="ghost" size="sm" className="w-8 px-0" title="Убрать фильтр"
+                            aria-label={`Убрать фильтр ${info?.title ?? filter.dimension}`}
+                            onClick={() => {
+                              setFilters((previous) => previous.filter((item) => item.dimension !== filter.dimension))
+                              setPreviewFilters((previous) => Object.fromEntries(Object.entries(previous).filter(
+                                ([key]) => key !== filter.dimension && !key.startsWith(`${filter.dimension}__`),
+                              )))
+                            }}><span aria-hidden="true" className="text-lg leading-none">×</span></Button>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </section>
               {sections.map((section, index) => {
                 const active = dropTarget === index
                 const rejects =
@@ -1305,74 +1373,6 @@ function Builder({ embedded, suggestedPrompt }: {
               >
                 + добавить блок
               </Button>
-              <section className="min-w-0 rounded-card border border-line bg-surface p-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <h3 className="text-sm font-semibold">Фильтры отчёта</h3>
-                  {dimensionChoices.some((choice) => !filters.some((filter) => filter.dimension === choice.key)) ? (
-                    <Select fit value="" aria-label="Добавить фильтр" className="max-w-40 px-2 py-1 text-xs"
-                      onChange={(event) => {
-                        const key = event.target.value
-                        const info = dimensionInfo(key)
-                        if (key) setFilters((previous) => [...previous, {
-                          dimension: key, kind: info?.type === 'date' ? 'daterange' : 'select',
-                        }])
-                      }}>
-                      <option value="">+ Фильтр</option>
-                      {palette.map((group) => {
-                        const available = group.dimensions.filter((item) => !filters.some((filter) => filter.dimension === item.key))
-                        return available.length > 0 && <optgroup key={group.slug} label={group.title}>
-                          {available.map((item) => <option key={item.key} value={item.key}>{item.title}</option>)}
-                        </optgroup>
-                      })}
-                    </Select>
-                  ) : (
-                    <Button variant="ghost" size="sm" aria-label="Изменить набор данных для новых фильтров"
-                      onClick={() => setStep(1)}>Изменить данные</Button>
-                  )}
-                </div>
-                {filters.length === 0 ? (
-                  <p className="mt-2 text-xs text-fg-muted">Фильтров нет — отчёт покажет все данные.</p>
-                ) : (
-                  <div className="mt-2 divide-y divide-line border-t border-line">
-                    {filters.map((filter) => {
-                      const info = dimensionInfo(filter.dimension)
-                      const options = FILTER_KIND_OPTIONS[info?.type ?? 'string']
-                      return (
-                        <div key={filter.dimension}
-                          className="grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(100px,1.3fr)_2rem] items-center gap-2 py-1.5">
-                          <span className="min-w-0 truncate text-sm font-medium" title={info?.title ?? filter.dimension}>
-                            {info?.title ?? filter.dimension}
-                          </span>
-                          {options.length === 1 ? (
-                            <span className="min-w-0 truncate text-xs text-fg-muted" title={options[0].label}>
-                              {options[0].label}
-                            </span>
-                          ) : (
-                              <Select value={filter.kind} aria-label={`Как читатель выбирает ${info?.title ?? filter.dimension}`}
-                                className="min-w-0 px-2 py-1 text-xs" onChange={(event) => {
-                                const kind = event.target.value as FilterDefinition['kind']
-                                setFilters((previous) => previous.map((item) => item.dimension === filter.dimension ? { ...item, kind } : item))
-                                setPreviewFilters((previous) => Object.fromEntries(Object.entries(previous).filter(
-                                  ([key]) => key !== filter.dimension && !key.startsWith(`${filter.dimension}__`),
-                                )))
-                              }}>
-                                {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                              </Select>
-                          )}
-                          <Button variant="ghost" size="sm" className="w-8 px-0" title="Убрать фильтр"
-                            aria-label={`Убрать фильтр ${info?.title ?? filter.dimension}`}
-                            onClick={() => {
-                              setFilters((previous) => previous.filter((item) => item.dimension !== filter.dimension))
-                              setPreviewFilters((previous) => Object.fromEntries(Object.entries(previous).filter(
-                                ([key]) => key !== filter.dimension && !key.startsWith(`${filter.dimension}__`),
-                              )))
-                            }}><span aria-hidden="true" className="text-lg leading-none">×</span></Button>
-                        </div>
-                      )
-                    })}
-                  </div>
-                )}
-              </section>
             </div>
 
             <div className="min-h-50 min-w-0 rounded-card border border-line bg-surface p-4 xl:sticky xl:top-4">
