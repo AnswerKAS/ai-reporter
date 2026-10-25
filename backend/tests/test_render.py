@@ -98,6 +98,22 @@ def test_excel_первый_лист_это_сводка():
     assert 'Город' in values  # применённый фильтр
 
 
+def test_export_summary_shows_multiselect_and_number_range():
+    """Exported reports explain the active conditions in readable form."""
+    from openpyxl import load_workbook
+
+    report = {**REPORT,
+              'filters': [{'key': 'city', 'label': 'Город', 'kind': 'multiselect'},
+                          {'key': 'amount', 'label': 'Сумма', 'kind': 'numberrange'}],
+              'filterValues': {'city__in': '["Москва", "Казань"]',
+                               'amount__min': '10', 'amount__max': '20'}}
+
+    sheet = load_workbook(BytesIO(render.to_xlsx(report)))['Отчёт']
+    rows = list(sheet.values)
+    assert ('Город', 'Москва, Казань') in rows
+    assert ('Сумма', '10 — 20') in rows
+
+
 def test_excel_числа_остаются_числами():
     from openpyxl import load_workbook
 
@@ -217,6 +233,14 @@ def test_pdf_обрезает_длинную_таблицу():
 
 @pytest.mark.parametrize('kind', ['bar', 'line', 'area', 'pie'])
 def test_картинка_графика_рисуется(kind):
+    section = {**REPORT['sections'][1], 'kind': kind}
+
+    assert render._chart_image(section)[:4] == b'\x89PNG'
+
+
+@pytest.mark.parametrize('kind', ['bar_horizontal', 'bar_stacked', 'area_stacked'])
+def test_additional_charts_render_for_pdf(kind):
+    """Every new browser chart also has an image for PDF export."""
     section = {**REPORT['sections'][1], 'kind': kind}
 
     assert render._chart_image(section)[:4] == b'\x89PNG'

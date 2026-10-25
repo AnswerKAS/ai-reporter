@@ -15,6 +15,10 @@ export function ReportFilters({ filters, values, disabled, onChange }: Props) {
       {filters.map((f) =>
         f.kind === 'daterange' ? (
           <DateRangeField key={f.key} filter={f} values={values} disabled={disabled} onChange={onChange} />
+        ) : f.kind === 'numberrange' ? (
+          <NumberRangeField key={f.key} filter={f} values={values} disabled={disabled} onChange={onChange} />
+        ) : f.kind === 'multiselect' ? (
+          <MultiSelectField key={f.key} filter={f} values={values} disabled={disabled} onChange={onChange} />
         ) : (
           <FilterField
             key={f.key}
@@ -31,6 +35,71 @@ export function ReportFilters({ filters, values, disabled, onChange }: Props) {
         </span>
       )}
     </div>
+  )
+}
+
+/** Числовой диапазон использует те же поля с применением по Enter или потере фокуса. */
+function NumberRangeField({ filter, values, disabled, onChange }: {
+  filter: ReportFilter
+  values: Record<string, string>
+  disabled?: boolean
+  onChange: (key: string, value: string) => void
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="text-sm text-fg-muted">{filter.label}</span>
+      <FilterField filter={{ ...filter, key: `${filter.key}__min`, label: 'От', kind: 'number' }}
+        value={values[`${filter.key}__min`] ?? ''} disabled={disabled} onChange={onChange} />
+      <FilterField filter={{ ...filter, key: `${filter.key}__max`, label: 'До', kind: 'number' }}
+        value={values[`${filter.key}__max`] ?? ''} disabled={disabled} onChange={onChange} />
+    </div>
+  )
+}
+
+/** Из сохранённого строкового значения извлекает выбранные варианты фильтра. */
+function selectedValues(raw: string | undefined): string[] {
+  try {
+    const value: unknown = JSON.parse(raw ?? '[]')
+    return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+/** Несколько значений из источника, с явным списком выбора и сбросом. */
+function MultiSelectField({ filter, values, disabled, onChange }: {
+  filter: ReportFilter
+  values: Record<string, string>
+  disabled?: boolean
+  onChange: (key: string, value: string) => void
+}) {
+  const selected = selectedValues(values[`${filter.key}__in`])
+  const options = new Set(selected)
+  return (
+    <details className="relative min-w-40">
+      <summary className="flex min-h-9 cursor-pointer items-center gap-2 rounded-control border border-line bg-bg px-3 py-1.5 text-sm text-fg">
+        <span className="min-w-0 flex-1 truncate">{filter.label}</span>
+        <span className="text-xs text-fg-muted">{selected.length ? `Выбрано: ${selected.length}` : 'Все'}</span>
+      </summary>
+      <div className="absolute z-30 mt-1 max-h-64 min-w-full overflow-y-auto rounded-card border border-line bg-surface p-2 shadow-pop">
+        {filter.options.length === 0 && <p className="px-2 py-1 text-xs text-fg-muted">Значений пока нет</p>}
+        {filter.options.map((option) => (
+          <label key={option} className="flex min-h-9 cursor-pointer items-center gap-2 rounded-control px-2 text-sm hover:bg-surface-sunken">
+            <input type="checkbox" checked={options.has(option)} disabled={disabled}
+              onChange={(event) => {
+                const next = event.target.checked
+                  ? [...selected, option]
+                  : selected.filter((item) => item !== option)
+                onChange(`${filter.key}__in`, next.length ? JSON.stringify(next) : '')
+              }} />
+            <span className="break-words">{option}</span>
+          </label>
+        ))}
+        {selected.length > 0 && <button type="button" disabled={disabled}
+          className="mt-1 cursor-pointer px-2 py-1 text-xs text-accent hover:underline"
+          onClick={() => onChange(`${filter.key}__in`, '')}>Сбросить выбор</button>}
+      </div>
+    </details>
   )
 }
 
@@ -54,7 +123,7 @@ function DateRangeField({
   const from = values[`${filter.key}__from`] ?? ''
   const to = values[`${filter.key}__to`] ?? ''
   return (
-    <span className="flex items-center gap-2">
+    <span className="flex flex-wrap items-center gap-2">
       <span className="text-sm text-fg-muted">{filter.label}</span>
       <Input
         fit

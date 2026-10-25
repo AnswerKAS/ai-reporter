@@ -8,6 +8,7 @@ import type {
   DatasetLink,
   ReportField,
   Dimension,
+  DimensionType,
   FilterDefinition,
   Grain,
   Metric,
@@ -34,6 +35,7 @@ import type { LinkIndex } from '../lib/dataset-links'
 import { buildLinkIndex, reachableFrom } from '../lib/dataset-links'
 import { DatasetPicker } from '../components/builder/DatasetPicker'
 import { ReportChat } from '../components/builder/ReportChat'
+import { ChartKindPicker } from '../components/builder/ChartKindPicker'
 import { useReports } from '../lib/reports'
 import { VocabularyDialog } from '../components/builder/VocabularyDialog'
 
@@ -45,12 +47,19 @@ const GRAINS: { value: Grain; label: string }[] = [
   { value: 'year', label: 'по годам' },
 ]
 
-const CHART_KINDS = [
-  { value: 'bar', label: 'столбцы' },
-  { value: 'line', label: 'линия' },
-  { value: 'area', label: 'область' },
-  { value: 'pie', label: 'круговая' },
-] as const
+const FILTER_KIND_OPTIONS: Record<DimensionType, { value: FilterDefinition['kind']; label: string }[]> = {
+  string: [
+    { value: 'select', label: 'Одно значение' },
+    { value: 'multiselect', label: 'Несколько значений' },
+    { value: 'text', label: 'Точное совпадение' },
+  ],
+  number: [
+    { value: 'select', label: 'Одно значение' },
+    { value: 'number', label: 'Точное число' },
+    { value: 'numberrange', label: 'Диапазон от — до' },
+  ],
+  date: [{ value: 'daterange', label: 'Период с — по' }],
+}
 
 // Потолки группировки те же, что и на бэкенде: таблица читается по строкам,
 // а график разворачивает второй разрез в серии — третьему места нет.
@@ -1198,6 +1207,31 @@ function Builder({ embedded, suggestedPrompt }: {
                 )}
               </div>
 
+              {filters.length > 0 && (
+                <div className="mt-3 space-y-2 border-t border-line pt-3">
+                  <p className="text-xs font-medium text-fg-muted">Как читатель задаст условие</p>
+                  {filters.map((filter) => {
+                    const info = dimensionInfo(filter.dimension)
+                    const options = FILTER_KIND_OPTIONS[info?.type ?? 'string']
+                    return (
+                      <label key={filter.dimension} className="flex flex-col gap-1 text-xs text-fg-muted">
+                        <span className="truncate">{info?.title ?? filter.dimension}</span>
+                        <Select value={filter.kind} className="py-1.5"
+                          onChange={(event) => {
+                            const kind = event.target.value as FilterDefinition['kind']
+                            setFilters((prev) => prev.map((item) => item.dimension === filter.dimension ? { ...item, kind } : item))
+                            setPreviewFilters((prev) => Object.fromEntries(Object.entries(prev).filter(
+                              ([key]) => key !== filter.dimension && !key.startsWith(`${filter.dimension}__`),
+                            )))
+                          }}>
+                          {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                        </Select>
+                      </label>
+                    )
+                  })}
+                </div>
+              )}
+
               <Button variant="ghost" size="sm" className="mt-2.5" onClick={() => setStep(1)}>
                 ← изменить набор данных
               </Button>
@@ -1296,19 +1330,6 @@ function Builder({ embedded, suggestedPrompt }: {
                           <option key={t.value} value={t.value}>{t.label}</option>
                         ))}
                       </Select>
-                      {section.type === 'chart' && (
-                        <Select
-                          fit
-                          className={SECTION_SELECT}
-                          aria-label="Вид графика"
-                          value={section.kind ?? 'bar'}
-                          onChange={(e) => patchSection(index, { kind: e.target.value as SectionDefinition['kind'] })}
-                        >
-                          {CHART_KINDS.map((k) => (
-                            <option key={k.value} value={k.value}>{k.label}</option>
-                          ))}
-                        </Select>
-                      )}
                       {/* ширина секции в отчёте: одна в ряд или две рядом */}
                       <Select
                         fit
@@ -1335,6 +1356,11 @@ function Builder({ embedded, suggestedPrompt }: {
                         </Button>
                       )}
                     </div>
+
+                    {section.type === 'chart' && (
+                      <ChartKindPicker value={section.kind ?? 'bar'}
+                        onChange={(kind) => patchSection(index, { kind })} />
+                    )}
 
                     <div className="flex flex-col gap-1.5 rounded-control border border-dashed border-line px-2.5 py-2">
                       <span className="text-xs font-medium tracking-wide text-fg-muted uppercase">Показатели</span>

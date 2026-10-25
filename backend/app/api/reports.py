@@ -247,6 +247,10 @@ def update_definition(slug: str, definition: ReportDefinition,
     except DatasetError as exc:
         raise HTTPException(422, str(exc))
     db.set_definition(slug, definition.model_dump(by_alias=True))
+    saved_values = report.get('filter_values') or {}
+    compatible_values = definition.compatible_filter_values(saved_values)
+    if compatible_values != saved_values:
+        db.set_filters(slug, compatible_values)
     return {'report': _report_meta(db.get_report(slug))}
 
 

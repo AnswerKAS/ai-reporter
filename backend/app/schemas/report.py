@@ -48,7 +48,7 @@ class ChartSeries(CamelModel):
 
 class ChartSection(CamelModel):
     type: Literal['chart']
-    kind: Literal['bar', 'line', 'area', 'pie', 'combo']
+    kind: Literal['bar', 'bar_horizontal', 'bar_stacked', 'line', 'area', 'area_stacked', 'pie', 'combo']
     title: str | None = None
     data: list[ChartPoint]
     x_key: str | None = None
@@ -89,7 +89,7 @@ ReportSection = Annotated[
 class ReportFilter(CamelModel):
     key: str
     label: str
-    kind: Literal['select', 'number', 'text'] = 'select'
+    kind: Literal['select', 'multiselect', 'number', 'numberrange', 'text', 'daterange'] = 'select'
     options: list[str] = []
     default: str | int | None = None
 

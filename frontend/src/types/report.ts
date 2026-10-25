@@ -20,7 +20,7 @@ export interface ChartSeries {
   type?: 'bar' | 'line'
 }
 
-export type ChartKind = 'bar' | 'line' | 'area' | 'pie' | 'combo'
+export type ChartKind = 'bar' | 'bar_horizontal' | 'bar_stacked' | 'line' | 'area' | 'area_stacked' | 'pie' | 'combo'
 
 export interface ChartDetail {
   title?: string
@@ -96,7 +96,7 @@ export interface ReportFilter {
   key: string
   label: string
   /** daterange — период «с — по»: значения приходят ключами `<key>__from` и `<key>__to`. */
-  kind: 'select' | 'number' | 'text' | 'daterange'
+  kind: 'select' | 'multiselect' | 'number' | 'numberrange' | 'text' | 'daterange'
   options: string[]
   default?: string | number | null
 }

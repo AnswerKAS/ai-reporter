@@ -107,6 +107,16 @@ def test_вид_графика_по_слову(catalog, word, kind):
     assert section['kind'] == kind
 
 
+@pytest.mark.parametrize('phrase_text,kind', [
+    ('выручка по городам горизонтальными столбцами', 'bar_horizontal'),
+    ('выручка по городам накопительными столбцами', 'bar_stacked'),
+    ('выручка по городам областью с накоплением', 'area_stacked'),
+])
+def test_additional_chart_kinds_from_phrase(catalog, phrase_text, kind):
+    """The rule-based parser recognizes the additional visualizations."""
+    assert phrase.parse_section(phrase_text, catalog)['section']['kind'] == kind
+
+
 @pytest.mark.parametrize('word', ['таблицей', 'списком', 'таблица'])
 def test_таблица_по_слову(catalog, word):
     section = phrase.parse_section(f'выручка по городам {word}', catalog)['section']

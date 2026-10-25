@@ -24,6 +24,8 @@ _SECTION_WORDS = {
     'table': ('таблица', 'таблицей', 'таблицу', 'списком', 'список'),
 }
 _CHART_WORDS = {
+    'bar_horizontal': ('горизонтальные', 'горизонтальный', 'горизонтальными'),
+    'bar_stacked': ('накопительные', 'накопительный', 'накоплением'),
     'bar': ('столбцы', 'столбцами', 'столбчатый', 'бар', 'гистограмма'),
     'line': ('линия', 'линией', 'график', 'динамика', 'динамику', 'тренд'),
     'area': ('область', 'областью', 'площадь'),
@@ -160,6 +162,8 @@ def parse_section(text: str, catalog) -> dict:
 
     section_type = _keyword(phrase, _SECTION_WORDS, used)
     chart_kind = _keyword(phrase, _CHART_WORDS, used)
+    if chart_kind == 'bar_stacked' and any(token.startswith('област') for token in phrase):
+        chart_kind = 'area_stacked'
     grain = _keyword(phrase, _GRAIN_WORDS, used)
 
     limit = None

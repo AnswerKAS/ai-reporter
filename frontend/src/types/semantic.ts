@@ -54,7 +54,7 @@ export interface DatasetLink {
 export interface SectionDefinition {
   type: 'kpi' | 'chart' | 'table'
   title?: string | null
-  kind?: 'bar' | 'line' | 'area' | 'pie' | 'combo' | null
+  kind?: 'bar' | 'bar_horizontal' | 'bar_stacked' | 'line' | 'area' | 'area_stacked' | 'pie' | 'combo' | null
   /** Сколько секций в ряд: 1 — во всю ширину, 2 — половина. Не задано — по виду секции. */
   perRow?: 1 | 2 | null
   metrics: string[]
@@ -68,7 +68,7 @@ export interface SectionDefinition {
 export interface FilterDefinition {
   dimension: string
   label?: string | null
-  kind: 'select' | 'text' | 'number' | 'daterange'
+  kind: 'select' | 'multiselect' | 'text' | 'number' | 'numberrange' | 'daterange'
 }
 
 /** Поле, взятое автором отчёта прямо из колонки датасета. */

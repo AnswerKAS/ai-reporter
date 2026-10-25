@@ -247,6 +247,17 @@ def test_период_обходится_без_списка_значений(mo
     assert filters == [{'key': 'day', 'label': 'Период', 'kind': 'daterange', 'options': []}]
 
 
+def test_multiselect_filter_lists_source_values(model, sources):
+    """The multi choice control receives the same safe options as select."""
+    sources.get('sales').distinct = ['Москва', 'Тверь']
+    definition = ReportDefinition.model_validate({
+        'sections': [section().model_dump()],
+        'filters': [{'dimension': 'city', 'kind': 'multiselect'}],
+    })
+
+    assert executor.build_filters(definition, {})[0]['options'] == ['Москва', 'Тверь']
+
+
 def test_недоступный_источник_оставляет_фильтр_без_списка(model, sources):
     sources.get('sales').fail = 'источник не отвечает'
     definition = ReportDefinition.model_validate(

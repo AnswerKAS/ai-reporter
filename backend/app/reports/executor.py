@@ -245,7 +245,7 @@ def build_filters(definition: ReportDefinition, filter_values: dict,
         if item.kind == 'daterange':
             out.append(entry)
             continue
-        if item.kind == 'select':
+        if item.kind in ('select', 'multiselect'):
             try:
                 entry['options'] = builder.distinct_values(
                     item.dimension, catalog=catalog,

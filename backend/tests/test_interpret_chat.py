@@ -507,6 +507,23 @@ def test_непонятный_вид_фильтра_сводится_к_select(c
     assert filters == [{'dimension': 'city', 'kind': 'select'}]
 
 
+def test_generated_filter_kinds_follow_dimension_types():
+    """The model cannot assign a numeric control to a string dimension."""
+    dimensions = {'city': {'type': 'string'}, 'amount': {'type': 'number'},
+                  'day': {'type': 'date'}}
+    proposed = {'filters': [
+        {'dimension': 'city', 'kind': 'numberrange'},
+        {'dimension': 'amount', 'kind': 'numberrange'},
+        {'dimension': 'day', 'kind': 'multiselect'},
+    ]}
+
+    assert interpret._filters(proposed, dimensions) == [
+        {'dimension': 'city', 'kind': 'select'},
+        {'dimension': 'amount', 'kind': 'numberrange'},
+        {'dimension': 'day', 'kind': 'daterange'},
+    ]
+
+
 # --- собеседник обязан собрать отчёт -----------------------------------------
 
 def test_словарь_диалога_не_сужается_выбранными_датасетами(model_answer):

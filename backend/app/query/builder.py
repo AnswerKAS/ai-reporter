@@ -5,6 +5,8 @@
 поэтому произвольный SQL от пользователя невозможен по построению.
 """
 
+import json
+import math
 import re
 from dataclasses import dataclass, field
 from datetime import date
@@ -39,7 +41,7 @@ AGGREGATES = {
 # Границы периода приезжают отдельными ключами значений фильтров:
 # `<разрез>__from` и `<разрез>__to`. Так значение остаётся простой строкой —
 # и в БД отчёта, и в запросе предпросмотра.
-FILTER_OPS = {'__from': 'from', '__to': 'to'}
+FILTER_OPS = {'__from': 'from', '__to': 'to', '__min': 'min', '__max': 'max', '__in': 'in'}
 
 
 def split_filter_key(key: str) -> tuple[str, str]:
@@ -63,7 +65,7 @@ def _valid_date(value: str) -> str | None:
 
 
 def filter_condition(dialect, column: str, key: str, value, type_: str) -> tuple[str, dict]:
-    """Условие одного значения фильтра: равенство или граница периода.
+    """Условие фильтра: равенство, список или граница даты/числа.
 
     Одно место на всё: секцию считает построитель, сырые строки — детализация,
     и разойтись в трактовке фильтра они не должны.
@@ -76,6 +78,39 @@ def filter_condition(dialect, column: str, key: str, value, type_: str) -> tuple
             return '', {}
         bound = dialect.date_bound(name, next_day=op == 'to')
         return f'{column} {">=" if op == "from" else "<"} {bound}', {name: day}
+    if op in ('min', 'max'):
+        if type_ != 'number':
+            return '', {}
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return '', {}
+        if not math.isfinite(number):
+            return '', {}
+        return f'{column} {">=" if op == "min" else "<="} {dialect.placeholder(name, type_)}', {name: number}
+    if op == 'in':
+        try:
+            values = json.loads(value)
+        except (TypeError, ValueError):
+            return '', {}
+        if not isinstance(values, list) or not values or len(values) > 200:
+            return '', {}
+        if not all(isinstance(item, str) for item in values):
+            return '', {}
+        if type_ == 'number':
+            try:
+                values = [float(item) for item in values]
+            except ValueError:
+                return '', {}
+            if not all(math.isfinite(item) for item in values):
+                return '', {}
+        elif type_ == 'date':
+            values = [_valid_date(item) for item in values]
+            if any(item is None for item in values):
+                return '', {}
+        params = {f'{name}_{index}': item for index, item in enumerate(values)}
+        placeholders = ', '.join(dialect.placeholder(param, type_) for param in params)
+        return f'{column} IN ({placeholders})', params
     param = dialect.placeholder(name, type_)
     return f'{column} = {param}', {name: float(value) if type_ == 'number' else str(value)}
 

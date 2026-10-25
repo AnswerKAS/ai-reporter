@@ -247,7 +247,7 @@ export function ChartSectionView({
   }
 
   let chart: React.ReactNode
-  if (kind === 'bar') {
+  if (kind === 'bar' || kind === 'bar_stacked') {
     chart = (
       <BarChart data={data}>
         {baseAxes}
@@ -259,10 +259,27 @@ export function ChartSectionView({
             dataKey={s.key}
             name={s.name ?? s.key}
             fill={s.color ?? color(i)}
+            stackId={kind === 'bar_stacked' ? 'total' : undefined}
             radius={[4, 4, 0, 0]}
             cursor={detail ? 'pointer' : undefined}
             onClick={(arg: unknown) => onPointClick(arg, s.key)}
           />
+        ))}
+      </BarChart>
+    )
+  } else if (kind === 'bar_horizontal') {
+    chart = (
+      <BarChart data={data} layout="vertical" margin={{ left: 20, right: 16 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke={theme.grid} />
+        <XAxis type="number" tick={<XTick fill={theme.axis} />} tickLine={false} axisLine={false} />
+        <YAxis type="category" dataKey={xAxisKey} width={110} tickLine={false}
+          axisLine={false} tick={{ fill: theme.axis, fontSize: 11 }} />
+        {tooltip}
+        {legend}
+        {series.map((s, i) => (
+          <Bar key={s.key} dataKey={s.key} name={s.name ?? s.key}
+            fill={s.color ?? color(i)} radius={[0, 4, 4, 0]}
+            onClick={(arg: unknown) => onPointClick(arg, s.key)} />
         ))}
       </BarChart>
     )
@@ -346,7 +363,7 @@ export function ChartSectionView({
         )}
       </ComposedChart>
     )
-  } else if (kind === 'area') {
+  } else if (kind === 'area' || kind === 'area_stacked') {
     chart = (
       <AreaChart data={data} onClick={onChartClick}>
         {baseAxes}
@@ -360,7 +377,8 @@ export function ChartSectionView({
             name={s.name ?? s.key}
             stroke={s.color ?? color(i)}
             fill={s.color ?? color(i)}
-            fillOpacity={0.15}
+            fillOpacity={kind === 'area_stacked' ? 0.55 : 0.15}
+            stackId={kind === 'area_stacked' ? 'total' : undefined}
             dot={onDrill ? drillDot(s.key, s.color ?? color(i)) : false}
             activeDot={{ r: 5 }}
             onClick={(arg: unknown) => onPointClick(arg, s.key)}
@@ -396,7 +414,7 @@ export function ChartSectionView({
 
   return (
     <div className={detail || onDrill ? 'w-full [&_.recharts-wrapper]:cursor-pointer' : 'w-full'}>
-      <ResponsiveContainer width="100%" height={300}>
+      <ResponsiveContainer width="100%" height={kind === 'bar_horizontal' ? Math.max(300, Math.min(720, data.length * 38)) : 300}>
         {chart}
       </ResponsiveContainer>
       {detail && selected && (

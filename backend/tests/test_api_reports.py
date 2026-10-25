@@ -414,6 +414,38 @@ def test_сохранение_фильтров_и_пересчёт(client, repor
     assert any('WHERE' in sql for sql, _ in sources.get('sales').queries)
 
 
+def test_multiselect_filter_persists_and_recalculates(client, report, admin_headers, sources):
+    """The report API stores selected values and binds both in the source query."""
+    from app.core import database as db
+
+    db.set_definition('sales-report',
+                      definition(filters=[{'dimension': 'city', 'kind': 'multiselect'}]))
+    value = '["Москва", "Казань"]'
+
+    response = client.post('/api/reports/sales-report/filters', headers=admin_headers,
+                           json={'values': {'city__in': value}})
+
+    assert response.status_code == 200
+    assert response.json()['report']['filterValues'] == {'city__in': value}
+    assert any(' IN (' in sql and params.get('f_city__in_1') == 'Казань'
+               for sql, params in sources.get('sales').queries)
+
+
+def test_changing_filter_control_removes_old_saved_value(client, report, admin_headers):
+    """An old equality value cannot remain active behind a multi choice UI."""
+    from app.core import database as db
+
+    db.set_definition('sales-report',
+                      definition(filters=[{'dimension': 'city', 'kind': 'select'}]))
+    db.set_filters('sales-report', {'city': 'Москва'})
+
+    response = client.put('/api/reports/sales-report/definition', headers=admin_headers,
+                          json=definition(filters=[{'dimension': 'city', 'kind': 'multiselect'}]))
+
+    assert response.status_code == 200
+    assert db.get_report('sales-report')['filter_values'] == {}
+
+
 def test_фильтры_сохраняются_между_чтениями(client, report, admin_headers):
     client.post('/api/reports/sales-report/filters', headers=admin_headers,
                 json={'values': {'city': 'Тверь'}})

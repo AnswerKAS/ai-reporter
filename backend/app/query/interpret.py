@@ -176,11 +176,11 @@ _JSON_RE = re.compile(r'\{.*\}', re.DOTALL)
 # (правило арифметики обязано стоять до правила «верни ошибку»).
 _FORMAT = """Формат:
 {"sections": [
-   {"type": "kpi|chart|table", "kind": "bar|line|area|pie|null",
+   {"type": "kpi|chart|table", "kind": "bar|bar_horizontal|bar_stacked|line|area|area_stacked|pie|combo|null",
     "metrics": ["slug", ...], "by": ["slug"], "grain": "day|week|month|quarter|year|null",
     "orderBy": "slug|null", "orderDir": "desc|asc", "limit": число|null}
  ],
- "filters": [{"dimension": "slug", "kind": "select"}],
+ "filters": [{"dimension": "slug", "kind": "select|multiselect|text|number|numberrange|daterange"}],
  "computed": [{"key": "calc_1", "title": "A / B", "left": "slug_a", "op": "/",
                "right": "slug_b", "format": "number"}]}
 
@@ -604,9 +604,14 @@ def _filters(data: dict, dimensions: dict) -> list[dict]:
             continue
         slug = item.get('dimension')
         kind = item.get('kind')
-        if dimensions.get(slug, {}).get('type') == 'date':
+        dim_type = dimensions.get(slug, {}).get('type')
+        if dim_type == 'date':
             kind = 'daterange'
-        elif kind not in ('select', 'text', 'number', 'daterange'):
+        elif dim_type == 'number' and kind not in ('select', 'number', 'numberrange'):
+            kind = 'select'
+        elif dim_type == 'string' and kind not in ('select', 'multiselect', 'text'):
+            kind = 'select'
+        elif kind not in ('select', 'multiselect', 'text', 'number', 'numberrange', 'daterange'):
             kind = 'select'
         out.append({**item, 'dimension': slug, 'kind': kind})
     return out

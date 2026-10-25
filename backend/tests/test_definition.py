@@ -122,6 +122,21 @@ def test_фильтр_по_умолчанию_список():
     assert FilterDefinition.model_validate({'dimension': 'city'}).kind == 'select'
 
 
+@pytest.mark.parametrize('kind', ['multiselect', 'numberrange'])
+def test_additional_filter_kinds_are_valid(kind):
+    """Definitions can persist the two new filter controls."""
+    assert FilterDefinition.model_validate({'dimension': 'city', 'kind': kind}).kind == kind
+
+
+@pytest.mark.parametrize('kind', ['bar_horizontal', 'bar_stacked', 'area_stacked'])
+def test_additional_chart_kinds_are_valid(kind):
+    """The report definition accepts every new chart visualization."""
+    section = SectionDefinition.model_validate({
+        'type': 'chart', 'kind': kind, 'metrics': ['revenue'], 'by': ['city']})
+
+    assert section.kind == kind
+
+
 def test_неизвестный_вид_фильтра():
     with pytest.raises(ValidationError):
         FilterDefinition.model_validate({'dimension': 'city', 'kind': 'ползунок'})

@@ -32,7 +32,7 @@ class SectionDefinition(CamelModel):
     type: Literal['kpi', 'chart', 'table']
     title: str | None = None
     # только для type='chart'
-    kind: Literal['bar', 'line', 'area', 'pie', 'combo'] | None = None
+    kind: Literal['bar', 'bar_horizontal', 'bar_stacked', 'line', 'area', 'area_stacked', 'pie', 'combo'] | None = None
     per_row: Literal[1, 2] | None = None
     metrics: list[str]
     by: list[str] = []
@@ -129,7 +129,7 @@ class FilterDefinition(CamelModel):
 
     dimension: str
     label: str | None = None
-    kind: Literal['select', 'text', 'number', 'daterange'] = 'select'
+    kind: Literal['select', 'multiselect', 'text', 'number', 'numberrange', 'daterange'] = 'select'
 
 
 class ReportDefinition(CamelModel):
@@ -146,3 +146,15 @@ class ReportDefinition(CamelModel):
     filters: list[FilterDefinition] = []
     fields: list[ReportField] = []
     computed: list[ComputedField] = []
+
+    def compatible_filter_values(self, values: dict[str, str]) -> dict[str, str]:
+        """Keep only saved values that match the current filter controls."""
+        suffixes = {
+            'daterange': ('__from', '__to'),
+            'numberrange': ('__min', '__max'),
+            'multiselect': ('__in',),
+        }
+        allowed = {f'{item.dimension}{suffix}'
+                   for item in self.filters
+                   for suffix in suffixes.get(item.kind, ('',))}
+        return {key: value for key, value in values.items() if key in allowed}

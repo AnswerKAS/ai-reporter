@@ -5,6 +5,7 @@ Excel даёт данные, с которыми можно работать д�
 собранные на сервере: это не снимок экрана, но те же цифры и тот же порядок.
 """
 
+import json
 from datetime import datetime
 from io import BytesIO
 from xml.sax.saxutils import escape
@@ -52,6 +53,24 @@ def _title(section: dict, index: int) -> str:
                                     'table': 'Таблица'}.get(section.get('type'), f'Секция {index}')
 
 
+def _filter_value(item: dict, values: dict) -> str | None:
+    """Human-readable selected value for Excel and PDF report summaries."""
+    key = item.get('key')
+    kind = item.get('kind')
+    if kind in ('daterange', 'numberrange'):
+        suffixes = ('from', 'to') if kind == 'daterange' else ('min', 'max')
+        lower, upper = (values.get(f'{key}__{suffix}') for suffix in suffixes)
+        return f'{lower or "…"} — {upper or "…"}' if lower or upper else None
+    if kind == 'multiselect':
+        try:
+            selected = json.loads(values.get(f'{key}__in') or '[]')
+        except (TypeError, ValueError):
+            return None
+        return ', '.join(str(value) for value in selected) if isinstance(selected, list) and selected else None
+    value = values.get(key)
+    return str(value) if value not in (None, '') else None
+
+
 def to_xlsx(report: dict) -> bytes:
     """Книга Excel: лист на секцию, первый лист — сводка."""
     from openpyxl import Workbook
@@ -63,7 +82,7 @@ def to_xlsx(report: dict) -> bytes:
     sheet.append([report.get('description') or ''])
     sheet.append(['Сформирован', datetime.now().strftime('%d.%m.%Y %H:%M')])
     for f in report.get('filters') or []:
-        value = (report.get('filterValues') or {}).get(f.get('key'))
+        value = _filter_value(f, report.get('filterValues') or {})
         if value:
             sheet.append([f.get('label') or f.get('key'), value])
 
@@ -108,29 +127,51 @@ def _chart_image(section: dict, width_px: int = 900) -> bytes | None:
     labels = [str(point.get(x_key, '')) for point in data] if x_key else [''] * len(data)
     figure, axes = plt.subplots(figsize=(width_px / 100, 3.2), dpi=100)
     kind = section.get('kind') or 'bar'
-    for i, item in enumerate(series):
-        key = item.get('key')
-        values = [point.get(key) or 0 for point in data]
-        name = item.get('name') or key
-        if kind in ('line', 'area'):
-            axes.plot(labels, values, label=name, linewidth=1.8)
-            if kind == 'area':
-                axes.fill_between(labels, values, alpha=0.15)
-        elif kind == 'pie' and i == 0:
-            axes.pie(values, labels=labels, autopct='%1.0f%%', textprops={'fontsize': 7})
-            axes.axis('equal')
-        else:
-            shift = (i - (len(series) - 1) / 2) * 0.8 / max(len(series), 1)
-            axes.bar([p + shift for p in range(len(labels))], values,
-                     width=0.8 / max(len(series), 1), label=name)
-            axes.set_xticks(range(len(labels)))
-            axes.set_xticklabels(labels)
+    values_by_series = [[point.get(item.get('key')) or 0 for point in data]
+                        for item in series]
+    names = [item.get('name') or item.get('key') for item in series]
+    positions = list(range(len(labels)))
+    if kind == 'bar_horizontal':
+        for i, values in enumerate(values_by_series):
+            shift = (i - (len(series) - 1) / 2) * 0.8 / len(series)
+            axes.barh([p + shift for p in positions], values,
+                      height=0.8 / len(series), label=names[i])
+        axes.set_yticks(positions)
+        axes.set_yticklabels(labels)
+        axes.invert_yaxis()
+    elif kind == 'bar_stacked':
+        bottom = [0] * len(labels)
+        for name, values in zip(names, values_by_series):
+            axes.bar(positions, values, bottom=bottom, label=name)
+            bottom = [old + value for old, value in zip(bottom, values)]
+        axes.set_xticks(positions)
+        axes.set_xticklabels(labels)
+    elif kind == 'area_stacked':
+        axes.stackplot(positions, *values_by_series, labels=names, alpha=0.75)
+        axes.set_xticks(positions)
+        axes.set_xticklabels(labels)
+    else:
+        for i, values in enumerate(values_by_series):
+            name = names[i]
+            if kind in ('line', 'area'):
+                axes.plot(labels, values, label=name, linewidth=1.8)
+                if kind == 'area':
+                    axes.fill_between(labels, values, alpha=0.15)
+            elif kind == 'pie' and i == 0:
+                axes.pie(values, labels=labels, autopct='%1.0f%%', textprops={'fontsize': 7})
+                axes.axis('equal')
+            else:
+                shift = (i - (len(series) - 1) / 2) * 0.8 / max(len(series), 1)
+                axes.bar([p + shift for p in positions], values,
+                         width=0.8 / max(len(series), 1), label=name)
+                axes.set_xticks(positions)
+                axes.set_xticklabels(labels)
     if kind != 'pie':
         axes.legend(fontsize=7, frameon=False)
         axes.tick_params(labelsize=7)
         axes.spines['top'].set_visible(False)
         axes.spines['right'].set_visible(False)
-        if len(labels) > 8:
+        if len(labels) > 8 and kind != 'bar_horizontal':
             plt.setp(axes.get_xticklabels(), rotation=45, ha='right')
     figure.tight_layout()
     buffer = BytesIO()
@@ -286,9 +327,9 @@ def to_pdf(report: dict) -> bytes:
     if report.get('description'):
         flow.append(Paragraph(str(report['description']), sub))
     stamp = datetime.now().strftime('%d.%m.%Y %H:%M')
-    applied = [f"{f.get('label') or f.get('key')}: {(report.get('filterValues') or {}).get(f.get('key'))}"
+    applied = [f"{f.get('label') or f.get('key')}: {value}"
                for f in report.get('filters') or []
-               if (report.get('filterValues') or {}).get(f.get('key'))]
+               if (value := _filter_value(f, report.get('filterValues') or {}))]
     flow.append(Paragraph('Сформирован ' + stamp + ('; ' + ', '.join(applied) if applied else ''), sub))
     flow.append(Spacer(1, 6))
 

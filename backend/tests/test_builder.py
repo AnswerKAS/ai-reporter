@@ -1,5 +1,7 @@
 """Построитель запросов: декларация секции → SQL источника."""
 
+import json
+
 import pytest
 
 from app.datasets.base import DatasetError
@@ -64,6 +66,56 @@ def test_некорректная_дата_снимает_условие(value):
         for_source('postgres'), 'c', 'day__from', value, 'date')
 
     assert (clause, params) == ('', {})
+
+
+def test_multiselect_filter_uses_individual_parameters():
+    """Every selected value is bound separately instead of interpolated into SQL."""
+    from app.query.dialects import for_source
+
+    clause, params = builder.filter_condition(
+        for_source('postgres'), 'c', 'city__in', '["Москва", "Казань"]', 'string')
+
+    assert clause == 'c IN (%(f_city__in_0)s, %(f_city__in_1)s)'
+    assert params == {'f_city__in_0': 'Москва', 'f_city__in_1': 'Казань'}
+
+
+def test_numeric_multiselect_values_are_typed():
+    """Numeric dimensions bind numbers even when values arrive as JSON strings."""
+    from app.query.dialects import for_source
+
+    clause, params = builder.filter_condition(
+        for_source('postgres'), 'c', 'amount__in', '["10", "20.5"]', 'number')
+
+    assert clause == 'c IN (%(f_amount__in_0)s, %(f_amount__in_1)s)'
+    assert params == {'f_amount__in_0': 10.0, 'f_amount__in_1': 20.5}
+
+
+@pytest.mark.parametrize('value', ['[]', 'invalid', '[1]', json.dumps(['x'] * 201)])
+def test_invalid_multiselect_filter_is_ignored(value):
+    """Malformed and oversized lists cannot produce invalid or huge SQL."""
+    from app.query.dialects import for_source
+
+    assert builder.filter_condition(for_source('postgres'), 'c', 'city__in', value, 'string') == ('', {})
+
+
+def test_number_range_uses_inclusive_bounds():
+    """Numeric limits remain typed parameters and include both endpoints."""
+    from app.query.dialects import for_source
+
+    lower = builder.filter_condition(for_source('postgres'), 'c', 'amount__min', '10.5', 'number')
+    upper = builder.filter_condition(for_source('postgres'), 'c', 'amount__max', '20', 'number')
+
+    assert lower == ('c >= %(f_amount__min)s', {'f_amount__min': 10.5})
+    assert upper == ('c <= %(f_amount__max)s', {'f_amount__max': 20.0})
+
+
+def test_invalid_number_range_is_ignored():
+    """Non-finite and non-numeric input does not reach the data source."""
+    from app.query.dialects import for_source
+
+    dialect = for_source('postgres')
+    assert builder.filter_condition(dialect, 'c', 'amount__min', 'nan', 'number') == ('', {})
+    assert builder.filter_condition(dialect, 'c', 'amount__max', 'oops', 'number') == ('', {})
 
 
 def test_алиасы_выдачи_не_совпадают_с_именами_колонок():
@@ -281,6 +333,15 @@ def test_период_даёт_две_границы(model):
 
     assert query.sql.count('t0.`day`') == 2
     assert set(query.params) == {'f_day__from', 'f_day__to'}
+
+
+def test_multiselect_filter_reaches_section_query(model):
+    """The saved list filter uses the same SQL builder as report sections."""
+    query = SectionQuery(['revenue'], ['city'],
+                         filters={'city__in': '["Москва", "Казань"]'}).build()
+
+    assert 't0.`city` IN ({f_city__in_0:String}, {f_city__in_1:String})' in query.sql
+    assert query.params == {'f_city__in_0': 'Москва', 'f_city__in_1': 'Казань'}
 
 
 def test_фильтр_по_неизвестному_разрезу_игнорируется(model):
