@@ -153,9 +153,9 @@ export function WorkspacePage() {
         <div className="min-w-0">
           <div className={mode === 'question' ? '' : 'hidden'}>
             {selected ? (
-              <div className="space-y-6">
-                <DatasetOverview key={selected.slug} dataset={selected} />
-                <DatasetQuestionPanel key={selected.slug} dataset={selected} isAdmin={isAdmin}
+              <div key={selected.slug} className="space-y-6">
+                <DatasetOverview dataset={selected} />
+                <DatasetQuestionPanel dataset={selected} isAdmin={isAdmin}
                   onCreateReport={createFromQuestion} />
               </div>
             ) : (
