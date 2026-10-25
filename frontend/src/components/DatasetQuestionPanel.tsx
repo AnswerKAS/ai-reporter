@@ -34,7 +34,7 @@ export function DatasetQuestionPanel({ dataset, isAdmin, onCreateReport }: {
   return (
     <div className="mx-auto max-w-6xl space-y-6">
       <section className="rounded-card border border-line bg-surface p-5 shadow-card sm:p-7">
-        <p className="text-[11px] font-semibold tracking-[0.14em] text-accent uppercase">02 · Вопрос к данным</p>
+        <p className="text-[11px] font-semibold tracking-[0.14em] text-accent uppercase">03 · Вопрос к данным</p>
         <h2 className="mt-2 text-2xl font-semibold tracking-tight">Что вы хотите узнать?</h2>
         <p className="mt-2 text-sm text-fg-muted">Спросите об итогах, динамике или сравнении. Следующим вопросом можно уточнить ответ.</p>
         {error && <Alert className="mt-5">{error}</Alert>}

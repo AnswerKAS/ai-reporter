@@ -4,6 +4,7 @@ import type { Dataset } from '../types/dataset'
 import { ApiError, fetchDatasets } from '../lib/api'
 import { useAuth } from '../lib/auth'
 import { DatasetQuestionPanel } from '../components/DatasetQuestionPanel'
+import { DatasetOverview } from '../components/DatasetOverview'
 import { BuilderPage } from './BuilderPage'
 import { Alert, Badge, Card, EmptyState, Input, Page, PageHeader, Segmented } from '../components/ui'
 import { cn } from '../lib/cn'
@@ -152,8 +153,11 @@ export function WorkspacePage() {
         <div className="min-w-0">
           <div className={mode === 'question' ? '' : 'hidden'}>
             {selected ? (
-              <DatasetQuestionPanel key={selected.slug} dataset={selected} isAdmin={isAdmin}
-                onCreateReport={createFromQuestion} />
+              <div className="space-y-6">
+                <DatasetOverview key={selected.slug} dataset={selected} />
+                <DatasetQuestionPanel key={selected.slug} dataset={selected} isAdmin={isAdmin}
+                  onCreateReport={createFromQuestion} />
+              </div>
             ) : (
               <EmptyState title="Выберите источник" description="После выбора датасета здесь появится поле для вопроса и история ответов." />
             )}
