@@ -1038,7 +1038,11 @@ def chat(messages, catalog, fields=None, computed=None, datasets=None,
             catalog, fields, computed, datasets)
         metrics.update(preferred_metrics)
         dimensions.update(preferred_dimensions)
-    if not metrics:
+    key = _openrouter_key()
+    if not key:
+        return _chat_without_model(said, catalog, fields, computed, datasets,
+                                   metrics, dimensions)
+    if not metrics and not getattr(catalog, 'datasets', {}):
         raise DatasetError(
             'в доступных данных нет ни одного показателя: собирать не из чего. '
             'Проверьте схему датасета'
@@ -1057,11 +1061,6 @@ def chat(messages, catalog, fields=None, computed=None, datasets=None,
     prompt_text = (f'{_CHAT_INSTRUCTIONS}\n\n{_vocabulary(metrics, dimensions)}'
                    f'{preferred}{current}\n\nПЕРЕПИСКА:\n'
                    f'{_history(said, CHAT_HISTORY)}\n\nТвой ответ (только JSON):')
-
-    key = _openrouter_key()
-    if not key:
-        return _chat_without_model(said, catalog, fields, computed, datasets,
-                                   metrics, dimensions)
 
     problems: list[str] = []
     for model in _chat_models():

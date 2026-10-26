@@ -1,6 +1,7 @@
 export type NumberFormat = 'string' | 'number' | 'money' | 'percent' | 'date'
 
 export interface KpiItem {
+  metricKey?: string
   label: string
   value: string | number
   format?: NumberFormat
@@ -15,6 +16,7 @@ export interface ChartPoint {
 
 export interface ChartSeries {
   key: string
+  metricKey?: string
   name?: string
   color?: string
   type?: 'bar' | 'line'
@@ -39,6 +41,7 @@ export interface KpiSection {
   type: 'kpi'
   title?: string
   items: KpiItem[]
+  drilldownScope?: 'dataset'
   /** Фильтр отчёта, который к этой секции неприменим. */
   filterNote?: string
   /** Ширина секции в сетке отчёта. */
@@ -52,6 +55,7 @@ export interface ChartSection {
   data: ChartPoint[]
   xKey?: string
   series: ChartSeries[]
+  drilldownScope?: 'dataset'
   detail?: ChartDetail
   /** Разрезы секции в порядке вложенности — по ним собирается точка детализации. */
   groupKeys?: string[]
@@ -74,7 +78,9 @@ export interface TableSection {
   type: 'table'
   title?: string
   columns: TableColumn[]
+  metricKeys?: string[]
   rows: Record<string, unknown>[]
+  drilldownScope?: 'dataset'
   /** Разрезы группировки в порядке вложенности: первый родитель, дальше потомки. */
   groupKeys?: string[]
   filterNote?: string

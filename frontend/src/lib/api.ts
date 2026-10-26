@@ -444,6 +444,49 @@ export async function fetchDatasetConversation(slug: string): Promise<{
   return request(`/datasets/${encodeURIComponent(slug)}/conversation`)
 }
 
+/** Restore the shared question chat across attached datasets. */
+export async function fetchWorkspaceConversation(conversationId?: string): Promise<{
+  conversationId: string | null
+  turns: DatasetQuestionTurn[]
+}> {
+  return request(`/datasets/chat/history${conversationId ? `?conversation_id=${encodeURIComponent(conversationId)}` : ''}`)
+}
+
+export interface SavedChat {
+  id: string
+  kind: 'dataset' | 'report'
+  target: string
+  title: string
+  savedAt: string
+  updatedAt: string
+}
+
+/** List explicitly named chats belonging to one agent and report scope. */
+export async function fetchSavedChats(kind: SavedChat['kind'], target: string): Promise<SavedChat[]> {
+  const result = await request<{ chats: SavedChat[] }>(
+    `/chats?kind=${encodeURIComponent(kind)}&target=${encodeURIComponent(target)}`)
+  return result.chats
+}
+
+/** Save or rename an owned chat, creating an empty chat when no id exists. */
+export async function saveNamedChat(kind: SavedChat['kind'], target: string,
+                                    title: string, conversationId: string | null): Promise<SavedChat> {
+  const result = await request<{ chat: SavedChat }>('/chats', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kind, target, title, conversationId }),
+  })
+  return result.chat
+}
+
+/** Create an empty independent chat so a reload cannot revive the previous one. */
+export async function createAgentChat(kind: SavedChat['kind'], target: string): Promise<string> {
+  const result = await request<{ conversationId: string }>('/chats/new', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kind, target }),
+  })
+  return result.conversationId
+}
+
 /** Read newline-delimited agent events as soon as the server sends them. */
 export async function streamDatasetAnswer(
   slug: string,
@@ -451,8 +494,60 @@ export async function streamDatasetAnswer(
   conversationId: string | null,
   onEvent: (event: DatasetStreamEvent) => void,
 ): Promise<void> {
-  return streamEvents(`/datasets/${encodeURIComponent(slug)}/ask/stream`,
+  return streamDatasetEvents(`/datasets/${encodeURIComponent(slug)}/ask/stream`,
     { question, conversationId }, onEvent)
+}
+
+/** Stream a turn in the full-screen chat using every attached dataset. */
+export async function streamWorkspaceAnswer(
+  datasetSlugs: string[],
+  question: string,
+  conversationId: string | null,
+  onEvent: (event: DatasetStreamEvent) => void,
+): Promise<void> {
+  return streamDatasetEvents('/datasets/chat/stream',
+    { datasetSlugs, question, conversationId }, onEvent)
+}
+
+/** Decode the shared newline-delimited event protocol for dataset agents. */
+async function streamDatasetEvents(
+  path: string,
+  body: Record<string, unknown>,
+  onEvent: (event: DatasetStreamEvent) => void,
+): Promise<void> {
+  const response = await fetch(`${BASE}${path}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}),
+    },
+    body: JSON.stringify(body),
+  })
+  if (response.status === 401) {
+    setToken(null)
+    onUnauthorized?.()
+    throw new ApiError(401, 'требуется авторизация')
+  }
+  if (!response.ok || !response.body) {
+    let detail = `HTTP ${response.status}`
+    try { detail = describeDetail((await response.json() as { detail?: unknown }).detail) } catch { /* no JSON body */ }
+    throw new ApiError(response.status, detail)
+  }
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let pending = ''
+  while (true) {
+    const { value, done } = await reader.read()
+    pending += decoder.decode(value, { stream: !done })
+    const lines = pending.split('\n')
+    pending = lines.pop() ?? ''
+    for (const line of lines) {
+      if (!line.trim()) continue
+      onEvent(JSON.parse(line) as DatasetStreamEvent)
+    }
+    if (done) break
+  }
+  if (pending.trim()) onEvent(JSON.parse(pending) as DatasetStreamEvent)
 }
 
 export async function createDataset(input: DatasetCreateInput): Promise<DatasetSaveResult> {
@@ -611,6 +706,7 @@ export interface DrillPoint {
   sectionIndex?: number
   datasetSlug?: string
   point?: Record<string, string | number | null>
+  metricKey?: string
 }
 
 export interface DrillPage {
@@ -621,6 +717,7 @@ export interface DrillPage {
   rows: Record<string, unknown>[]
   offset: number
   hasMore: boolean
+  scopeNote?: string | null
 }
 
 export async function fetchDrilldown(
@@ -775,6 +872,7 @@ export async function createBuilderReport(payload: {
   slug?: string
   description?: string
   definition: ReportDefinition
+  conversationId?: string | null
 }): Promise<ReportMeta> {
   const json = await request<{ report: ReportMeta }>('/reports/builder', {
     method: 'POST',
@@ -844,15 +942,47 @@ export interface ChatAnswer {
 }
 
 /** Restore the authenticated user's saved report conversation. */
-export async function fetchReportChatHistory(target: string): Promise<{
+export async function fetchReportChatHistory(target: string, conversationId?: string): Promise<{
   conversationId: string | null
   messages: ChatMessage[]
+  proposal?: { definition: ReportDefinition; title?: string | null } | null
 }> {
-  return request(`/reports/chat/history?target=${encodeURIComponent(target)}`)
+  return request(`/reports/chat/history?target=${encodeURIComponent(target)}${conversationId
+    ? `&conversation_id=${encodeURIComponent(conversationId)}` : ''}`)
 }
 
 /** Ход диалога об отчёте. Текущее определение уходит вместе с перепиской:
  *  «добавь фильтр по городу» — это правка раскладки, а не новый отчёт. */
+export async function chatReport(
+  messages: ChatMessage[],
+  context: {
+    fields?: ReportField[]
+    computed?: ComputedField[]
+    datasets?: string[]
+    attachedDatasets?: string[]
+    definition?: ReportDefinition | null
+    conversationId?: string | null
+    target?: string
+    newConversation?: boolean
+  } = {},
+): Promise<ChatAnswer> {
+  return request<ChatAnswer>('/reports/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      messages,
+      fields: context.fields ?? [],
+      computed: context.computed ?? [],
+      datasets: context.datasets ?? [],
+      attachedDatasets: context.attachedDatasets ?? [],
+      definition: context.definition ?? null,
+      conversationId: context.conversationId ?? null,
+      target: context.target ?? 'new',
+      newConversation: context.newConversation ?? false,
+    }),
+  })
+}
+
 export interface ReportStreamEvent {
   type: 'status' | 'delta' | 'done' | 'error'
   text?: string
@@ -868,9 +998,11 @@ export async function streamReportChat(
     fields?: ReportField[]
     computed?: ComputedField[]
     datasets?: string[]
+    attachedDatasets?: string[]
     definition?: ReportDefinition | null
     conversationId?: string | null
     target?: string
+    newConversation?: boolean
   },
   onEvent: (event: ReportStreamEvent) => void,
 ): Promise<void> {

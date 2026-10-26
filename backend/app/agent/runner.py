@@ -13,23 +13,29 @@ from .graph import run_graph
 from .readonly import MAX_VISIBLE_ROWS, execute_readonly_sql, scope_dataset_sql
 
 MAX_STEPS = 6
+REPORT_MAX_STEPS = 8
 
 
 def _action(raw: str) -> dict:
     """Extract a single JSON action from a model reply, including fenced JSON."""
     text = (raw or '').strip()
     try:
-        return json.loads(text)
+        value = json.loads(text)
+        if isinstance(value, dict):
+            return value
     except ValueError:
         pass
-    match = re.search(r'\{.*\}', text, re.DOTALL)
-    if match:
+    decoder = json.JSONDecoder()
+    candidates = []
+    for match in re.finditer(r'\{', text):
         try:
-            value = json.loads(match.group())
-            if isinstance(value, dict):
-                return value
+            value, _ = decoder.raw_decode(text[match.start():])
+            if isinstance(value, dict) and any(key in value for key in ('tool', 'final')):
+                candidates.append(value)
         except ValueError:
-            pass
+            continue
+    if candidates:
+        return candidates[-1]
     raise DatasetError('агент вернул некорректное действие')
 
 
@@ -42,7 +48,9 @@ def _history(history: list[dict]) -> list[dict]:
     """Keep only question, answer and prior SQL relevant to a follow-up."""
     return [{'question': str(turn.get('question') or '')[:1000],
              'answer': str(turn.get('answer') or '')[:500],
-             'sql': str(turn.get('sql') or '')[:5000]}
+             'sql': str(turn.get('sql') or '')[:5000],
+             'datasetSlugs': list(turn.get('datasetSlugs') or
+                                  ([turn['datasetSlug']] if turn.get('datasetSlug') else []))}
             for turn in history[-8:]]
 
 
@@ -77,32 +85,89 @@ def _russian_columns(columns: list[str], final: dict, dataset: dict) -> list[str
     return translated
 
 
-def ask_dataset(dataset: dict, question: str, history: list[dict], *,
+def _stream_answer(question: str, columns: list[str], rows: list[list],
+                   draft: str, model: str, key: str,
+                   emit: Callable[[dict], None], evidence: list[dict] | None = None) -> str:
+    """Stream the agent's final wording from the model, grounded in SQL rows."""
+    from langchain_core.messages import HumanMessage
+    from langchain_openai import ChatOpenAI
+
+    evidence = evidence or []
+    visible_evidence = [{'datasetTitle': item['datasetTitle'],
+                         'columns': item['columns'],
+                         'rows': item['rows'][:max(3, 30 // max(1, len(evidence)))]}
+                        for item in evidence]
+    prompt = (
+        'Ответь пользователю по-русски. Используй только значения результата SQL. '
+        'Не добавляй новых чисел. Не упоминай внутренние инструменты. '
+        f'Вопрос: {question}. Черновик: {draft}. '
+        f'Колонки: {json.dumps(columns, ensure_ascii=False)}. '
+        f'Строки: {json.dumps(rows[:20], ensure_ascii=False, default=str)}. '
+        f'Доказательства по источникам: {json.dumps(visible_evidence, ensure_ascii=False, default=str)}. '
+        'Дай короткий понятный ответ в Markdown: выделяй выводы и используй списки, '
+        'когда это помогает чтению. Не повторяй таблицы доказательств в тексте. '
+        'Гипотезы явно назови предположениями '
+        'и укажи, как их проверить; причинность не объявляй доказанной.'
+    )
+    chat = ChatOpenAI(model=interpret._model_id(model), api_key=key,
+                      base_url=interpret.OPENROUTER_URL, temperature=0,
+                      max_retries=0)
+    chunks: list[str] = []
+    for chunk in chat.stream([HumanMessage(content=prompt)]):
+        piece = chunk.content
+        if isinstance(piece, str) and piece:
+            chunks.append(piece)
+            emit({'type': 'delta', 'text': piece})
+    return ''.join(chunks).strip()
+
+
+def ask_dataset(dataset: dict, question: str, history: list[dict], *, reveal_sql: bool,
                 on_event: Callable[[dict], None] | None = None) -> dict:
-    """Let the model inspect data, execute read-only SQL and explain the result."""
+    """Keep the single-dataset API compatible with the multi-source agent."""
+    return ask_datasets([dataset], question, history, reveal_sql=reveal_sql,
+                        on_event=on_event)
+
+
+def ask_datasets(datasets: list[dict], question: str, history: list[dict], *,
+                 reveal_sql: bool, on_event: Callable[[dict], None] | None = None) -> dict:
+    """Query each attached source and ground comparisons in observed SQL results."""
+    selected = {item['slug']: item for item in datasets}
+    if not selected:
+        raise DatasetError('прикрепите хотя бы один датасет через @')
+    if len(selected) != len(datasets):
+        raise DatasetError('датасеты в вопросе не должны повторяться')
     key = interpret._openrouter_key()
     if not key:
         raise DatasetError('модель вопросов не настроена: нужен OPENROUTER_API_KEY')
-    settings = dataset.get('field_settings') or {}
-    fields = [{'name': item['name'], 'type': item['type'],
-               'comment': item.get('comment') or '',
-               'title': (settings.get(item['name']) or {}).get('title') or ''}
-              for item in dataset.get('schema') or []]
+    sources = []
+    for dataset in datasets:
+        settings = dataset.get('field_settings') or {}
+        fields = [{'name': item['name'], 'type': item['type'],
+                   'comment': item.get('comment') or '',
+                   'title': (settings.get(item['name']) or {}).get('title') or ''}
+                  for item in dataset.get('schema') or []]
+        sources.append({'slug': dataset['slug'], 'title': dataset.get('title'),
+                        'dialect': dataset['source'], 'fields': fields})
     base = (
         'Ты ReAct агент анализа данных. На каждом шаге верни ОДИН JSON-объект: '
         '{"tool":"describe_schema|sample_rows|execute_sql", "args":{...}} '
         'или {"final":{"answer":"...","calculations":["..."],'
         '"groupBy":["..."],"filters":["..."],"orderBy":null,"scope":"...",'
-        '"columnLabels":{"sql_column":"Русское название"}}}. '
-        'Для execute_sql аргумент — {"sql":"SELECT ... FROM dataset ..."}. '
-        'Таблица dataset — выбранный датасет. Можно применять все функции SELECT, '
-        'CTE, JOIN, подзапросы, оконные функции и выражения SQL выбранного диалекта. '
+        '"columnLabels":{"slug":{"sql_column":"Русское название"}},'
+        '"hypotheses":[{"text":"предположение","howToCheck":"способ проверки"}]}}. '
+        'Для sample_rows и execute_sql укажи args.datasetSlug из прикреплённого списка; '
+        'для execute_sql также укажи args.sql = "SELECT ... FROM dataset ...". '
+        'Таблица dataset означает указанный датасет. Каждое подключение выполняет '
+        'свой SQL. Можно применять все функции SELECT, CTE, JOIN, подзапросы, '
+        'оконные функции и выражения SQL соответствующего диалекта. '
         'Запрещено изменение данных или схемы. Сначала вызови execute_sql, '
-        'при ошибке исправь SQL и вызови инструмент снова. '
-        'В final.columnLabels дай русское название каждому столбцу результата SQL. '
-        'Отвечай только по фактическому результату инструмента, без вымышленных чисел. '
-        f'Диалект: {dataset["source"]}. Датасет: {dataset.get("title")}. '
-        f'Поля: {json.dumps(fields, ensure_ascii=False)}. '
+        'для сравнения вызови его хотя бы раз для КАЖДОГО прикреплённого датасета. '
+        'При ошибке исправь SQL и вызови инструмент снова. '
+        'В final.columnLabels дай русское название каждому столбцу каждого результата SQL. '
+        'Сопоставляй только сравнимые периоды, единицы и ключи. Если общего ключа '
+        'нет, не выдумывай связь. Гипотезы отделяй от фактов и добавляй способ проверки. '
+        'Отвечай только по фактическим результатам инструментов, без вымышленных чисел. '
+        f'Прикреплённые датасеты: {json.dumps(sources, ensure_ascii=False)}. '
         f'Предыдущие вопросы: {json.dumps(_history(history), ensure_ascii=False)}. '
         f'Вопрос: {question[:1000]}.'
     )
@@ -110,7 +175,7 @@ def ask_dataset(dataset: dict, question: str, history: list[dict], *,
     for model in interpret._chat_models():
         if not model:
             continue
-        result: tuple[str, list[str], list[list], bool] | None = None
+        results: list[dict] = []
 
         def decide(observations: list[dict]) -> dict:
             """Ask the model for a tool call or final answer."""
@@ -119,57 +184,92 @@ def ask_dataset(dataset: dict, question: str, history: list[dict], *,
 
         def use_tool(action: dict) -> dict:
             """Inspect the dataset or run a bounded read-only SQL query."""
-            nonlocal result
             tool = action.get('tool')
             args = action.get('args') if isinstance(action.get('args'), dict) else {}
             if tool == 'describe_schema':
                 if on_event:
-                    on_event({'type': 'status', 'text': 'Изучаю поля датасета…'})
-                return {'tool': tool, 'result': fields}
+                    on_event({'type': 'status', 'text': 'Изучаю поля датасетов…'})
+                return {'tool': tool, 'result': sources}
             if tool == 'sample_rows':
+                slug = str(args.get('datasetSlug') or (datasets[0]['slug'] if len(datasets) == 1 else ''))
+                if slug not in selected:
+                    raise DatasetError(f'датасет {slug or "не указан"} не прикреплён')
                 if on_event:
-                    on_event({'type': 'status', 'text': 'Смотрю примеры строк…'})
-                return {'tool': tool, 'result': _sample(dataset)}
+                    on_event({'type': 'status', 'text': f'Смотрю строки: {selected[slug]["title"]}…'})
+                return {'tool': tool, 'datasetSlug': slug, 'result': _sample(selected[slug])}
             if tool == 'execute_sql':
+                slug = str(args.get('datasetSlug') or (datasets[0]['slug'] if len(datasets) == 1 else ''))
+                if slug not in selected:
+                    raise DatasetError(f'датасет {slug or "не указан"} не прикреплён')
+                dataset = selected[slug]
                 if on_event:
-                    on_event({'type': 'status', 'text': 'Выполняю запрос к данным…'})
-                result = None
+                    on_event({'type': 'status', 'text': f'Считаю: {dataset["title"]}…'})
                 logical_sql = str(args.get('sql') or '')
                 sql = scope_dataset_sql(dataset, logical_sql)
                 columns, rows, truncated = execute_readonly_sql(dataset, sql)
-                result = (logical_sql, columns, rows, truncated)
-                return {'tool': tool, 'sql': logical_sql, 'columns': columns,
+                results.append({'datasetSlug': slug, 'datasetTitle': dataset['title'],
+                                'sql': logical_sql, 'columns': columns,
+                                'rows': rows, 'truncated': truncated})
+                return {'tool': tool, 'datasetSlug': slug, 'sql': logical_sql, 'columns': columns,
                         'rows': rows[:20], 'rowCount': len(rows),
                         'truncated': truncated}
             return {'error': 'Неизвестный инструмент. Выбери инструмент из списка.'}
 
         def finish(action: dict) -> tuple[dict | None, dict | None]:
             """Accept an answer only after the SQL tool returned real rows."""
-            if result is None:
-                return None, {'error': 'Сначала вызови execute_sql.'}
+            missing = [slug for slug in selected if slug not in
+                       {item['datasetSlug'] for item in results}]
+            if missing:
+                return None, {'error': 'Сначала вызови execute_sql для каждого датасета: '
+                              + ', '.join(missing)}
             final = action.get('final') or {}
-            sql, columns, rows, truncated = result
-            display_columns = _russian_columns(columns, final, dataset)
-            safe_rows = [[str(value) if value is not None else '' for value in row]
-                         for row in rows]
-            answer = str(final.get('answer') or '').strip() or f'Показано строк: {len(safe_rows)}.'
+            labels = final.get('columnLabels') if isinstance(final.get('columnLabels'), dict) else {}
+            evidence = []
+            for item in results:
+                source = selected[item['datasetSlug']]
+                if len(datasets) > 1 and not isinstance(labels.get(item['datasetSlug']), dict):
+                    raise DatasetError('Укажи final.columnLabels отдельно для каждого '
+                                       f'датасета, включая {item["datasetSlug"]}.')
+                source_labels = labels.get(item['datasetSlug']) if isinstance(
+                    labels.get(item['datasetSlug']), dict) else labels
+                display_columns = _russian_columns(item['columns'],
+                                                   {'columnLabels': source_labels}, source)
+                evidence.append({**item, 'columns': display_columns,
+                                 'rows': [[str(value) if value is not None else '' for value in row]
+                                          for row in item['rows']]})
+            primary = evidence[-1]
+            hypotheses = [{'text': str(item.get('text') or '').strip(),
+                           'howToCheck': str(item.get('howToCheck') or '').strip()}
+                          for item in final.get('hypotheses', []) if isinstance(item, dict)
+                          and str(item.get('text') or '').strip()]
+            answer = str(final.get('answer') or '').strip() or f'Показано строк: {len(primary["rows"])}.'
             if on_event:
-                on_event({'type': 'delta', 'text': answer})
+                on_event({'type': 'status', 'text': 'Формулирую ответ…'})
+                try:
+                    answer = _stream_answer(question, primary['columns'], primary['rows'],
+                                            answer, model, key, on_event, evidence) or answer
+                except Exception:
+                    on_event({'type': 'delta', 'text': answer})
             explanation = {
-                'source': str(dataset.get('title') or dataset.get('slug')),
+                'source': ', '.join(str(item.get('title') or item['slug']) for item in datasets),
                 'calculations': [str(item) for item in final.get('calculations', [])],
                 'groupBy': [str(item) for item in final.get('groupBy', [])],
                 'filters': [str(item) for item in final.get('filters', [])],
                 'orderBy': final.get('orderBy'),
                 'scope': str(final.get('scope') or 'Расчёт выполнен SQL-запросом по датасету.'),
-                'limit': MAX_VISIBLE_ROWS, 'shownRows': len(safe_rows),
-                'totalRows': None, 'hasMore': truncated,
+                'limit': MAX_VISIBLE_ROWS, 'shownRows': sum(len(item['rows']) for item in evidence),
+                'totalRows': None, 'hasMore': any(item['truncated'] for item in evidence),
             }
-            return ({'answer': answer, 'columns': display_columns, 'rows': safe_rows,
-                     'plan': {'sql': sql}, 'truncated': truncated,
-                     'explanation': explanation, 'sql': sql, 'parameters': {}}, None)
+            return ({'answer': answer, 'columns': primary['columns'], 'rows': primary['rows'],
+                     'plan': {'queries': [{'datasetSlug': item['datasetSlug'], 'sql': item['sql']}
+                                          for item in evidence]},
+                     'truncated': explanation['hasMore'], 'evidence': evidence,
+                     'hypotheses': hypotheses, 'explanation': explanation,
+                     'sql': primary['sql'] if len(evidence) == 1 else None,
+                     'parameters': {}}, None)
 
-        state = run_graph(decide, use_tool, finish, max_steps=MAX_STEPS)
+        state = run_graph(decide, use_tool, finish,
+                          max_steps=max(MAX_STEPS, len(datasets) * 3 + 3))
         if state['output'] is not None:
             return state['output']
         errors.append(state['error'] or 'агент не завершил ответ за допустимое число шагов')
@@ -177,22 +277,32 @@ def ask_dataset(dataset: dict, question: str, history: list[dict], *,
 
 
 def _report_resources(catalog, metrics: dict, dimensions: dict,
-                      preferred: list[str]) -> dict:
-    """Prepare dataset schemas and vocabulary before the first model call."""
+                      preferred: list[str], attached: list[str]) -> dict:
+    """Prepare the schema and semantic vocabulary before the first model call."""
     requested = set(preferred)
-    items = sorted(catalog.datasets.values(),
+    items = sorted((item for item in catalog.datasets.values()
+                    if not attached or item['slug'] in attached),
                    key=lambda item: (item['slug'] not in requested, item['slug']))
-    return {'datasets': [
-        {'slug': item['slug'], 'title': item.get('title'),
-         'source': item['source'],
-         'fields': [{'name': field['name'], 'type': field['type']}
-                    for field in item.get('schema') or []]}
-        for item in items[:30]],
-        'metrics': metrics, 'dimensions': dimensions}
+    visible_metrics = {slug: item for slug, item in metrics.items()
+                       if not attached or item.get('dataset_slug') in attached}
+    visible_dimensions = {slug: item for slug, item in dimensions.items()
+                          if not attached or item.get('dataset_slug') in attached}
+    return {
+        'datasets': [
+            {'slug': item['slug'], 'title': item.get('title'), 'source': item['source'],
+             'fields': [{'name': field['name'], 'type': field['type'],
+                         'title': (item.get('field_settings') or {}).get(
+                             field['name'], {}).get('title'),
+                         'comment': field.get('comment')}
+                        for field in item.get('schema') or []]}
+            for item in items[:max(30, len(attached))]],
+        'metrics': visible_metrics,
+        'dimensions': visible_dimensions,
+    }
 
 
 def _report_observations(observations: list[dict]) -> str:
-    """Keep failed drafts and samples without repeating prefetched metadata."""
+    """Keep repair evidence while omitting metadata already in the prompt."""
     relevant = []
     for item in observations:
         action = item.get('action') or {}
@@ -209,7 +319,7 @@ def _report_observations(observations: list[dict]) -> str:
 
 
 def _report_reply(definition: dict) -> str:
-    """Describe a verified proposal when no reply accompanied its draft."""
+    """Describe a verified proposal when the model did not supply a reply."""
     titles = [str(section.get('title') or '').strip()
               for section in definition.get('sections') or []]
     visible = [title for title in titles if title]
@@ -219,28 +329,31 @@ def _report_reply(definition: dict) -> str:
 
 def chat_report(messages: list[dict], catalog, fields=None, computed=None,
                 datasets=None, definition=None,
-                on_event: Callable[[dict], None] | None = None) -> dict:
+                on_event: Callable[[dict], None] | None = None,
+                attached_datasets: list[str] | None = None) -> dict:
     """Build and preview a persistent visual report with LangGraph tools."""
+    attached = list(dict.fromkeys(attached_datasets or []))
+    unknown = [slug for slug in attached if slug not in catalog.datasets]
+    if unknown:
+        raise DatasetError('прикреплённый датасет не найден: ' + ', '.join(unknown))
+    preferred = list(dict.fromkeys(attached + list(datasets or [])))
     key = interpret._openrouter_key()
     if not key:
-        result = interpret.chat(messages, catalog, fields, computed, datasets, definition)
-        if not result.get('definition') and result.get('recommendations'):
-            choice = result['recommendations'][0]
-            result.update(definition=choice['definition'], title=choice['title'],
-                          reply=f'Собрал «{choice["title"]}» по доступным данным. Проверьте раскладку и сохраните отчёт.')
-        result.pop('recommendations', None)
-        return result
+        raise DatasetError('Модель для конструктора не настроена. Добавьте ключ модели в конфигурацию сервера.')
     said = [item for item in (messages or []) if str(item.get('text') or '').strip()]
     if not said:
         raise DatasetError('напишите, какой отчёт нужен — обычными словами')
-    metrics, dimensions = interpret.vocabulary_of(catalog, fields, computed)
+    metrics, dimensions = interpret.vocabulary_of(
+        catalog, fields, computed, attached or None)
     if not metrics and not catalog.datasets:
         return interpret.chat(messages, catalog, fields, computed, datasets, definition)
-    resources = _report_resources(catalog, metrics, dimensions, list(datasets or []))
+    resources = _report_resources(catalog, metrics, dimensions, preferred, attached)
     base = (
         'Ты ReAct агент создания отчётов. Верни один JSON: '
         '{"tool":"preview_report","args":{"definition":{...},'
         '"reply":"...","title":"..."}}. '
+        'Если для SQL действительно нужны примеры значений, сначала вызови '
+        '{"tool":"sample_dataset","args":{"datasetSlug":"..."}}. '
         'Схемы датасетов и словарь уже приведены ниже. Сразу собери полный визуальный '
         'отчёт с понятными названиями блоков. Выбирай KPI для главных чисел, '
         'линию или область для динамики, столбцы для сравнения, таблицу для деталей; '
@@ -249,15 +362,30 @@ def chat_report(messages: list[dict], catalog, fields=None, computed=None,
         'Для готового отчёта вызови preview_report с полным ReportDefinition, '
         'кратким reply и названием title. Успешная проверка завершит ход; '
         'после ошибки исправь определение следующим вызовом. '
+        'Формат args.definition: {"sections":[{"type":"table|chart|kpi",'
+        '"title":"...","datasetSlug":"slug","sql":"SELECT ... FROM dataset"}],'
+        '"filters":[]}. Список карточек называется sections, не blocks. '
+        'Если пользователь просит фильтры или по полям есть полезные разрезы, '
+        'добавь filters:[{"dimension":"ключ разреза","kind":"select|daterange|number"}] '
+        'из get_vocabulary. Поля даты используй как daterange. '
+        'Фильтры применяются к виртуальной таблице dataset до выполнения SQL. '
         'В reply кратко объясни состав предложенного отчёта. '
         'Текущий отчёт можно дополнять. Не выдумывай slug полей. '
+        'Для сравнений, рейтингов, периодов и изменения показателей во времени '
+        'самостоятельно выбирай агрегации, CTE, JOIN и оконные функции '
+        'по смыслу запроса и схеме датасета. Не отказывайся из-за ограничений '
+        'словарных формул: здесь доступен SQL-блок. '
+        'Выбирай нужные колонки из схемы самостоятельно; от пользователя '
+        'не требуется отмечать поля на шаге «Данные». '
         'Когда словарной раскладки недостаточно, создай SQL-блок: '
         '{"type":"table|chart|kpi","title":"...","datasetSlug":"slug",'
         '"sql":"SELECT ... FROM dataset ...","metrics":[],"by":[]}. '
         'SQL-блок поддерживает любые функции чтения, включая оконные, CTE, JOIN. '
         'Нельзя изменять данные. Таблица dataset означает выбранный датасет. '
         'Для графика первая колонка SQL — ось, следующие — ряды. '
-        f'Предпочтительные датасеты: {json.dumps(datasets or [], ensure_ascii=False)}. '
+        f'Прикреплённые датасеты (обязательные источники для SQL-блоков): '
+        f'{json.dumps(attached, ensure_ascii=False)}. '
+        f'Предпочтительные датасеты: {json.dumps(preferred, ensure_ascii=False)}. '
         f'Текущий отчёт: {json.dumps(definition or {}, ensure_ascii=False)}. '
         f'Переписка: {interpret._history(said, interpret.CHAT_HISTORY)}. '
         f'Доступные схемы и словарь: {json.dumps(resources, ensure_ascii=False, default=str)}.'
@@ -292,12 +420,32 @@ def chat_report(messages: list[dict], catalog, fields=None, computed=None,
                 if on_event:
                     on_event({'type': 'status', 'text': 'Изучаю датасеты…'})
                 return {'tool': tool, 'datasets': resources['datasets']}
+            if tool == 'sample_dataset':
+                slug = str(args.get('datasetSlug') or '')
+                if attached and slug not in attached:
+                    raise DatasetError('образец можно читать только из прикреплённого датасета')
+                dataset = catalog.datasets.get(slug)
+                if dataset is None:
+                    raise DatasetError('датасет не найден: ' + slug)
+                if on_event:
+                    on_event({'type': 'status', 'text': 'Смотрю примеры строк датасета…'})
+                return {'tool': tool, 'datasetSlug': slug, **_sample(dataset)}
             if tool == 'preview_report':
                 if on_event:
                     on_event({'type': 'status', 'text': 'Проверяю карточки на данных…'})
                 validated = None
-                candidate = interpret._validate(args.get('definition') or {},
+                raw_definition = args.get('definition') or {}
+                if (isinstance(raw_definition, dict) and not raw_definition.get('sections')
+                        and isinstance(raw_definition.get('blocks'), list)):
+                    raw_definition = {**raw_definition, 'sections': raw_definition['blocks']}
+                candidate = interpret._validate(raw_definition,
                                                 metrics, dimensions)
+                if attached:
+                    wrong = [section.get('datasetSlug') for section in candidate['sections']
+                             if section.get('sql') and section.get('datasetSlug') not in attached]
+                    if wrong:
+                        raise DatasetError('SQL-блок ссылается не на прикреплённый датасет: '
+                                           + ', '.join(str(slug) for slug in wrong))
                 report = ReportDefinition.model_validate(candidate)
                 previews = []
                 for section in report.sections:
@@ -331,8 +479,12 @@ def chat_report(messages: list[dict], catalog, fields=None, computed=None,
                      'notes': [], 'source': 'agent',
                      'model': interpret._model_id(model)}, None)
 
-        state = run_graph(decide, use_tool, finish, max_steps=MAX_STEPS)
+        state = run_graph(decide, use_tool, finish, max_steps=REPORT_MAX_STEPS)
         if state['output'] is not None:
             return state['output']
-        errors.append(state['error'] or 'агент не завершил построение отчёта')
+        last_error = next((str(item['result']['error'])
+                           for item in reversed(state['observations'])
+                           if isinstance(item.get('result'), dict)
+                           and item['result'].get('error')), None)
+        errors.append(state['error'] or last_error or 'агент не завершил построение отчёта')
     raise DatasetError(errors[0] if errors else 'модель отчётов недоступна')

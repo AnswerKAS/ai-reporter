@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { DragEvent, ReactNode } from 'react'
+import type { DragEvent, PointerEvent as ReactPointerEvent, ReactNode } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import type { Report } from '../types/report'
 import type { Dataset } from '../types/dataset'
@@ -210,38 +210,6 @@ function OwnChip({
   )
 }
 
-function StepLink({
-  n,
-  label,
-  current,
-  done,
-  disabled,
-  onClick,
-}: {
-  n: number
-  label: string
-  current: boolean
-  done?: boolean
-  disabled?: boolean
-  onClick: () => void
-}) {
-  return (
-    <li aria-current={current ? 'step' : undefined}>
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={onClick}
-        className={cn(
-          'cursor-pointer rounded-control px-1.5 py-0.5 text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50',
-          current ? 'font-semibold text-fg' : done ? 'text-accent hover:underline' : 'text-fg-muted hover:text-fg',
-        )}
-      >
-        {n}. {label}
-      </button>
-    </li>
-  )
-}
-
 /**
  * `/workspace` и `/workspace/<slug>` — один и тот же элемент маршрута, и без
  * ключа React переиспользует состояние: после правки отчёта «Новый отчёт»
@@ -282,10 +250,44 @@ function Builder({ embedded, suggestedPrompt }: {
   const [loading, setLoading] = useState(true)
 
   // --- шаг 1: данные ---
-  /** Правка открывается сразу раскладкой: автор пришёл со страницы отчёта
-      править секции, а не пересобирать выбор данных. Шаг «Данные» никуда не
-      делся — он рядом, первым в цепочке. */
-  const [step, setStep] = useState<1 | 2>(editing ? 2 : 1)
+  const [dataOpen, setDataOpen] = useState(false)
+  const [chatOpen, setChatOpen] = useState(false)
+  const [reportConversationId, setReportConversationId] = useState<string | null>(null)
+  const [chatSize, setChatSize] = useState({ width: 460, height: 650 })
+  const resizingChat = useRef<{ x: number; y: number; width: number; height: number } | null>(null)
+
+  /** Begin resizing the anchored chat from its upper-left handle. */
+  function startChatResize(event: ReactPointerEvent<HTMLButtonElement>): void {
+    resizingChat.current = { x: event.clientX, y: event.clientY,
+      width: chatSize.width, height: chatSize.height }
+    event.currentTarget.setPointerCapture(event.pointerId)
+    event.preventDefault()
+  }
+
+  /** Grow the chat toward the pointer while keeping it within the viewport. */
+  function moveChatResize(event: ReactPointerEvent<HTMLButtonElement>): void {
+    const start = resizingChat.current
+    if (!start) return
+    setChatSize({
+      width: Math.max(320, Math.min(window.innerWidth - 32, start.width + start.x - event.clientX)),
+      height: Math.max(320, Math.min(window.innerHeight - 32, start.height + start.y - event.clientY)),
+    })
+  }
+
+  /** Finish the current pointer resize gesture. */
+  function stopChatResize(): void {
+    resizingChat.current = null
+  }
+
+  useEffect(() => {
+    if (!chatOpen) return
+    /** Let Escape close the floating chat from anywhere in the panel. */
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setChatOpen(false)
+    }
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [chatOpen])
   /** Определение едет отдельным запросом. Пока оно не приехало, показывать
       нечего: раскладка была бы пустой, а шаг «Данные» — тем самым «не тем
       экраном», на который жалуются. */
@@ -298,7 +300,7 @@ function Builder({ embedded, suggestedPrompt }: {
   const [ownFields, setOwnFields] = useState<ReportField[]>([])
 
   // --- шаг 2: раскладка ---
-  const [sections, setSections] = useState<SectionDefinition[]>([emptySection()])
+  const [sections, setSections] = useState<SectionDefinition[]>([])
   const [filters, setFilters] = useState<FilterDefinition[]>([])
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
@@ -361,12 +363,7 @@ function Builder({ embedded, suggestedPrompt }: {
   // правка существующего отчёта: шаг 1 восстанавливается из определения
   useEffect(() => {
     if (!slug) return
-    if (metrics.length === 0) {
-      // словарь ещё едет; приехал пустым — правка невозможна, но и висеть
-      // скелетом незачем
-      if (!loading) setDefinitionLoading(false)
-      return
-    }
+    if (loading) return
     let alive = true
     fetchDefinition(slug)
       .then(({ definition: def, title: savedTitle, description: savedDescription }) => {
@@ -398,22 +395,21 @@ function Builder({ embedded, suggestedPrompt }: {
           if (d) ds.add(d)
         })
         declared.forEach((f) => ds.add(f.datasetSlug))
+        def.sections.forEach((section) => {
+          if (section.sql && section.datasetSlug) ds.add(section.datasetSlug)
+        })
         setPickedDatasets([...ds])
         setPickedMetrics(baseMetrics)
         setPickedDimensions([...usedDims].filter((d) => !localKeys.has(d)))
         setOwnFields(declared)
         setComputed(formulas)
-        setSections(def.sections.length ? def.sections : [emptySection()])
+        setSections(def.sections)
         setFilters(def.filters ?? [])
         setDrilldown(Boolean(def.drilldown))
-        setStep(2)
       })
       .catch((err) => {
         if (!alive) return
         setSaveError(err instanceof Error ? err.message : 'не удалось открыть определение')
-        // определения нет (отчёт старше конструктора) — собирать придётся
-        // с выбора данных
-        setStep(1)
       })
       .finally(() => {
         if (alive) setDefinitionLoading(false)
@@ -667,7 +663,7 @@ function Builder({ embedded, suggestedPrompt }: {
 
   const timer = useRef<number | undefined>(undefined)
   useEffect(() => {
-    if (step !== 2 || definition.sections.length === 0) {
+    if (definition.sections.length === 0) {
       setPreview(null)
       setPreviewError(null)
       return
@@ -685,7 +681,7 @@ function Builder({ embedded, suggestedPrompt }: {
         })
     }, 400)
     return () => window.clearTimeout(timer.current)
-  }, [definition, step, previewFilters])
+  }, [definition, previewFilters])
 
   const patchSection = (index: number, patch: Partial<SectionDefinition>) => {
     setDropNote(null)
@@ -885,9 +881,7 @@ function Builder({ embedded, suggestedPrompt }: {
         pickedDatasets,
       }
       applyDefinition(parsed)
-      // предложение смотрят на раскладке — туда и переводим: иначе автор
-      // видит ответ «собрал отчёт» и пустой шаг «Данные» под ним
-      setStep(2)
+      setChatOpen(false)
       // название предлагает модель, но своё автор уже не потеряет
       if (proposed && !title.trim()) setTitle(proposed)
     },
@@ -935,6 +929,7 @@ function Builder({ embedded, suggestedPrompt }: {
           slug: reportSlug.trim() || undefined,
           description: description.trim() || undefined,
           definition,
+          conversationId: reportConversationId,
         })
         await reloadReports()
         navigate(`/reports/${report.slug}`)
@@ -960,71 +955,19 @@ function Builder({ embedded, suggestedPrompt }: {
         <div>
           {!embedded && <p className="text-[11px] font-semibold tracking-[0.14em] text-accent uppercase">Редактор</p>}
           <h2 className={cn('font-semibold tracking-tight', embedded ? 'text-lg' : 'mt-1 text-2xl')}>{editing ? 'Правка отчёта' : 'Новый отчёт'}</h2>
-          <ol className={cn('flex list-none items-center gap-1.5 p-0', embedded ? 'mt-0.5' : 'mt-2')}>
-            <StepLink n={1} label="Данные" current={step === 1} done={step > 1} onClick={() => setStep(1)} />
-            <li aria-hidden="true" className="text-fg-muted">
-              →
-            </li>
-            <StepLink
-              n={2}
-              label="Раскладка"
-              current={step === 2}
-              disabled={pickedMetrics.length === 0 && ownMetrics.length === 0}
-              onClick={() => setStep(2)}
-            />
-          </ol>
+          <p className="mt-1 text-sm text-fg-muted">Раскладка и предпросмотр отчёта</p>
         </div>
-        {step === 2 && (
-          <Button variant="primary" onClick={onSave} disabled={busy}>
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" onClick={() => setDataOpen(true)}>Данные и поля</Button>
+          <Button variant="primary" onClick={onSave}
+            disabled={busy || !title.trim() || definition.sections.length === 0}>
             {busy ? 'Сохранение…' : editing ? 'Сохранить изменения' : 'Сохранить отчёт'}
           </Button>
-        )}
+        </div>
       </div>
       {saveError && <Alert className="my-3">{saveError}</Alert>}
 
-      {/* Диалог стоит над шагами, а не внутри раскладки: описать отчёт словами
-          человек хочет с самого начала, а шаг «Раскладка» до выбора первого
-          показателя недоступен — там диалог был бы заперт за тем самым
-          выбором, который он и должен избавить делать руками. */}
-      <ReportChat
-        target={slug ?? 'new'}
-        fields={ownFields}
-        computed={computed}
-        datasets={pickedDatasets}
-        availableDatasets={datasets}
-        definition={definition}
-        suggestedPrompt={suggestedPrompt}
-        saving={busy}
-        title={title}
-        onTitle={setTitle}
-        onProposal={applyProposal}
-        onRevert={revertProposal}
-        onSave={onSave}
-        onVocabulary={() => setVocabularyOpen(true)}
-        compact={embedded && step === 2}
-      />
-
-      {step === 1 ? (
-        <StepData
-          datasets={datasets}
-          linkIndex={linkIndex}
-          metrics={metrics}
-          dimensions={dimensions}
-          pickedDatasets={pickedDatasets}
-          onToggleDataset={toggleDataset}
-          onRemoveDataset={removeDataset}
-          pickedMetrics={pickedMetrics}
-          setPickedMetrics={setPickedMetrics}
-          pickedDimensions={pickedDimensions}
-          setPickedDimensions={setPickedDimensions}
-          computed={computed}
-          setComputed={setComputed}
-          ownFields={ownFields}
-          setOwnFields={setOwnFields}
-          onNext={() => setStep(2)}
-        />
-      ) : (
-        <>
+      <>
           <div className="my-3 flex flex-wrap items-end gap-3">
             <Field label="Название" className="min-w-48 flex-1">
               <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Продажи по городам" />
@@ -1080,7 +1023,7 @@ function Builder({ embedded, suggestedPrompt }: {
                     </Select>
                   ) : (
                     <Button variant="ghost" size="sm" aria-label="Изменить набор данных для новых фильтров"
-                      onClick={() => setStep(1)}>Изменить данные</Button>
+                      onClick={() => setDataOpen(true)}>Данные и поля</Button>
                   )}
                 </div>
                 {filters.length === 0 ? (
@@ -1481,7 +1424,10 @@ function Builder({ embedded, suggestedPrompt }: {
               )}
               {previewError && <Alert className="my-3">{previewError}</Alert>}
               {!preview && !previewError && (
-                <p className="max-w-[60ch] text-sm text-fg-muted">Положите поля в секцию — отчёт появится здесь.</p>
+                <div className="space-y-3 text-sm text-fg-muted">
+                  <p>Опишите отчёт агенту и прикрепите датасет через @. Он выберет поля и добавит карточки.</p>
+                  <Button size="sm" onClick={() => setChatOpen(true)}>Открыть чат агента</Button>
+                </div>
               )}
               {preview && <SectionsGrid sections={preview.sections} />}
             </div>
@@ -1500,7 +1446,7 @@ function Builder({ embedded, suggestedPrompt }: {
                   ? { ...choice, unavailable: 'Не связан с данными этого блока' } : choice)}
               onPick={(key) => fieldPicker.kind === 'metric'
                 ? addMetric(fieldPicker.index, key) : setDimension(fieldPicker.index, key)}
-              onChangeData={() => { setFieldPicker(null); setStep(1) }}
+              onChangeData={() => { setFieldPicker(null); setDataOpen(true) }}
               onClose={() => setFieldPicker(null)}
             />
           )}
@@ -1517,8 +1463,63 @@ function Builder({ embedded, suggestedPrompt }: {
             />
           )}
 
-        </>
-      )}
+      </>
+      {dataOpen && <Modal title="Данные и поля" size="xl" onClose={() => setDataOpen(false)}>
+        <StepData
+          datasets={datasets}
+          linkIndex={linkIndex}
+          metrics={metrics}
+          dimensions={dimensions}
+          pickedDatasets={pickedDatasets}
+          onToggleDataset={toggleDataset}
+          onRemoveDataset={removeDataset}
+          pickedMetrics={pickedMetrics}
+          setPickedMetrics={setPickedMetrics}
+          pickedDimensions={pickedDimensions}
+          setPickedDimensions={setPickedDimensions}
+          computed={computed}
+          setComputed={setComputed}
+          ownFields={ownFields}
+          setOwnFields={setOwnFields}
+          onNext={() => setDataOpen(false)}
+        />
+      </Modal>}
+      <div className="fixed right-4 bottom-4 z-40 flex max-w-[calc(100vw-2rem)] flex-col items-end gap-2">
+        <div className={cn('max-h-[calc(100dvh-2rem)] max-w-[calc(100vw-2rem)] overflow-hidden rounded-card border border-line bg-surface shadow-modal', !chatOpen && 'hidden')}
+          style={{ width: chatSize.width, height: chatSize.height }}>
+          <div className="flex h-9 items-center justify-between border-b border-line px-2">
+            <button type="button" aria-label="Растянуть чат агента" title="Перетащите, чтобы изменить размер"
+              className="cursor-nwse-resize px-2 text-sm text-fg-muted touch-none"
+              onPointerDown={startChatResize} onPointerMove={moveChatResize}
+              onPointerUp={stopChatResize} onPointerCancel={stopChatResize}>⤢ Растянуть</button>
+            <button type="button" className="cursor-pointer px-2 text-sm font-medium text-accent"
+              onClick={() => setChatOpen(false)}>Свернуть ×</button>
+          </div>
+          <div className="h-[calc(100%-2.25rem)]">
+            <ReportChat
+            target={slug ?? 'new'}
+            fields={ownFields}
+            computed={computed}
+            datasets={pickedDatasets}
+            availableDatasets={datasets}
+            definition={definition}
+            suggestedPrompt={suggestedPrompt}
+            saving={busy}
+            title={title}
+            onTitle={setTitle}
+            onProposal={applyProposal}
+            onRevert={revertProposal}
+            onSave={onSave}
+            onVocabulary={() => setVocabularyOpen(true)}
+            onConversationId={setReportConversationId}
+            compact
+            />
+          </div>
+        </div>
+        {!chatOpen && <Button variant="primary" className="shadow-modal" onClick={() => setChatOpen(true)}>
+          ✦ Агент отчёта
+        </Button>}
+      </div>
       {dialog}
     </BuilderFrame>
   )
@@ -1685,8 +1686,7 @@ function PickedDataset({
   )
 }
 
-/** Шаг 1: какие данные берём. Датасет выбирается здесь и только здесь —
-    дальше он уже приезжает вместе с полем. */
+/** Optional manual field selection, opened from the report layout. */
 function StepData({
   datasets,
   linkIndex,
@@ -1727,9 +1727,6 @@ function StepData({
 
   const toggle = (setList: (fn: (prev: string[]) => string[]) => void, key: string) =>
     setList((prev) => (prev.includes(key) ? prev.filter((x) => x !== key) : [...prev, key]))
-
-  const hasAnyMetric =
-    pickedMetrics.length > 0 || ownFields.some((f) => f.role === 'metric')
 
   const nameOf = (key: string) =>
     metrics.find((m) => m.slug === key)?.title ?? ownFields.find((f) => f.key === key)?.title ?? key
@@ -1803,14 +1800,7 @@ function StepData({
       )}
 
       <div className="flex items-center gap-3">
-        <Button variant="primary" disabled={!hasAnyMetric} onClick={onNext}>
-          Дальше: раскладка →
-        </Button>
-        {!hasAnyMetric && (
-          <span className="text-xs text-fg-muted">
-            выберите показатель или заведите своё поле кнопкой «+ своё поле»
-          </span>
-        )}
+        <Button variant="primary" onClick={onNext}>Вернуться к раскладке</Button>
       </div>
     </div>
   )

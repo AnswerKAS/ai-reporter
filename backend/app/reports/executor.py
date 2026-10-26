@@ -11,7 +11,7 @@ from decimal import Decimal
 
 from ..datasets.base import DatasetError
 from ..agent.readonly import execute_readonly_sql, scope_dataset_sql
-from ..query import builder
+from ..query import builder, dialects
 from ..schemas.definition import ReportDefinition, SectionDefinition
 
 # Потолок строк одной секции. Разрез с высокой кардинальностью (SKU, клиент,
@@ -78,6 +78,7 @@ def _kpi_section(section, metrics, data) -> dict:
     for slug in section.metrics:
         metric = metrics[slug]
         items.append({
+            'metricKey': slug,
             'label': metric['title'],
             'value': row.get(slug, 0),
             'format': metric['format'],
@@ -115,6 +116,7 @@ def _pivot(section, metrics, data, x_key: str, split_key: str) -> tuple[list[dic
     # ключ серии → значение второго разреза: по нему детализация понимает,
     # какую именно линию открыл читатель
     labels: dict = {}
+    metric_keys: dict = {}
     series_types: dict = {}
     for row in data:
         x = row.get(x_key)
@@ -124,6 +126,7 @@ def _pivot(section, metrics, data, x_key: str, split_key: str) -> tuple[list[dic
         for index, slug in enumerate(section.metrics):
             key = label if len(section.metrics) == 1 else f'{metrics[slug]["title"]} · {label}'
             labels[key] = split_value
+            metric_keys[key] = slug
             if section.kind == 'combo':
                 series_types[key] = _combo_series_type(section, slug, index)
             value = row.get(slug)
@@ -143,7 +146,7 @@ def _pivot(section, metrics, data, x_key: str, split_key: str) -> tuple[list[dic
     rows = [{k: v for k, v in point.items() if k == x_key or k in kept}
             for point in points.values()]
     rows.sort(key=lambda r: _sort_key(r.get(x_key)))
-    return rows, [{'key': k, 'name': k,
+    return rows, [{'key': k, 'name': k, 'metricKey': metric_keys[k],
                    **({'type': series_types[k]} if section.kind == 'combo' else {})}
                   for k in keys], note, {k: labels[k] for k in keys}
 
@@ -163,7 +166,7 @@ def _chart_section(section, metrics, dimensions, data) -> dict:
         data, series, note, split_values = _pivot(section, metrics, data, x_key, split_key)
     else:
         series = [
-            {'key': slug, 'name': metrics[slug]['title'],
+            {'key': slug, 'name': metrics[slug]['title'], 'metricKey': slug,
              **({'type': _combo_series_type(section, slug, index)} if section.kind == 'combo' else {})}
             for index, slug in enumerate(section.metrics)
         ]
@@ -190,6 +193,7 @@ def _table_section(section, metrics, dimensions, data) -> dict:
         'type': 'table',
         'title': section.title or _auto_title(section, metrics, dimensions),
         'columns': columns,
+        'metricKeys': list(section.metrics),
         # порядок разрезов — это и есть иерархия: первый родитель, следующий
         # вложен в него. Таблица показывает её отступами и не повторяет
         # значение родителя в каждой строке, а детализация собирает по этим
@@ -215,7 +219,8 @@ def build_section(section: SectionDefinition, filter_values: dict,
                   fields: list[dict] | None = None) -> dict:
     """Execute either a semantic block or an agent-authored SQL block."""
     if section.sql:
-        return _build_sql_section(section, catalog or builder.Catalog(), filter_values)
+        return _build_sql_section(section, catalog or builder.Catalog(), filter_values,
+                                  fields or [])
     query_obj = _section_query(section, filter_values,
                                catalog or builder.Catalog(), computed, fields)
     query = query_obj.build()
@@ -249,12 +254,33 @@ def build_section(section: SectionDefinition, filter_values: dict,
 
 
 def _build_sql_section(section: SectionDefinition, catalog: builder.Catalog,
-                       filter_values: dict) -> dict:
+                       filter_values: dict, fields: list[dict]) -> dict:
     """Render a read-only SQL result as a table, chart or KPI block."""
     dataset = catalog.dataset(section.dataset_slug)
-    sql = scope_dataset_sql(dataset, section.sql)
+    dialect = dialects.for_source(dataset['source'])
+    own_dimensions = {item['key']: item for item in fields
+                      if item.get('role') == 'dimension'}
+    conditions, params, skipped = [], {}, []
+    for key, value in filter_values.items():
+        if value in (None, ''):
+            continue
+        dimension_slug, _ = builder.split_filter_key(key)
+        dimension = catalog.dimensions.get(dimension_slug) or own_dimensions.get(dimension_slug)
+        dataset_slug = ((dimension.get('dataset_slug') or dimension.get('datasetSlug'))
+                        if dimension else None)
+        if not dimension or dataset_slug != section.dataset_slug:
+            skipped.append(dimension_slug)
+            continue
+        clause, values = builder.filter_condition(
+            dialect, dialect.quote(dimension['field']), key, value,
+            dimension.get('type') or 'string')
+        if clause:
+            conditions.append(clause)
+            params.update(values)
+    sql = scope_dataset_sql(dataset, section.sql, conditions)
     columns, rows, truncated = execute_readonly_sql(
-        dataset, sql, visible_rows=min(section.limit or MAX_SECTION_ROWS, MAX_SECTION_ROWS))
+        dataset, sql, visible_rows=min(section.limit or MAX_SECTION_ROWS, MAX_SECTION_ROWS),
+        parameters=params)
     data = [{name: _cell(value) for name, value in zip(columns, row)} for row in rows]
     title = section.title or 'Результат SQL-запроса'
     if section.type == 'kpi':
@@ -273,8 +299,9 @@ def _build_sql_section(section: SectionDefinition, catalog: builder.Catalog,
                  'rows': data}
     built['perRow'] = section.row_width
     built['dataOrigin'] = 'live'
-    if filter_values:
-        built['filterNote'] = 'Фильтры отчёта не применены к SQL-блоку.'
+    built['drilldownScope'] = 'dataset'
+    if skipped:
+        built['filterNote'] = 'Фильтры не применены: ' + ', '.join(dict.fromkeys(skipped))
     if truncated:
         built['rowsNote'] = 'Показаны первые строки результата — задайте ограничение в SQL для полного анализа.'
     return built

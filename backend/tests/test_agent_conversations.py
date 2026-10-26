@@ -3,9 +3,209 @@
 import json
 from contextlib import contextmanager
 
-from app.agent import runner
+from app.agent import runner, store
 from app.api import datasets as dataset_api
 from app.api import reports as report_api
+
+
+def test_workspace_chat_keeps_history_across_datasets(client, dataset, sources,
+                                                      user_headers, admin_headers,
+                                                      monkeypatch):
+    """@ dataset changes keep one owner-scoped chat and tag each answer source."""
+    from app.datasets import registry as ds_registry
+    from tests.fakesource import FakeSource
+
+    sources.add('other', FakeSource(source='clickhouse', table='manager_stats'))
+    ds_registry.create(slug='other', title='Менеджеры', description=None,
+                       source='clickhouse', dsn='clickhouse://u:p@host:8443/db',
+                       table_name='manager_stats', schema=[{'name': 'manager_name',
+                        'type': 'String', 'comment': ''}], status='ok', error=None)
+    observed = []
+
+    def fake_answer(source, question, history, *, reveal_sql, on_event):
+        """Record source and context while returning a simple answer."""
+        observed.append((source[0]['slug'], history))
+        return {'answer': f'Ответ по {source[0]["slug"]}', 'columns': [], 'rows': [],
+                'sql': 'SELECT count(*) FROM dataset', 'plan': {'kind': 'sql'},
+                'truncated': False, 'explanation': {
+                    'source': source[0]['title'], 'calculations': [], 'groupBy': [],
+                    'filters': [], 'orderBy': None, 'scope': 'Все строки',
+                    'limit': 100, 'shownRows': 0, 'totalRows': None, 'hasMore': False}}
+
+    monkeypatch.setattr(dataset_api, 'agent_ask_datasets', fake_answer)
+    first = client.post('/api/datasets/chat/stream', headers=user_headers,
+                        json={'question': 'Продажи?', 'datasetSlug': 'sales'})
+    first_events = [json.loads(line) for line in first.text.splitlines()]
+    conversation_id = first_events[-1]['conversationId']
+    second = client.post('/api/datasets/chat/stream', headers=user_headers,
+                         json={'question': 'Менеджеры?', 'datasetSlug': 'other',
+                               'conversationId': conversation_id})
+    second_events = [json.loads(line) for line in second.text.splitlines()]
+
+    assert second_events[-1]['result']['datasetSlug'] == 'other'
+    assert observed[1][0] == 'other'
+    assert observed[1][1][0]['datasetSlug'] == 'sales'
+    saved = client.get('/api/datasets/chat/history', headers=user_headers).json()
+    assert [turn['datasetSlug'] for turn in saved['turns']] == ['sales', 'other']
+    assert client.get('/api/datasets/chat/history', headers=admin_headers).json()['turns'] == []
+    assert client.post('/api/datasets/chat/stream', headers=admin_headers,
+                       json={'question': 'Чужой', 'datasetSlug': 'sales',
+                             'conversationId': conversation_id}).status_code == 404
+
+
+def test_workspace_chat_accepts_multiple_attached_sources(client, dataset, sources,
+                                                          user_headers, monkeypatch):
+    """The shared endpoint resolves every source and persists all attachments."""
+    from app.datasets import registry as ds_registry
+    from tests.fakesource import FakeSource
+
+    sources.add('costs', FakeSource(source='clickhouse', table='costs'))
+    ds_registry.create(slug='costs', title='Расходы', description=None,
+                       source='clickhouse', dsn='clickhouse://u:p@host:8443/db',
+                       table_name='costs', schema=[{'name': 'cost', 'type': 'Float64',
+                                                    'comment': ''}], status='ok', error=None)
+    observed = []
+
+    def fake_answer(attached, question, history, *, reveal_sql, on_event):
+        """Capture every dataset given to the comparative agent."""
+        observed.append([item['slug'] for item in attached])
+        return {'answer': 'Гипотеза', 'columns': [], 'rows': [], 'sql': None,
+                'plan': {'queries': []}, 'truncated': False, 'evidence': [],
+                'hypotheses': [], 'explanation': {'source': 'Продажи, Расходы',
+                'calculations': [], 'groupBy': [], 'filters': [], 'orderBy': None,
+                'scope': 'Оба источника', 'limit': 100, 'shownRows': 0,
+                'totalRows': None, 'hasMore': False}}
+
+    monkeypatch.setattr(dataset_api, 'agent_ask_datasets', fake_answer, raising=False)
+    response = client.post('/api/datasets/chat/stream', headers=user_headers,
+                           json={'question': 'Сравни их',
+                                 'datasetSlugs': ['sales', 'costs']})
+    result = [json.loads(line) for line in response.text.splitlines()][-1]['result']
+
+    assert observed == [['sales', 'costs']]
+    assert result['datasetSlugs'] == ['sales', 'costs']
+    assert result['datasetTitles'] == ['Продажи', 'Расходы']
+    assert client.get('/api/datasets/chat/history', headers=user_headers).json()[
+        'turns'][0]['datasetSlugs'] == ['sales', 'costs']
+    assert client.post('/api/datasets/chat/stream', headers=user_headers,
+                       json={'question': 'Ошибка',
+                             'datasetSlugs': ['sales', 'unknown']}).status_code == 404
+
+
+def test_saved_dataset_chat_can_be_listed_and_reopened(client, plain_user,
+                                                      user_headers, admin_headers):
+    """A named consultation stays owner-scoped and can be selected by id."""
+    chat = store.conversation(plain_user['id'], 'dataset', 'workspace', create=True)
+    store.save_exchange(chat['id'], 'Сравни данные', 'Есть гипотеза', {
+        'question': 'Сравни данные', 'answer': 'Есть гипотеза', 'datasetSlugs': ['sales'],
+        'columns': [], 'rows': [], 'explanation': {'source': 'Продажи'}})
+
+    saved = client.post('/api/chats', headers=user_headers, json={
+        'kind': 'dataset', 'target': 'workspace', 'conversationId': chat['id'],
+        'title': 'Анализ продаж'}).json()['chat']
+    assert saved['title'] == 'Анализ продаж'
+    assert [item['id'] for item in client.get('/api/chats?kind=dataset&target=workspace',
+                                               headers=user_headers).json()['chats']] == [chat['id']]
+    reopened = client.get(f'/api/datasets/chat/history?conversation_id={chat["id"]}',
+                          headers=user_headers).json()
+    assert reopened['turns'][0]['answer'] == 'Есть гипотеза'
+    assert client.get('/api/chats?kind=dataset&target=workspace',
+                      headers=admin_headers).json()['chats'] == []
+    assert client.post('/api/chats', headers=admin_headers, json={
+        'kind': 'dataset', 'target': 'workspace', 'conversationId': chat['id'],
+        'title': 'Чужой чат'}).status_code == 404
+    assert client.get(f'/api/datasets/chat/history?conversation_id={chat["id"]}',
+                      headers=admin_headers).status_code == 404
+
+
+def test_saved_report_chat_restores_latest_proposal(client, plain_user,
+                                                 user_headers, admin_headers):
+    """A saved report draft restores its last verified layout and messages."""
+    chat = store.conversation(plain_user['id'], 'report', 'new', create=True)
+    definition = {'sections': [{'type': 'kpi', 'metrics': ['revenue']}]}
+    store.save_exchange(chat['id'], 'Покажи продажи', 'Собрал', {
+        'definition': definition, 'title': 'Продажи'})
+
+    saved = client.post('/api/chats', headers=user_headers, json={
+        'kind': 'report', 'target': 'new', 'conversationId': chat['id'],
+        'title': 'Черновик продаж'}).json()['chat']
+    assert saved['title'] == 'Черновик продаж'
+    listed = client.get('/api/chats?kind=report&target=new',
+                        headers=user_headers).json()['chats']
+    assert [item['id'] for item in listed] == [chat['id']]
+    restored = client.get(f'/api/reports/chat/history?target=new&conversation_id={chat["id"]}',
+                          headers=user_headers).json()
+    assert restored['proposal']['definition'] == definition
+    assert [item['text'] for item in restored['messages']] == ['Покажи продажи', 'Собрал']
+    assert client.get('/api/chats?kind=report&target=new',
+                      headers=admin_headers).json()['chats'] == []
+    assert client.get(f'/api/reports/chat/history?target=new&conversation_id={chat["id"]}',
+                      headers=admin_headers).status_code == 404
+
+
+def test_new_workspace_chat_does_not_reuse_saved_context(client, dataset,
+                                                        plain_user, user_headers,
+                                                        monkeypatch):
+    """Starting a new consultation creates an independent conversation."""
+    prior = store.conversation(plain_user['id'], 'dataset', 'workspace', create=True)
+    store.save_exchange(prior['id'], 'Первый вопрос', 'Первый ответ', {
+        'question': 'Первый вопрос', 'answer': 'Первый ответ'})
+    store.save_named(plain_user['id'], 'dataset', 'workspace', 'Старый чат', prior['id'])
+    observed = []
+
+    def fake_answer(attached, question, history, *, reveal_sql, on_event):
+        """Capture the history passed into the newly started chat."""
+        observed.append(history)
+        return {'answer': 'Новый ответ', 'columns': [], 'rows': [], 'sql': None,
+                'plan': {}, 'truncated': False, 'explanation': {
+                    'source': 'Продажи', 'calculations': [], 'groupBy': [],
+                    'filters': [], 'orderBy': None, 'scope': 'Все строки',
+                    'limit': 100, 'shownRows': 0, 'totalRows': None, 'hasMore': False}}
+
+    monkeypatch.setattr(dataset_api, 'agent_ask_datasets', fake_answer)
+    response = client.post('/api/datasets/chat/stream', headers=user_headers,
+                           json={'question': 'Новый вопрос', 'datasetSlugs': ['sales']})
+    current = [json.loads(line) for line in response.text.splitlines()][-1]
+    assert current['conversationId'] != prior['id']
+    assert observed == [[]]
+    assert [item['title'] for item in client.get('/api/chats?kind=dataset&target=workspace',
+                                                 headers=user_headers).json()['chats']] == ['Старый чат']
+
+
+def test_empty_new_chat_survives_reload_and_can_be_saved(client, user_headers):
+    """A new empty chat owns an id before the first question and can be named later."""
+    created = client.post('/api/chats/new', headers=user_headers,
+                          json={'kind': 'dataset', 'target': 'workspace'}).json()
+    identifier = created['conversationId']
+    restored = client.get('/api/datasets/chat/history', headers=user_headers).json()
+    assert restored == {'conversationId': identifier, 'turns': []}
+    assert client.get('/api/chats?kind=dataset&target=workspace',
+                      headers=user_headers).json()['chats'] == []
+    saved = client.post('/api/chats', headers=user_headers, json={
+        'kind': 'dataset', 'target': 'workspace', 'conversationId': identifier,
+        'title': 'Пустой чат'}).json()['chat']
+    assert saved['id'] == identifier
+
+
+def test_new_report_chat_within_saved_report_uses_fresh_context(
+        client, model, plain_user, user_headers, monkeypatch):
+    """A new report chat can start beside an older chat for the same report."""
+    previous = store.conversation(plain_user['id'], 'report', 'sales-report', create=True)
+    store.save_exchange(previous['id'], 'Старый запрос', 'Старый ответ', {})
+    observed = []
+
+    def fake_chat(messages, *_args, **_kwargs):
+        """Record the context of a deliberately fresh report chat."""
+        observed.append(messages)
+        return {'reply': 'Новый ответ', 'definition': None, 'title': None,
+                'notes': [], 'source': 'agent', 'model': 'fake'}
+
+    monkeypatch.setattr(runner, 'chat_report', fake_chat)
+    response = client.post('/api/reports/chat', headers=user_headers, json={
+        'target': 'sales-report', 'newConversation': True,
+        'messages': [{'role': 'user', 'text': 'Новый запрос'}]}).json()
+    assert response['conversationId'] != previous['id']
+    assert [item['text'] for item in observed[0]] == ['Новый запрос']
 
 
 def test_dataset_stream_saves_and_restores_turns(client, dataset, user_headers,
@@ -13,7 +213,7 @@ def test_dataset_stream_saves_and_restores_turns(client, dataset, user_headers,
     """A streamed answer becomes the next request's server-side history."""
     observed = []
 
-    def fake_answer(_dataset, question, history, *, on_event):
+    def fake_answer(_dataset, question, history, *, reveal_sql, on_event):
         """Emit real transport events while recording saved context."""
         observed.append(history)
         on_event({'type': 'status', 'text': 'Выполняю SQL…'})
@@ -51,7 +251,7 @@ def test_report_chat_restores_server_context(client, model, user_headers, monkey
     """The report agent sees saved messages and another user cannot read them."""
     observed = []
 
-    def fake_chat(messages, *_args):
+    def fake_chat(messages, *_args, **_kwargs):
         """Record exactly the conversation passed to the report agent."""
         observed.append(messages)
         return {'reply': 'Готово', 'definition': None, 'title': None,
@@ -61,7 +261,8 @@ def test_report_chat_restores_server_context(client, model, user_headers, monkey
     first = client.post('/api/reports/chat', headers=user_headers,
                         json={'messages': [{'role': 'user', 'text': 'Продажи'}]}).json()
     identifier = first['conversationId']
-    saved = client.get('/api/reports/chat/history', headers=user_headers).json()
+    saved = client.get(f'/api/reports/chat/history?conversation_id={identifier}',
+                       headers=user_headers).json()
     assert saved['conversationId'] == identifier
     assert [item['text'] for item in saved['messages']] == ['Продажи', 'Готово']
 
@@ -72,9 +273,42 @@ def test_report_chat_restores_server_context(client, model, user_headers, monkey
         'Продажи', 'Готово', 'Добавь график']
 
 
+def test_new_report_chat_starts_without_previous_draft_context(
+        client, model, user_headers, monkeypatch):
+    """Opening another new report creates a separate chat while saved chats remain addressable."""
+    observed = []
+
+    def fake_chat(messages, *_args, **_kwargs):
+        """Capture the context seen by the agent for each new draft."""
+        observed.append(messages)
+        return {'reply': 'Готово', 'definition': None, 'title': None,
+                'notes': [], 'source': 'agent', 'model': 'fake'}
+
+    monkeypatch.setattr(runner, 'chat_report', fake_chat)
+    first = client.post('/api/reports/chat', headers=user_headers,
+                        json={'target': 'new', 'messages': [
+                            {'role': 'user', 'text': 'Первый отчёт'}]}).json()
+    second = client.post('/api/reports/chat', headers=user_headers,
+                         json={'target': 'new', 'messages': [
+                             {'role': 'user', 'text': 'Первый отчёт'},
+                             {'role': 'assistant', 'text': 'Готово'},
+                             {'role': 'user', 'text': 'Другой отчёт'}]}).json()
+    streamed = client.post('/api/reports/chat/stream', headers=user_headers,
+                           json={'target': 'new', 'messages': [
+                               {'role': 'user', 'text': 'Третий отчёт'}]})
+    third = [json.loads(line) for line in streamed.text.splitlines()][-1]
+
+    assert first['conversationId'] != second['conversationId']
+    assert second['conversationId'] != third['conversationId']
+    assert [item['text'] for item in observed[1]] == ['Другой отчёт']
+    assert [item['text'] for item in observed[2]] == ['Третий отчёт']
+    assert client.get('/api/reports/chat/history?target=new',
+                      headers=user_headers).json()['messages'] == []
+
+
 def test_report_stream_saves_visual_proposal(client, model, user_headers, monkeypatch):
     """Streamed report construction retains its definition and conversation."""
-    def fake_chat(messages, *_args, on_event):
+    def fake_chat(messages, *_args, on_event, **_kwargs):
         """Emit progress and a verified visual layout for the route."""
         on_event({'type': 'status', 'text': 'Проверяю карточки…'})
         on_event({'type': 'delta', 'text': 'Отчёт готов'})
@@ -89,8 +323,38 @@ def test_report_stream_saves_visual_proposal(client, model, user_headers, monkey
 
     assert [event['type'] for event in events] == ['status', 'delta', 'done']
     assert events[-1]['result']['definition']['sections'][0]['title'] == 'Продажи'
-    saved = client.get('/api/reports/chat/history', headers=user_headers).json()
+    saved = client.get(f'/api/reports/chat/history?conversation_id={events[-1]["conversationId"]}',
+                       headers=user_headers).json()
     assert [message['text'] for message in saved['messages']] == ['Продажи', 'Отчёт готов']
+
+
+def test_saved_report_keeps_its_draft_conversation(client, model, plain_user,
+                                                  user_headers, admin_headers):
+    """Saving a report moves only its owner's draft chat to the report slug."""
+    draft = store.conversation(plain_user['id'], 'report', 'new', create=True)
+    store.save_exchange(draft['id'], 'Покажи продажи', 'Собрал отчёт', {})
+    store.save_named(plain_user['id'], 'report', 'new', 'Чат о продажах', draft['id'])
+    response = client.post('/api/reports/builder', headers=user_headers, json={
+        'slug': 'sales-chat', 'title': 'Продажи',
+        'definition': {'sections': [{'type': 'kpi', 'metrics': ['revenue']}],
+                       'filters': []}, 'conversationId': draft['id'],
+    })
+
+    assert response.status_code == 201
+    history = client.get('/api/reports/chat/history?target=sales-chat',
+                         headers=user_headers).json()
+    assert history['conversationId'] == draft['id']
+    assert [item['text'] for item in history['messages']] == [
+        'Покажи продажи', 'Собрал отчёт']
+    assert client.get('/api/reports/chat/history?target=new',
+                      headers=user_headers).json()['messages'] == []
+    assert client.get('/api/chats?kind=report&target=new',
+                      headers=user_headers).json()['chats'] == []
+    assert [item['title'] for item in client.get('/api/chats?kind=report&target=sales-chat',
+                                                 headers=user_headers).json()['chats']] == [
+                                                     'Чат о продажах']
+    assert client.get('/api/reports/chat/history?target=sales-chat',
+                      headers=admin_headers).json()['messages'] == []
 
 
 def test_dataset_stream_rejects_punctuation_only(client, dataset, user_headers):
@@ -122,11 +386,11 @@ def test_stream_traces_cover_conversation_persistence(client, dataset, model,
         saved.append((active[-1][0], active[-1][1]['session_id']))
         return original_save(*args)
 
-    def fake_answer(_dataset, _question, _history, *, on_event):
+    def fake_answer(_dataset, _question, _history, *, reveal_sql, on_event):
         """Return a minimal completed answer for the dataset stream."""
         return {'answer': 'Готово'}
 
-    def fake_chat(_messages, *_args, on_event):
+    def fake_chat(_messages, *_args, on_event, **_kwargs):
         """Return a minimal completed proposal for the report stream."""
         return {'reply': 'Готово', 'definition': None, 'title': None,
                 'notes': [], 'source': 'agent', 'model': 'fake'}

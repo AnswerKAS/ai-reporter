@@ -1,4 +1,4 @@
-import type { InputHTMLAttributes, LabelHTMLAttributes, SelectHTMLAttributes, TextareaHTMLAttributes } from 'react'
+import type { ComponentPropsWithRef, InputHTMLAttributes, LabelHTMLAttributes, SelectHTMLAttributes } from 'react'
 import { cn } from '../../lib/cn'
 
 /** Единая геометрия всех контролов — раньше она была описана в CSS десять раз
@@ -33,7 +33,8 @@ export function Select({ className, fit, ...props }: SelectHTMLAttributes<HTMLSe
   return <select className={cn(width(fit), CONTROL, 'cursor-pointer', className)} {...props} />
 }
 
-export function Textarea({ className, ...props }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
+/** Shared multiline input, including a ref for chat mention focus. */
+export function Textarea({ className, ...props }: ComponentPropsWithRef<'textarea'>) {
   return <textarea className={cn('w-full', CONTROL, 'resize-y font-[inherit]', className)} {...props} />
 }
 

@@ -209,10 +209,11 @@ export function ReportViewPage() {
           sections={report.sections}
           onDrill={
             report.drilldown
-              ? (sectionIndex, point, label) =>
+              ? (sectionIndex, point, label, metricKey, scope) =>
                   setDrill({
-                    target: { sectionIndex, point },
-                    title: label ? `Строки: ${label}` : 'Строки под показателем',
+                    target: scope === 'dataset' ? { sectionIndex } : { sectionIndex, point, metricKey },
+                    title: scope === 'dataset' ? 'Исходные строки датасета'
+                      : label ? `Строки: ${label}` : 'Строки под показателем',
                   })
               : undefined
           }

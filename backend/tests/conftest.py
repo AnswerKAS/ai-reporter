@@ -30,7 +30,7 @@ from tests.fakesource import FakeSource  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def no_llm(monkeypatch):
-    """Разбор описания и трассировка отключены без явной настройки теста.
+    """Keep model and tracing network calls disabled unless a test enables them.
 
     Ключ OpenRouter может лежать в окружении или в файле opencode — тогда
     тесты ходили бы в сеть и зависели от ответа модели.

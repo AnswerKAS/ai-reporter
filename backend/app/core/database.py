@@ -247,6 +247,8 @@ def init_db() -> None:
                 user_id TEXT NOT NULL,
                 kind TEXT NOT NULL,
                 target TEXT NOT NULL,
+                title TEXT,
+                saved_at TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
@@ -395,6 +397,10 @@ def init_db() -> None:
         )
         # миграции существующих таблиц
         conn.execute('ALTER TABLE reports ADD COLUMN IF NOT EXISTS definition TEXT')
+        conn.execute('ALTER TABLE agent_conversations ADD COLUMN IF NOT EXISTS title TEXT')
+        conn.execute('ALTER TABLE agent_conversations ADD COLUMN IF NOT EXISTS saved_at TEXT')
+        conn.execute('CREATE INDEX IF NOT EXISTS agent_conversations_saved_idx '
+                     'ON agent_conversations (user_id, kind, target, saved_at, updated_at)')
         # автор отчёта: у записей, заведённых до каталога, остаётся NULL —
         # восстановить его неоткуда, и разрез показывает их как «без автора»
         conn.execute('ALTER TABLE reports ADD COLUMN IF NOT EXISTS created_by TEXT')

@@ -13,14 +13,16 @@ _FORBIDDEN = re.compile(r'\b(?:' + '|'.join(sqlsource.FORBIDDEN) + r')\b', re.IG
 _LOCK = re.compile(r'\bFOR\s+(?:UPDATE|SHARE)\b', re.IGNORECASE)
 
 
-def scope_dataset_sql(dataset: dict, statement: str) -> str:
+def scope_dataset_sql(dataset: dict, statement: str,
+                      conditions: list[str] | None = None) -> str:
     """Expose the selected dataset as a virtual SQL relation named dataset."""
     adapter = registry.adapter_for(dataset)
     try:
         source = adapter.source_sql('dataset_source')
     finally:
         adapter.close()
-    prefix = f'dataset AS (SELECT * FROM {source})'
+    where = ' WHERE ' + ' AND '.join(conditions) if conditions else ''
+    prefix = f'dataset AS (SELECT * FROM {source}{where})'
     statement = statement.strip()
     if dataset['source'] == 'postgres':
         # The adapter passes an empty parameter mapping to psycopg; literal
@@ -49,9 +51,11 @@ def validate_readonly_sql(sql: str) -> str:
     return statement.rstrip().rstrip(';').rstrip()
 
 
-def execute_readonly_sql(dataset: dict, sql: str, *, visible_rows: int = MAX_VISIBLE_ROWS) -> tuple[list[str], list[list], bool]:
+def execute_readonly_sql(dataset: dict, sql: str, *, visible_rows: int = MAX_VISIBLE_ROWS,
+                         parameters: dict | None = None) -> tuple[list[str], list[list], bool]:
     """Run arbitrary analytical SQL and bound rows returned to the application."""
     statement = validate_readonly_sql(sql)
+    params = parameters or {}
     source = dataset['source']
     if source == 'csv':
         raise DatasetError('SQL-вопросы доступны для датасетов с подключением к БД')
@@ -64,10 +68,10 @@ def execute_readonly_sql(dataset: dict, sql: str, *, visible_rows: int = MAX_VIS
             conn = adapter._connect()
             conn.execute(f'SET statement_timeout = {QUERY_TIMEOUT_SECONDS * 1000}')
             conn.execute('SET default_transaction_read_only = on')
-            columns, rows = adapter.run_query(bounded, {})
+            columns, rows = adapter.run_query(bounded, params)
         elif source == 'clickhouse':
             client = adapter._client()
-            result = client.query(bounded, settings={
+            result = client.query(bounded, parameters=params, settings={
                 'readonly': 2,
                 'max_execution_time': QUERY_TIMEOUT_SECONDS,
                 'max_result_rows': visible_rows + 1,
@@ -81,7 +85,7 @@ def execute_readonly_sql(dataset: dict, sql: str, *, visible_rows: int = MAX_VIS
             conn.call_timeout = QUERY_TIMEOUT_SECONDS * 1000
             with conn.cursor() as cursor:
                 cursor.execute('SET TRANSACTION READ ONLY')
-                cursor.execute(bounded)
+                cursor.execute(bounded, params)
                 columns = [item[0] for item in cursor.description or []]
                 rows = [list(row) for row in cursor.fetchmany(visible_rows + 1)]
             conn.rollback()
