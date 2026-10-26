@@ -432,10 +432,9 @@ def test_report_chat_returns_verified_definition(client, model, user_headers, mo
     """The report endpoint returns a layout after the visual preview tool."""
     definition = {'sections': [{'type': 'table', 'metrics': ['revenue'], 'by': ['city']}],
                   'filters': [{'dimension': 'city', 'kind': 'select'}]}
-    actions = iter([{'tool': 'get_vocabulary'},
-                    {'tool': 'preview_report', 'args': {'definition': definition}},
-                    {'final': {'reply': 'Собрал выручку по городам.',
-                               'title': 'Продажи по городам'}}])
+    actions = iter([{'tool': 'preview_report', 'args': {
+        'definition': definition, 'reply': 'Собрал выручку по городам.',
+        'title': 'Продажи по городам'}}])
     monkeypatch.setattr(interpret, '_openrouter_key', lambda: 'fake')
     monkeypatch.setattr(interpret, '_chat_models', lambda: ('fake-model', None))
     monkeypatch.setattr(runner, '_invoke', lambda *_: next(actions))

@@ -22,6 +22,7 @@ from ..datasets.base import DatasetError, sanitize_error
 from ..query import builder as query_builder
 from ..query import interpret
 from ..agent import store as agent_store
+from ..agent.tracing import agent_trace, record_output
 from ..mail import registry as mail_registry
 from ..reports import drilldown, executor
 from ..schemas.definition import ReportDefinition
@@ -168,8 +169,13 @@ def chat_report(payload: dict, user: dict = Depends(get_current_user)) -> dict:
     catalog = query_builder.Catalog()
     try:
         from ..agent.runner import chat_report as agent_chat_report
-        result = agent_chat_report(context, catalog, fields, computed, datasets, definition)
-        agent_store.save_exchange(conversation['id'], latest['text'], result['reply'], result)
+        with agent_trace('report-builder', user_id=user['id'],
+                         session_id=conversation['id'],
+                         input_data={'target': target, 'message': latest['text']}) as trace:
+            result = agent_chat_report(context, catalog, fields, computed, datasets, definition)
+            agent_store.save_exchange(conversation['id'], latest['text'], result['reply'], result)
+            record_output(trace, {'reply': result.get('reply'),
+                                  'sections': len((result.get('definition') or {}).get('sections', []))})
         return {**result, 'conversationId': conversation['id']}
     except DatasetError as exc:
         raise HTTPException(422, str(exc))
@@ -201,11 +207,16 @@ def stream_report_chat(payload: dict, user: dict = Depends(get_current_user)) ->
         catalog = query_builder.Catalog()
         try:
             from ..agent.runner import chat_report as agent_chat_report
-            result = agent_chat_report(
-                context, catalog, payload.get('fields') or [],
-                payload.get('computed') or [], payload.get('datasets') or [],
-                payload.get('definition') or None, on_event=events.put)
-            agent_store.save_exchange(conversation['id'], latest['text'], result['reply'], result)
+            with agent_trace('report-builder', user_id=user['id'],
+                             session_id=conversation['id'],
+                             input_data={'target': target, 'message': latest['text']}) as trace:
+                result = agent_chat_report(
+                    context, catalog, payload.get('fields') or [],
+                    payload.get('computed') or [], payload.get('datasets') or [],
+                    payload.get('definition') or None, on_event=events.put)
+                agent_store.save_exchange(conversation['id'], latest['text'], result['reply'], result)
+                record_output(trace, {'reply': result.get('reply'),
+                                      'sections': len((result.get('definition') or {}).get('sections', []))})
             events.put({'type': 'done', 'conversationId': conversation['id'], 'result': result})
         except Exception as exc:
             events.put({'type': 'error', 'message': sanitize_error(str(exc))})

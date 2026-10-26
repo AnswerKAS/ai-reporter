@@ -17,6 +17,7 @@ import json
 import os
 import re
 import threading
+from contextvars import copy_context
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as _Timeout
 from pathlib import Path
 
@@ -57,7 +58,7 @@ _AUTH_PATHS = (
 # модели, и она отвела от обеих дешёвых моделей на год.
 # Переопределяется INTERPRET_MODEL; при промахе по TIMEOUT разбор уходит
 # к запасной, а не заставляет ждать.
-DEFAULT_MODEL = 'google/gemini-2.5-flash'
+DEFAULT_MODEL = 'deepseek/deepseek-v4-flash'
 DEFAULT_FALLBACK = 'openai/gpt-4o-mini'
 
 # Диалог — задача другая: модель держит переписку, правит готовую раскладку и
@@ -131,6 +132,7 @@ def _ask(prompt_text: str, model: str, key: str, timeout: int | None = None) -> 
     """
     from langchain_core.messages import HumanMessage
     from langchain_openai import ChatOpenAI
+    from ..agent.tracing import callbacks
 
     chat = ChatOpenAI(
         model=_model_id(model),
@@ -141,8 +143,13 @@ def _ask(prompt_text: str, model: str, key: str, timeout: int | None = None) -> 
     )
 
     def call():
+        """Run the model in the inherited trace context and release its slot."""
         try:
-            return chat.invoke([HumanMessage(content=prompt_text)])
+            handlers = callbacks()
+            messages = [HumanMessage(content=prompt_text)]
+            if handlers:
+                return chat.invoke(messages, config={'callbacks': handlers})
+            return chat.invoke(messages)
         finally:
             _SLOTS.release()
 
@@ -151,7 +158,7 @@ def _ask(prompt_text: str, model: str, key: str, timeout: int | None = None) -> 
             'сейчас разбирается слишком много описаний — попробуйте через минуту'
         )
     limit = TIMEOUT if timeout is None else timeout
-    future = _POOL.submit(call)
+    future = _POOL.submit(copy_context().run, call)
     try:
         answer = future.result(timeout=limit)
     except _Timeout:

@@ -132,8 +132,9 @@ npm run dev                 # http://localhost:5173 (/api проксируетс
 | Переменная | Назначение |
 |---|---|
 | `DB_CONNECTIONS` | JSON всех подключений БД: обязательный `metabase`, необязательный `demo` и именованные источники. У источника `title` — уникальное понятное имя для выбора в форме; `source` и `dsn` задают тип и адрес, при необходимости добавляются `schema`, `sslmode`, `secure`. Для старых записей без `title` временно используется ключ подключения. Для старой установки: `cd backend && .venv/bin/python -m app.datasets.migrate_connections`, затем перезапуск. |
-| `OPENROUTER_API_KEY`, `INTERPRET_MODEL` | разбор словесного ТЗ моделью; без ключа разбирает встроенный парсер |
+| `OPENROUTER_API_KEY`, `INTERPRET_MODEL` | разбор словесного ТЗ моделью (по умолчанию `deepseek/deepseek-v4-flash`); без ключа разбирает встроенный парсер |
 | `CHAT_MODEL`, `CHAT_FALLBACK_MODEL`, `CHAT_TIMEOUT` | диалог о будущем отчёте в конструкторе: модели и предел ожидания (умолчания — `deepseek/deepseek-v4-flash`, `z-ai/glm-5.3-flash`, 90 с) |
+| `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL` | необязательные трейсы агентских диалогов; локальный запуск описан в `langfuse/README.md` |
 | `ARTIFACTS_DIR`, `ARTIFACTS_STORAGE` | каталог и режим хранилища загруженных CSV |
 | `CORS_ORIGINS`, `SESSION_TTL_DAYS` | источники фронта и срок жизни сессии |
 

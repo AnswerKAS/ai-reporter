@@ -4,6 +4,8 @@ from typing import Callable, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
+from .tracing import callbacks, record_output, tool_trace
+
 
 class AgentState(TypedDict):
     """One model decision and the observations collected during a turn."""
@@ -33,10 +35,13 @@ def run_graph(
 
     def tool_node(state: AgentState) -> dict:
         """Execute a named tool and append its result or error to state."""
-        try:
-            observation = use_tool(state['action'] or {})
-        except Exception as exc:
-            observation = {'error': str(exc)}
+        action = state['action'] or {}
+        with tool_trace(action) as span:
+            try:
+                observation = use_tool(action)
+            except Exception as exc:
+                observation = {'error': str(exc)}
+            record_output(span, observation)
         return {'observations': [*state['observations'], observation]}
 
     def final_node(state: AgentState) -> dict:
@@ -70,7 +75,10 @@ def run_graph(
     workflow.add_conditional_edges('model', after_model)
     workflow.add_conditional_edges('tool', after_step)
     workflow.add_conditional_edges('final', after_step)
-    return workflow.compile().invoke({
+    initial = {
         'observations': [], 'step': 0, 'action': None,
         'output': None, 'error': None,
-    })
+    }
+    handlers = callbacks()
+    return workflow.compile().invoke(
+        initial, config={'callbacks': handlers} if handlers else None)

@@ -9,6 +9,26 @@ from app.reports import executor
 from app.schemas.definition import SectionDefinition
 
 
+def test_agent_model_call_uses_chat_timeout(monkeypatch):
+    """A report-agent model call must not fail at the obsolete 45-second limit."""
+    observed = []
+
+    def fake_ask(_prompt, _model, _key, *, timeout):
+        """Reproduce the timeout error at 45 seconds and accept the chat budget."""
+        observed.append(timeout)
+        if timeout == 45:
+            raise DatasetError(
+                'модель не ответила за 45 с — попробуйте ещё раз '
+                'или соберите отчёт мышью: поля слева, секции по центру'
+            )
+        return '{"final":{"reply":"Готово"}}'
+
+    monkeypatch.setattr(interpret, '_ask', fake_ask)
+
+    assert runner._invoke('prompt', 'model', 'key') == {'final': {'reply': 'Готово'}}
+    assert observed == [interpret.CHAT_TIMEOUT]
+
+
 @pytest.mark.parametrize('sql', [
     'SELECT city, SUM(revenue) OVER (PARTITION BY city) AS total FROM dataset',
     'WITH ranked AS (SELECT row_number() OVER (ORDER BY revenue) AS n FROM dataset) SELECT * FROM ranked',
@@ -32,6 +52,16 @@ def test_readonly_sql_rejects_mutations(sql):
         readonly.validate_readonly_sql(sql)
 
 
+@pytest.mark.xfail(strict=True, reason=(
+    'The SQL scope only adds a dataset CTE; parse table references and reject '
+    'reads outside the selected dataset before execution.'
+))
+def test_dataset_sql_rejects_other_source_tables(dataset, sources):
+    """A dataset question cannot query another table on the same connection."""
+    with pytest.raises(DatasetError):
+        readonly.scope_dataset_sql(dataset, 'SELECT * FROM private_table')
+
+
 def test_dataset_agent_executes_window_query(dataset, sources, monkeypatch):
     """The agent uses a SQL tool before answering from observed rows."""
     actions = iter([
@@ -50,12 +80,30 @@ def test_dataset_agent_executes_window_query(dataset, sources, monkeypatch):
     monkeypatch.setattr(runner, 'execute_readonly_sql', lambda _dataset, _sql: (
         ['city', 'total'], [['Москва', 100]], False))
 
-    response = runner.ask_dataset(dataset, 'Выручка по городам', [], reveal_sql=True)
+    response = runner.ask_dataset(dataset, 'Выручка по городам', [])
 
     assert response['rows'] == [['Москва', '100']]
     assert response['columns'] == ['Город', 'Выручка']
     assert 'OVER (PARTITION BY city)' in response['sql']
     assert response['explanation']['calculations'] == ['Оконная сумма выручки по городу']
+
+
+def test_dataset_agent_keeps_verified_answer_when_streaming(dataset, sources, monkeypatch):
+    """Streaming sends the same final answer that the agent returns."""
+    actions = iter([
+        {'tool': 'execute_sql', 'args': {'sql': 'SELECT city FROM dataset'}},
+        {'final': {'answer': 'Найдено 21 город', 'columnLabels': {'city': 'Город'}}},
+    ])
+    monkeypatch.setattr(interpret, '_openrouter_key', lambda: 'fake')
+    monkeypatch.setattr(interpret, '_chat_models', lambda: ('fake-model', None))
+    monkeypatch.setattr(runner, '_invoke', lambda *_: next(actions))
+    monkeypatch.setattr(runner, 'execute_readonly_sql', lambda *_: (
+        ['city'], [[f'Город {index}'] for index in range(21)], False))
+    events = []
+    answer = runner.ask_dataset(dataset, 'Сколько городов?', [], on_event=events.append)
+
+    assert answer['answer'] == 'Найдено 21 город'
+    assert events[-1] == {'type': 'delta', 'text': answer['answer']}
 
 
 def test_dataset_agent_uses_configured_russian_column_titles(dataset):
@@ -165,6 +213,49 @@ def test_report_agent_previews_mixed_visual_blocks(dataset, monkeypatch):
     assert previewed == ['kpi', 'chart', 'table']
     assert [section['title'] for section in result['definition']['sections']] == [
         'Продажи', 'Динамика', 'Детали']
+
+
+def test_report_agent_finishes_after_first_valid_preview(dataset, monkeypatch):
+    """Initial schema and vocabulary permit one model call for a valid report."""
+    class Catalog:
+        """Expose one dataset and metric to the report agent."""
+
+        metrics = {'revenue': {'slug': 'revenue', 'dataset_slug': 'sales',
+                               'title': 'Выручка'}}
+        dimensions = {}
+
+        def __init__(self):
+            """Register the test dataset."""
+            self.datasets = {'sales': dataset}
+
+        def dataset(self, slug):
+            """Resolve the dataset used by preview rendering."""
+            return self.datasets[slug]
+
+    prompts = []
+
+    def fake_invoke(prompt, *_args):
+        """Capture the prompt and provide a complete report proposal."""
+        prompts.append(prompt)
+        return {'tool': 'preview_report', 'args': {
+            'definition': {'sections': [{'type': 'table', 'title': 'Продажи',
+                                         'datasetSlug': 'sales',
+                                         'sql': 'SELECT city FROM dataset'}]},
+            'reply': 'Построил таблицу продаж.', 'title': 'Продажи'}}
+
+    monkeypatch.setattr(interpret, '_openrouter_key', lambda: 'fake')
+    monkeypatch.setattr(interpret, '_chat_models', lambda: ('fake-model', None))
+    monkeypatch.setattr(runner, '_invoke', fake_invoke)
+    monkeypatch.setattr(executor, 'build_section', lambda section, *_args, **_kwargs: {
+        'type': section.type, 'title': section.title, 'columns': [], 'rows': []})
+
+    result = runner.chat_report([{'role': 'user', 'text': 'Продажи'}], Catalog())
+
+    assert len(prompts) == 1
+    assert '"name": "revenue"' in prompts[0]
+    assert result['reply'] == 'Построил таблицу продаж.'
+    assert result['title'] == 'Продажи'
+    assert len(result['definition']['sections']) == 1
 
 
 def test_report_agent_rejects_unpreviewed_definition(dataset, monkeypatch):

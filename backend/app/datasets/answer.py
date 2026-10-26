@@ -204,7 +204,7 @@ def answer(dataset: dict, question: str, history: list[dict], *, reveal_sql: boo
     """Route model-backed questions through the ReAct agent, retaining offline fallback."""
     if interpret._openrouter_key() and dataset['source'] != 'csv':
         from ..agent.runner import ask_dataset
-        return ask_dataset(dataset, question, history, reveal_sql=reveal_sql)
+        return ask_dataset(dataset, question, history)
     plan = propose(dataset, question, history)
     if dataset['source'] == 'csv':
         return _answer_csv(dataset, plan)

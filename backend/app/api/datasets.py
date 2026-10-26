@@ -15,6 +15,7 @@ from ..datasets import answer as dataset_answer
 from ..datasets import servers as ds_servers
 from ..datasets import sqlsource
 from ..agent import store as agent_store
+from ..agent.tracing import agent_trace, record_output
 from ..agent.runner import ask_dataset as agent_ask_dataset
 from ..datasets.base import DatasetError, sanitize_error
 from ..schemas.dataset import (
@@ -200,6 +201,7 @@ def get_dataset(slug: str, user: dict = Depends(get_current_user)) -> dict:
 
 @router.post('/{slug}/ask')
 def ask_dataset(slug: str, payload: dict, user: dict = Depends(get_current_user)) -> dict:
+    """Answer a legacy synchronous dataset question and trace model-backed work."""
     dataset = _get_or_404(slug)
     question = payload.get('question')
     history = payload.get('history') or []
@@ -208,8 +210,12 @@ def ask_dataset(slug: str, payload: dict, user: dict = Depends(get_current_user)
     if not isinstance(history, list) or len(history) > 50 or any(not isinstance(item, dict) for item in history):
         raise HTTPException(422, 'некорректная история вопросов')
     try:
-        return dataset_answer.answer(dataset, question.strip(), history,
-                                     reveal_sql=_is_admin(user))
+        with agent_trace('dataset-question', user_id=user['id'],
+                         input_data={'dataset': slug, 'question': question.strip()}) as trace:
+            result = dataset_answer.answer(dataset, question.strip(), history,
+                                           reveal_sql=_is_admin(user))
+            record_output(trace, {'answer': result.get('answer')})
+            return result
     except DatasetError as exc:
         raise HTTPException(422, sanitize_error(str(exc))) from exc
 
@@ -249,10 +255,14 @@ def stream_dataset_answer(slug: str, payload: dict,
     def worker() -> None:
         """Run the blocking LangGraph agent outside the response generator."""
         try:
-            result = agent_ask_dataset(dataset, question.strip(), history,
-                                       reveal_sql=_is_admin(user), on_event=events.put)
-            agent_store.save_exchange(item['id'], question.strip(), result['answer'],
-                                      {'question': question.strip(), **result})
+            with agent_trace('dataset-question', user_id=user['id'],
+                             session_id=item['id'],
+                             input_data={'dataset': slug, 'question': question.strip()}) as trace:
+                result = agent_ask_dataset(dataset, question.strip(), history,
+                                           on_event=events.put)
+                agent_store.save_exchange(item['id'], question.strip(), result['answer'],
+                                          {'question': question.strip(), **result})
+                record_output(trace, {'answer': result.get('answer')})
             events.put({'type': 'done', 'conversationId': item['id'], 'result': result})
         except Exception as exc:
             events.put({'type': 'error', 'message': sanitize_error(str(exc))})

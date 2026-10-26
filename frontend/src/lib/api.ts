@@ -86,6 +86,47 @@ async function request<T>(
   return (await res.json()) as T
 }
 
+/** Send a request and deliver each NDJSON event as it arrives. */
+async function streamEvents<T>(
+  path: string,
+  payload: unknown,
+  onEvent: (event: T) => void,
+): Promise<void> {
+  const token = getToken()
+  const response = await fetch(`${BASE}${path}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(payload),
+  })
+  if (response.status === 401) {
+    setToken(null)
+    onUnauthorized?.()
+    throw new ApiError(401, 'требуется авторизация')
+  }
+  if (!response.ok || !response.body) {
+    let detail = `HTTP ${response.status}`
+    try { detail = describeDetail((await response.json() as { detail?: unknown }).detail) } catch { /* no JSON body */ }
+    throw new ApiError(response.status, detail)
+  }
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let pending = ''
+  while (true) {
+    const { value, done } = await reader.read()
+    pending += decoder.decode(value, { stream: !done })
+    const lines = pending.split('\n')
+    pending = lines.pop() ?? ''
+    for (const line of lines) {
+      if (line.trim()) onEvent(JSON.parse(line) as T)
+    }
+    if (done) break
+  }
+  if (pending.trim()) onEvent(JSON.parse(pending) as T)
+}
+
 /** Ошибка от сервера в читаемый вид.
 
     FastAPI при несовпадении схемы отвечает списком объектов; напечатанный
@@ -387,16 +428,6 @@ export async function testDbConnection(key: string): Promise<void> {
   await request(`/datasets/connections/${encodeURIComponent(key)}/test`, { method: 'POST' })
 }
 
-export async function askDataset(slug: string, question: string,
-                                 history: DatasetQuestionTurn[]): Promise<DatasetQuestionTurn> {
-  return await request<DatasetQuestionTurn>(`/datasets/${slug}/ask`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ question, history: history.map(({ question, answer, sql, plan }) => (
-      { question, answer, sql, plan })) }),
-  })
-}
-
 export interface DatasetStreamEvent {
   type: 'status' | 'delta' | 'done' | 'error'
   text?: string
@@ -420,39 +451,8 @@ export async function streamDatasetAnswer(
   conversationId: string | null,
   onEvent: (event: DatasetStreamEvent) => void,
 ): Promise<void> {
-  const response = await fetch(`${BASE}/datasets/${encodeURIComponent(slug)}/ask/stream`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}),
-    },
-    body: JSON.stringify({ question, conversationId }),
-  })
-  if (response.status === 401) {
-    setToken(null)
-    onUnauthorized?.()
-    throw new ApiError(401, 'требуется авторизация')
-  }
-  if (!response.ok || !response.body) {
-    let detail = `HTTP ${response.status}`
-    try { detail = describeDetail((await response.json() as { detail?: unknown }).detail) } catch { /* no JSON body */ }
-    throw new ApiError(response.status, detail)
-  }
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  let pending = ''
-  while (true) {
-    const { value, done } = await reader.read()
-    pending += decoder.decode(value, { stream: !done })
-    const lines = pending.split('\n')
-    pending = lines.pop() ?? ''
-    for (const line of lines) {
-      if (!line.trim()) continue
-      onEvent(JSON.parse(line) as DatasetStreamEvent)
-    }
-    if (done) break
-  }
-  if (pending.trim()) onEvent(JSON.parse(pending) as DatasetStreamEvent)
+  return streamEvents(`/datasets/${encodeURIComponent(slug)}/ask/stream`,
+    { question, conversationId }, onEvent)
 }
 
 export async function createDataset(input: DatasetCreateInput): Promise<DatasetSaveResult> {
@@ -853,32 +853,6 @@ export async function fetchReportChatHistory(target: string): Promise<{
 
 /** Ход диалога об отчёте. Текущее определение уходит вместе с перепиской:
  *  «добавь фильтр по городу» — это правка раскладки, а не новый отчёт. */
-export async function chatReport(
-  messages: ChatMessage[],
-  context: {
-    fields?: ReportField[]
-    computed?: ComputedField[]
-    datasets?: string[]
-    definition?: ReportDefinition | null
-    conversationId?: string | null
-    target?: string
-  } = {},
-): Promise<ChatAnswer> {
-  return request<ChatAnswer>('/reports/chat', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      messages,
-      fields: context.fields ?? [],
-      computed: context.computed ?? [],
-      datasets: context.datasets ?? [],
-      definition: context.definition ?? null,
-      conversationId: context.conversationId ?? null,
-      target: context.target ?? 'new',
-    }),
-  })
-}
-
 export interface ReportStreamEvent {
   type: 'status' | 'delta' | 'done' | 'error'
   text?: string
@@ -900,38 +874,7 @@ export async function streamReportChat(
   },
   onEvent: (event: ReportStreamEvent) => void,
 ): Promise<void> {
-  const response = await fetch(`${BASE}/reports/chat/stream`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}),
-    },
-    body: JSON.stringify({ messages, ...context }),
-  })
-  if (response.status === 401) {
-    setToken(null)
-    onUnauthorized?.()
-    throw new ApiError(401, 'требуется авторизация')
-  }
-  if (!response.ok || !response.body) {
-    let detail = `HTTP ${response.status}`
-    try { detail = describeDetail((await response.json() as { detail?: unknown }).detail) } catch { /* no JSON body */ }
-    throw new ApiError(response.status, detail)
-  }
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  let pending = ''
-  while (true) {
-    const { value, done } = await reader.read()
-    pending += decoder.decode(value, { stream: !done })
-    const lines = pending.split('\n')
-    pending = lines.pop() ?? ''
-    for (const line of lines) {
-      if (line.trim()) onEvent(JSON.parse(line) as ReportStreamEvent)
-    }
-    if (done) break
-  }
-  if (pending.trim()) onEvent(JSON.parse(pending) as ReportStreamEvent)
+  return streamEvents('/reports/chat/stream', { messages, ...context }, onEvent)
 }
 
 /** Разбор описания. Поля и формулы отчёта передаются вместе с текстом:

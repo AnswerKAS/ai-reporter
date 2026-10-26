@@ -30,7 +30,7 @@ from tests.fakesource import FakeSource  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def no_llm(monkeypatch):
-    """Разбор описания идёт детерминированным парсером, а не моделью.
+    """Разбор описания и трассировка отключены без явной настройки теста.
 
     Ключ OpenRouter может лежать в окружении или в файле opencode — тогда
     тесты ходили бы в сеть и зависели от ответа модели.
@@ -38,6 +38,8 @@ def no_llm(monkeypatch):
     from app.query import interpret
 
     monkeypatch.delenv('OPENROUTER_API_KEY', raising=False)
+    monkeypatch.delenv('LANGFUSE_PUBLIC_KEY', raising=False)
+    monkeypatch.delenv('LANGFUSE_SECRET_KEY', raising=False)
     monkeypatch.setattr(interpret, '_AUTH_PATHS', ())
 
 

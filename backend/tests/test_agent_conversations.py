@@ -1,9 +1,11 @@
 """Database persistence and streamed agent API routes."""
 
 import json
+from contextlib import contextmanager
 
 from app.agent import runner
 from app.api import datasets as dataset_api
+from app.api import reports as report_api
 
 
 def test_dataset_stream_saves_and_restores_turns(client, dataset, user_headers,
@@ -11,7 +13,7 @@ def test_dataset_stream_saves_and_restores_turns(client, dataset, user_headers,
     """A streamed answer becomes the next request's server-side history."""
     observed = []
 
-    def fake_answer(_dataset, question, history, *, reveal_sql, on_event):
+    def fake_answer(_dataset, question, history, *, on_event):
         """Emit real transport events while recording saved context."""
         observed.append(history)
         on_event({'type': 'status', 'text': 'Выполняю SQL…'})
@@ -96,3 +98,52 @@ def test_dataset_stream_rejects_punctuation_only(client, dataset, user_headers):
     response = client.post('/api/datasets/sales/ask/stream', headers=user_headers,
                            json={'question': '?'})
     assert response.status_code == 422
+
+
+def test_stream_traces_cover_conversation_persistence(client, dataset, model,
+                                                      user_headers, monkeypatch):
+    """Both agent traces stay open until the completed turn is saved."""
+    active = []
+    saved = []
+    original_save = dataset_api.agent_store.save_exchange
+
+    @contextmanager
+    def fake_trace(name, **attributes):
+        """Track the trace scope around each streamed agent turn."""
+        active.append((name, attributes))
+        try:
+            yield None
+        finally:
+            active.pop()
+
+    def recording_save(*args):
+        """Record that persistence runs inside the matching agent span."""
+        assert active
+        saved.append((active[-1][0], active[-1][1]['session_id']))
+        return original_save(*args)
+
+    def fake_answer(_dataset, _question, _history, *, on_event):
+        """Return a minimal completed answer for the dataset stream."""
+        return {'answer': 'Готово'}
+
+    def fake_chat(_messages, *_args, on_event):
+        """Return a minimal completed proposal for the report stream."""
+        return {'reply': 'Готово', 'definition': None, 'title': None,
+                'notes': [], 'source': 'agent', 'model': 'fake'}
+
+    monkeypatch.setattr(dataset_api, 'agent_trace', fake_trace)
+    monkeypatch.setattr(report_api, 'agent_trace', fake_trace)
+    monkeypatch.setattr(dataset_api.agent_store, 'save_exchange', recording_save)
+    monkeypatch.setattr(dataset_api, 'agent_ask_dataset', fake_answer)
+    monkeypatch.setattr(runner, 'chat_report', fake_chat)
+
+    dataset_response = client.post('/api/datasets/sales/ask/stream',
+                                   headers=user_headers, json={'question': 'Продажи?'})
+    report_response = client.post('/api/reports/chat/stream',
+                                  headers=user_headers,
+                                  json={'messages': [{'role': 'user', 'text': 'Продажи'}]})
+
+    assert dataset_response.status_code == 200
+    assert report_response.status_code == 200
+    assert [name for name, _ in saved] == ['dataset-question', 'report-builder']
+    assert all(session_id for _, session_id in saved)

@@ -34,8 +34,8 @@ def _action(raw: str) -> dict:
 
 
 def _invoke(prompt: str, model: str, key: str) -> dict:
-    """Ask the configured model for the next ReAct action."""
-    return _action(interpret._ask(prompt, model, key, timeout=45))
+    """Ask the model for one ReAct action within the configured chat timeout."""
+    return _action(interpret._ask(prompt, model, key, timeout=interpret.CHAT_TIMEOUT))
 
 
 def _history(history: list[dict]) -> list[dict]:
@@ -77,34 +77,7 @@ def _russian_columns(columns: list[str], final: dict, dataset: dict) -> list[str
     return translated
 
 
-def _stream_answer(question: str, columns: list[str], rows: list[list],
-                   draft: str, model: str, key: str,
-                   emit: Callable[[dict], None]) -> str:
-    """Stream the agent's final wording from the model, grounded in SQL rows."""
-    from langchain_core.messages import HumanMessage
-    from langchain_openai import ChatOpenAI
-
-    prompt = (
-        'Ответь пользователю по-русски. Используй только значения результата SQL. '
-        'Не добавляй новых чисел. Не упоминай внутренние инструменты. '
-        f'Вопрос: {question}. Черновик: {draft}. '
-        f'Колонки: {json.dumps(columns, ensure_ascii=False)}. '
-        f'Строки: {json.dumps(rows[:20], ensure_ascii=False, default=str)}. '
-        'Дай короткий понятный ответ.'
-    )
-    chat = ChatOpenAI(model=interpret._model_id(model), api_key=key,
-                      base_url=interpret.OPENROUTER_URL, temperature=0,
-                      max_retries=0)
-    chunks: list[str] = []
-    for chunk in chat.stream([HumanMessage(content=prompt)]):
-        piece = chunk.content
-        if isinstance(piece, str) and piece:
-            chunks.append(piece)
-            emit({'type': 'delta', 'text': piece})
-    return ''.join(chunks).strip()
-
-
-def ask_dataset(dataset: dict, question: str, history: list[dict], *, reveal_sql: bool,
+def ask_dataset(dataset: dict, question: str, history: list[dict], *,
                 on_event: Callable[[dict], None] | None = None) -> dict:
     """Let the model inspect data, execute read-only SQL and explain the result."""
     key = interpret._openrouter_key()
@@ -181,12 +154,7 @@ def ask_dataset(dataset: dict, question: str, history: list[dict], *, reveal_sql
                          for row in rows]
             answer = str(final.get('answer') or '').strip() or f'Показано строк: {len(safe_rows)}.'
             if on_event:
-                on_event({'type': 'status', 'text': 'Формулирую ответ…'})
-                try:
-                    answer = _stream_answer(question, display_columns, rows, answer,
-                                            model, key, on_event) or answer
-                except Exception:
-                    on_event({'type': 'delta', 'text': answer})
+                on_event({'type': 'delta', 'text': answer})
             explanation = {
                 'source': str(dataset.get('title') or dataset.get('slug')),
                 'calculations': [str(item) for item in final.get('calculations', [])],
@@ -208,6 +176,47 @@ def ask_dataset(dataset: dict, question: str, history: list[dict], *, reveal_sql
     raise DatasetError(errors[0] if errors else 'модель вопросов недоступна')
 
 
+def _report_resources(catalog, metrics: dict, dimensions: dict,
+                      preferred: list[str]) -> dict:
+    """Prepare dataset schemas and vocabulary before the first model call."""
+    requested = set(preferred)
+    items = sorted(catalog.datasets.values(),
+                   key=lambda item: (item['slug'] not in requested, item['slug']))
+    return {'datasets': [
+        {'slug': item['slug'], 'title': item.get('title'),
+         'source': item['source'],
+         'fields': [{'name': field['name'], 'type': field['type']}
+                    for field in item.get('schema') or []]}
+        for item in items[:30]],
+        'metrics': metrics, 'dimensions': dimensions}
+
+
+def _report_observations(observations: list[dict]) -> str:
+    """Keep failed drafts and samples without repeating prefetched metadata."""
+    relevant = []
+    for item in observations:
+        action = item.get('action') or {}
+        if action.get('tool') in ('get_datasets', 'get_vocabulary'):
+            continue
+        result = item.get('result') or {}
+        if action.get('tool') == 'preview_report' and isinstance(result, dict):
+            if result.get('valid'):
+                continue
+            relevant.append({'action': action, 'error': result.get('error')})
+        else:
+            relevant.append(item)
+    return json.dumps(relevant[-4:], ensure_ascii=False, default=str)[-12000:]
+
+
+def _report_reply(definition: dict) -> str:
+    """Describe a verified proposal when no reply accompanied its draft."""
+    titles = [str(section.get('title') or '').strip()
+              for section in definition.get('sections') or []]
+    visible = [title for title in titles if title]
+    return ('Подготовил отчёт: ' + ', '.join(visible[:4]) + '.') if visible else (
+        'Отчёт готов. Проверьте предпросмотр и сохраните его.')
+
+
 def chat_report(messages: list[dict], catalog, fields=None, computed=None,
                 datasets=None, definition=None,
                 on_event: Callable[[dict], None] | None = None) -> dict:
@@ -227,19 +236,20 @@ def chat_report(messages: list[dict], catalog, fields=None, computed=None,
     metrics, dimensions = interpret.vocabulary_of(catalog, fields, computed)
     if not metrics and not catalog.datasets:
         return interpret.chat(messages, catalog, fields, computed, datasets, definition)
+    resources = _report_resources(catalog, metrics, dimensions, list(datasets or []))
     base = (
-        'Ты ReAct агент создания отчётов. На каждом шаге верни один JSON: '
-        '{"tool":"get_vocabulary|get_datasets|preview_report",'
-        '"args":{"definition":{...}}} либо '
-        '{"final":{"reply":"...","title":"..."}}. '
-        'Сначала изучи get_vocabulary или get_datasets. Собери полный визуальный '
+        'Ты ReAct агент создания отчётов. Верни один JSON: '
+        '{"tool":"preview_report","args":{"definition":{...},'
+        '"reply":"...","title":"..."}}. '
+        'Схемы датасетов и словарь уже приведены ниже. Сразу собери полный визуальный '
         'отчёт с понятными названиями блоков. Выбирай KPI для главных чисел, '
         'линию или область для динамики, столбцы для сравнения, таблицу для деталей; '
         'добавляй подходящие фильтры и несколько датасетов, когда это полезно. '
         'Выбирай вид по смыслу данных, не добавляй пустых или дублирующих блоков. '
-        'Для готового отчёта обязательно вызови preview_report с полным '
-        'ReportDefinition и исправляй ошибки следующим вызовом. '
-        'В final кратко объясни состав проверенного отчёта. '
+        'Для готового отчёта вызови preview_report с полным ReportDefinition, '
+        'кратким reply и названием title. Успешная проверка завершит ход; '
+        'после ошибки исправь определение следующим вызовом. '
+        'В reply кратко объясни состав предложенного отчёта. '
         'Текущий отчёт можно дополнять. Не выдумывай slug полей. '
         'Когда словарной раскладки недостаточно, создай SQL-блок: '
         '{"type":"table|chart|kpi","title":"...","datasetSlug":"slug",'
@@ -249,40 +259,39 @@ def chat_report(messages: list[dict], catalog, fields=None, computed=None,
         'Для графика первая колонка SQL — ось, следующие — ряды. '
         f'Предпочтительные датасеты: {json.dumps(datasets or [], ensure_ascii=False)}. '
         f'Текущий отчёт: {json.dumps(definition or {}, ensure_ascii=False)}. '
-        f'Переписка: {interpret._history(said, interpret.CHAT_HISTORY)}.'
+        f'Переписка: {interpret._history(said, interpret.CHAT_HISTORY)}. '
+        f'Доступные схемы и словарь: {json.dumps(resources, ensure_ascii=False, default=str)}.'
     )
     errors: list[str] = []
     for model in interpret._chat_models():
         if not model:
             continue
         validated: dict | None = None
+        draft_reply = ''
+        draft_title = ''
 
         def decide(observations: list[dict]) -> dict:
             """Ask the model to inspect context, validate a draft or finish."""
-            return _invoke(base + '\nНаблюдения: ' + json.dumps(
-                observations, ensure_ascii=False, default=str)[-22000:], model, key)
+            if validated is not None:
+                return {'final': {'reply': draft_reply or _report_reply(validated),
+                                  'title': draft_title}}
+            return _invoke(base + '\nНаблюдения: ' + _report_observations(observations),
+                           model, key)
 
         def use_tool(action: dict) -> dict:
             """Expose report metadata or validate and preview its definition."""
-            nonlocal validated
+            nonlocal validated, draft_reply, draft_title
             tool = action.get('tool')
             args = action.get('args') if isinstance(action.get('args'), dict) else {}
             if tool == 'get_vocabulary':
                 if on_event:
                     on_event({'type': 'status', 'text': 'Изучаю показатели и разрезы…'})
-                return {'tool': tool, 'metrics': metrics, 'dimensions': dimensions}
+                return {'tool': tool, 'metrics': resources['metrics'],
+                        'dimensions': resources['dimensions']}
             if tool == 'get_datasets':
                 if on_event:
                     on_event({'type': 'status', 'text': 'Изучаю датасеты…'})
-                requested = set(datasets or [])
-                items = sorted(catalog.datasets.values(),
-                               key=lambda item: (item['slug'] not in requested, item['slug']))
-                return {'tool': tool, 'datasets': [
-                    {'slug': item['slug'], 'title': item.get('title'),
-                     'source': item['source'],
-                     'fields': [{'name': field['name'], 'type': field['type']}
-                                for field in item.get('schema') or []]}
-                    for item in items[:30]]}
+                return {'tool': tool, 'datasets': resources['datasets']}
             if tool == 'preview_report':
                 if on_event:
                     on_event({'type': 'status', 'text': 'Проверяю карточки на данных…'})
@@ -303,8 +312,9 @@ def chat_report(messages: list[dict], catalog, fields=None, computed=None,
                                      'rows': len(block.get('rows', block.get('data', []))),
                                      'items': block.get('items', [])[:5]})
                 validated = candidate
-                return {'tool': tool, 'valid': True, 'blocks': previews,
-                        'definition': candidate}
+                draft_reply = str(args.get('reply') or '').strip()
+                draft_title = str(args.get('title') or '').strip()
+                return {'tool': tool, 'valid': True, 'blocks': previews}
             return {'error': 'Неизвестный инструмент.'}
 
         def finish(action: dict) -> tuple[dict | None, dict | None]:
