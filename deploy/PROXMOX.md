@@ -65,6 +65,41 @@ cd /opt/ai-reporter
 docker compose --env-file langfuse/.env -f langfuse/compose.proxmox.yml up -d
 ```
 
+## Автоматическая доставка из GitHub
+
+Workflow `.github/workflows/ci.yml` выполняет тесты бэкенда, lint и сборку
+фронтенда и проверку OpenSpec при каждом push в `main`. Контейнер 111 раз в
+две минуты сверяет SHA `main` с успешным запуском этого workflow. Только
+после успеха он обновляет код и пересобирает `backend` и `frontend`.
+Публичный SSH-порт и секреты в GitHub для этого не нужны.
+
+Установка таймера в LXC 111:
+
+```sh
+cp /opt/ai-reporter/deploy/ai-reporter-deploy.{service,timer} /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now ai-reporter-deploy.timer
+```
+
+Первый автоматический запуск заблокирован, пока нет файла
+`/var/lib/ai-reporter-deploy/enabled`: текущий код сервера может содержать
+изменения, отсутствующие в Git. После сверки и решения о первой замене
+создайте этот файл и запустите сервис. Последующие push в `main` доставляются
+автоматически:
+
+```sh
+python3 /opt/ai-reporter/deploy/proxmox_deploy.py --check
+touch /var/lib/ai-reporter-deploy/enabled
+systemctl start ai-reporter-deploy.service
+journalctl -u ai-reporter-deploy.service -n 80 --no-pager
+```
+
+Состояние, доставленный SHA и три последних снимка исходного кода находятся в
+`/var/lib/ai-reporter-deploy`. При ошибке новая версия не помечается
+доставленной, а прежний код и контейнеры восстанавливаются. Файлы `.env`,
+загруженные артефакты и Docker-тома не копируются и не удаляются. Langfuse
+работает отдельным Compose-проектом и не перезапускается доставкой.
+
 Адрес и ключи Langfuse для агента находятся в `backend/.env`, учётная запись
 администратора — в `langfuse/.env` (`LF_ADMIN_EMAIL`, `LF_ADMIN_PASSWORD`).
 Первоначальная метабаза перенесена из локального PostgreSQL как снимок.

@@ -1,0 +1,11 @@
+[Unit]
+Description=Check GitHub main for a verified AI Reporter release
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=2min
+Persistent=true
+Unit=ai-reporter-deploy.service
+
+[Install]
+WantedBy=timers.target

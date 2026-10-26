@@ -1,0 +1,11 @@
+[Unit]
+Description=Deploy CI-approved AI Reporter main on Proxmox
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/python3 /opt/ai-reporter/deploy/proxmox_deploy.py
+TimeoutStartSec=2400
