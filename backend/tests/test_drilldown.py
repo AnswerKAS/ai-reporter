@@ -43,6 +43,28 @@ def test_строки_датасета_целиком(model, sources):
     assert out['datasets'] == [{'slug': 'sales', 'title': 'Продажи'}]
 
 
+def test_raw_drilldown_rejects_dataset_outside_report(model):
+    """Report access must not disclose arbitrary registered datasets."""
+    with pytest.raises(DatasetError, match='датасет не входит в отчёт'):
+        drilldown.fetch(DEFINITION, dataset_slug='other')
+
+
+def test_sql_section_drilldown_uses_its_dataset(model, sources):
+    """SQL blocks expose raw source rows without requiring semantic metrics."""
+    definition = {'drilldown': True, 'sections': [{
+        'type': 'chart', 'kind': 'line', 'datasetSlug': 'sales',
+        'sql': 'SELECT day, SUM(revenue) AS total FROM dataset GROUP BY day',
+    }], 'filters': []}
+    sources.get('sales').result = (['id'], [[1]])
+
+    result = drilldown.fetch(definition, section_index=0, point={'day': '2026-01-01'})
+
+    assert result['dataset'] == 'sales'
+    assert result['datasets'] == [{'slug': 'sales', 'title': 'Продажи'}]
+    assert result['columns'] == ['id', 'city', 'day', 'revenue']
+    assert result['scopeNote']
+
+
 def test_страница_помечает_что_есть_ещё(model, sources):
     sources.get('sales').result = (['id'], [[i] for i in range(4)])
 

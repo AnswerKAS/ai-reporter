@@ -22,6 +22,7 @@ from ..datasets.base import DatasetError, sanitize_error
 from ..query import builder as query_builder
 from ..query import interpret
 from ..agent import store as agent_store
+from ..agent.tracing import agent_trace, record_output
 from ..mail import registry as mail_registry
 from ..reports import drilldown, executor
 from ..schemas.definition import ReportDefinition
@@ -159,17 +160,25 @@ def chat_report(payload: dict, user: dict = Depends(get_current_user)) -> dict:
     target = str(payload.get('target') or 'new')[:120]
     try:
         conversation = agent_store.conversation(
-            user['id'], 'report', target, payload.get('conversationId'), create=True)
+            user['id'], 'report', target, payload.get('conversationId'), create=True,
+            fresh=not payload.get('conversationId') and
+                  (target == 'new' or bool(payload.get('newConversation'))))
     except DatasetError as exc:
         raise HTTPException(404, str(exc)) from exc
     stored = agent_store.messages(conversation['id'])
-    context = ([{'role': item['role'], 'text': item['text']} for item in stored]
-               + [latest]) if stored else messages
+    context = [{'role': item['role'], 'text': item['text']} for item in stored] + [latest]
     catalog = query_builder.Catalog()
     try:
         from ..agent.runner import chat_report as agent_chat_report
-        result = agent_chat_report(context, catalog, fields, computed, datasets, definition)
-        agent_store.save_exchange(conversation['id'], latest['text'], result['reply'], result)
+        with agent_trace('report-builder', user_id=user['id'],
+                         session_id=conversation['id'],
+                         input_data={'target': target, 'message': latest['text']}) as trace:
+            result = agent_chat_report(
+                context, catalog, fields, computed, datasets, definition,
+                attached_datasets=payload.get('attachedDatasets') or [])
+            agent_store.save_exchange(conversation['id'], latest['text'], result['reply'], result)
+            record_output(trace, {'reply': result.get('reply'),
+                                  'sections': len((result.get('definition') or {}).get('sections', []))})
         return {**result, 'conversationId': conversation['id']}
     except DatasetError as exc:
         raise HTTPException(422, str(exc))
@@ -188,12 +197,13 @@ def stream_report_chat(payload: dict, user: dict = Depends(get_current_user)) ->
     target = str(payload.get('target') or 'new')[:120]
     try:
         conversation = agent_store.conversation(
-            user['id'], 'report', target, payload.get('conversationId'), create=True)
+            user['id'], 'report', target, payload.get('conversationId'), create=True,
+            fresh=not payload.get('conversationId') and
+                  (target == 'new' or bool(payload.get('newConversation'))))
     except DatasetError as exc:
         raise HTTPException(404, str(exc)) from exc
     stored = agent_store.messages(conversation['id'])
-    context = ([{'role': item['role'], 'text': item['text']} for item in stored]
-               + [latest]) if stored else messages
+    context = [{'role': item['role'], 'text': item['text']} for item in stored] + [latest]
     events: queue.Queue[dict | None] = queue.Queue()
 
     def worker() -> None:
@@ -201,11 +211,17 @@ def stream_report_chat(payload: dict, user: dict = Depends(get_current_user)) ->
         catalog = query_builder.Catalog()
         try:
             from ..agent.runner import chat_report as agent_chat_report
-            result = agent_chat_report(
-                context, catalog, payload.get('fields') or [],
-                payload.get('computed') or [], payload.get('datasets') or [],
-                payload.get('definition') or None, on_event=events.put)
-            agent_store.save_exchange(conversation['id'], latest['text'], result['reply'], result)
+            with agent_trace('report-builder', user_id=user['id'],
+                             session_id=conversation['id'],
+                             input_data={'target': target, 'message': latest['text']}) as trace:
+                result = agent_chat_report(
+                    context, catalog, payload.get('fields') or [],
+                    payload.get('computed') or [], payload.get('datasets') or [],
+                    payload.get('definition') or None, on_event=events.put,
+                    attached_datasets=payload.get('attachedDatasets') or [])
+                agent_store.save_exchange(conversation['id'], latest['text'], result['reply'], result)
+                record_output(trace, {'reply': result.get('reply'),
+                                      'sections': len((result.get('definition') or {}).get('sections', []))})
             events.put({'type': 'done', 'conversationId': conversation['id'], 'result': result})
         except Exception as exc:
             events.put({'type': 'error', 'message': sanitize_error(str(exc))})
@@ -232,16 +248,21 @@ def report_chat_history(target: str = 'new', conversation_id: str | None = None,
                         user: dict = Depends(get_current_user)) -> dict:
     """Restore a report conversation belonging to the authenticated user."""
     try:
-        item = agent_store.conversation(user['id'], 'report', target,
-                                        conversation_id)
+        item = (None if target == 'new' and not conversation_id else
+                agent_store.conversation(user['id'], 'report', target,
+                                         conversation_id))
     except DatasetError as exc:
         raise HTTPException(404, str(exc)) from exc
     if item is None:
         return {'conversationId': None, 'messages': []}
     stored = agent_store.messages(item['id'])
+    last_proposal = next((message['payload'] for message in reversed(stored)
+                          if message['role'] == 'assistant' and
+                          message['payload'].get('definition')), None)
     return {'conversationId': item['id'], 'messages': [
         {'role': message['role'], 'text': message['text']} for message in stored
-    ]}
+    ], 'proposal': ({'definition': last_proposal['definition'],
+                    'title': last_proposal.get('title')} if last_proposal else None)}
 
 
 @router.post('/reports/recommendations')
@@ -297,12 +318,20 @@ def create_builder_report(payload: dict, user: dict = Depends(get_current_user))
     slug = str(payload.get('slug') or '').strip() or f'report-{uuid.uuid4().hex[:8]}'
     if db.get_report(slug) is not None:
         raise HTTPException(409, f'отчёт с slug {slug} уже существует')
+    conversation_id = payload.get('conversationId')
+    if conversation_id:
+        try:
+            agent_store.conversation(user['id'], 'report', 'new', conversation_id)
+        except DatasetError as exc:
+            raise HTTPException(404, str(exc)) from exc
     db.create_report(
         id=uuid.uuid4().hex, slug=slug, title=title,
         description=payload.get('description'),
         definition=definition.model_dump(by_alias=True),
         created_by=user['id'],
     )
+    if conversation_id:
+        agent_store.attach_report(user['id'], conversation_id, slug)
     return {'report': _meta_for(db.get_report(slug), user)}
 
 
@@ -441,6 +470,7 @@ def _drilldown_args(payload: dict) -> dict:
         'section_index': int(section) if section is not None else None,
         'dataset_slug': payload.get('datasetSlug') or None,
         'point': point,
+        'metric_key': payload.get('metricKey') or None,
     }
 
 

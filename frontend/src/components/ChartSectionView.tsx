@@ -162,7 +162,7 @@ export function ChartSectionView({
   onDrill,
 }: {
   section: ChartSection
-  onDrill?: (point: Record<string, string | number | null>, label: string) => void
+  onDrill?: (point: Record<string, string | number | null>, label: string, metricKey?: string) => void
 }) {
   const { kind, data, xKey, series, detail, groupKeys, seriesSplit } = section
   const [selected, setSelected] = useState<string | null>(null)
@@ -192,7 +192,8 @@ export function ChartSectionView({
     if (groupKeys?.[1] && split !== undefined) point[groupKeys[1]] = split
     // в подписи только значения разрезов: ключ серии без разбивки — это имя
     // метрики, и в заголовке окна оно ничего не объясняет
-    onDrill(point, [value, split].filter((v) => v != null && v !== '').join(' · '))
+    const metricKey = series.find((item) => item.key === seriesKey)?.metricKey
+    onDrill(point, [value, split].filter((v) => v != null && v !== '').join(' · '), metricKey)
   }
 
 

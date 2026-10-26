@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { DrillPage, DrillPoint } from '../lib/api'
 import { ApiError, exportDrilldown, fetchDrilldown } from '../lib/api'
 import { formatValue } from '../lib/format'
@@ -30,9 +30,11 @@ export function DrilldownDialog({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const requestId = useRef(0)
 
   const load = useCallback(
     async (offset: number, pick?: string) => {
+      const currentRequest = ++requestId.current
       setBusy(true)
       setError(null)
       try {
@@ -42,13 +44,17 @@ export function DrilldownDialog({
           limit: PAGE,
           offset,
         })
-        setPage(data)
-        setDataset(data.dataset)
-        setRows((prev) => (offset === 0 ? data.rows : [...prev, ...data.rows]))
+        if (currentRequest === requestId.current) {
+          setPage(data)
+          setDataset(data.dataset)
+          setRows((prev) => (offset === 0 ? data.rows : [...prev, ...data.rows]))
+        }
       } catch (err) {
-        setError(err instanceof ApiError ? err.message : 'не удалось получить строки')
+        if (currentRequest === requestId.current) {
+          setError(err instanceof ApiError ? err.message : 'не удалось получить строки')
+        }
       } finally {
-        setBusy(false)
+        if (currentRequest === requestId.current) setBusy(false)
       }
     },
     // dataset меняется вместе с выбором источника, поэтому в зависимостях он есть
@@ -57,6 +63,7 @@ export function DrilldownDialog({
 
   useEffect(() => {
     void load(0)
+    return () => { requestId.current += 1 }
     // первая страница грузится один раз на открытие: смена датасета идёт своим путём
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -108,6 +115,8 @@ export function DrilldownDialog({
                 className="py-1.5"
                 value={dataset ?? ''}
                 onChange={(e) => {
+                  setDataset(e.target.value)
+                  setPage(null)
                   setRows([])
                   void load(0, e.target.value)
                 }}
@@ -126,6 +135,8 @@ export function DrilldownDialog({
           </span>
           <span>фильтры отчёта учтены</span>
         </div>
+
+        {page?.scopeNote && <Alert>{page.scopeNote}</Alert>}
 
         {error && <Alert>{error}</Alert>}
 

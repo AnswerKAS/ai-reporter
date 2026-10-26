@@ -102,6 +102,10 @@ export interface DatasetAnswerExplanation {
 }
 
 export interface DatasetQuestionTurn {
+  datasetSlug?: string
+  datasetTitle?: string
+  datasetSlugs?: string[]
+  datasetTitles?: string[]
   question: string
   answer: string
   columns: string[]
@@ -109,8 +113,17 @@ export interface DatasetQuestionTurn {
   plan: Record<string, unknown>
   truncated: boolean
   explanation: DatasetAnswerExplanation
-  sql?: string
+  sql?: string | null
   parameters?: Record<string, string | number | boolean>
+  evidence?: Array<{
+    datasetSlug: string
+    datasetTitle: string
+    columns: string[]
+    rows: string[][]
+    sql: string
+    truncated: boolean
+  }>
+  hypotheses?: Array<{ text: string; howToCheck: string }>
 }
 
 export interface DimensionSuggestion {

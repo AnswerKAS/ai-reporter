@@ -273,14 +273,14 @@ export function DatasetPicker({
   return (
     <section className="flex flex-col gap-3 rounded-card border border-line bg-surface p-4">
       <div className="flex flex-wrap items-baseline justify-between gap-3">
-        <h2>Шаг 1. Данные</h2>
+        <h2>Ручной выбор данных</h2>
         <span className="text-xs text-fg-muted tabular-nums" aria-live="polite">
           {filtered ? `под отбор попало ${shown.length} из ${total}` : `датасетов: ${total}`}
         </span>
       </div>
       <p className="max-w-prose text-xs text-fg-muted">
-        Выберите датасет и поля, которые понадобятся в отчёте. Дальше, на раскладке, датасет уже
-        не спрашивают — он приезжает вместе с полем. Цвет карточки — группа связей: датасеты
+        Ручной выбор необязателен: в чате можно прикрепить датасет через @, и агент выберет поля.
+        Цвет карточки — группа связей: датасеты
         одного цвета соединяются связями и встают в одну секцию отчёта, разного — нет.
       </p>
 

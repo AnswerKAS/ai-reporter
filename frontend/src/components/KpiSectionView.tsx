@@ -18,7 +18,7 @@ export function KpiSectionView({
   onDrill,
 }: {
   items: KpiItem[]
-  onDrill?: (point: Record<string, string | number | null>, label: string) => void
+  onDrill?: (point: Record<string, string | number | null>, label: string, metricKey?: string) => void
 }) {
   // до пяти карточек в ряд; ступени считаются по ширине контейнера, чтобы
   // в узком предпросмотре конструктора карточки не сжимались в полоски.
@@ -41,7 +41,7 @@ export function KpiSectionView({
           <Card
             key={item.label}
             interactive={Boolean(onDrill)}
-            onClick={onDrill ? () => onDrill({}, item.label) : undefined}
+            onClick={onDrill ? () => onDrill({}, item.label, item.metricKey) : undefined}
           >
             <div className="mb-2 text-sm text-fg-muted">{item.label}</div>
             <div className="mb-2 text-2xl font-bold tracking-tight tabular-nums">

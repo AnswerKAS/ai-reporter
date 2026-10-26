@@ -47,7 +47,8 @@ def test_карточка_показывает_метрику_с_её_форма
 
     built = executor.build_section(section(type='kpi', by=[]), {})
 
-    assert built['items'] == [{'label': 'Выручка', 'value': 1234.5, 'format': 'money'}]
+    assert built['items'] == [{'metricKey': 'revenue', 'label': 'Выручка',
+                               'value': 1234.5, 'format': 'money'}]
     assert built['dataOrigin'] == 'live'
 
 
@@ -78,6 +79,19 @@ def test_карточка_без_данных_показывает_ноль(mode
     assert built['items'][0]['value'] == 0
 
 
+def test_sql_block_marks_drilldown_as_dataset_rows(model, monkeypatch):
+    """A SQL aggregation must not imply that raw rows match the clicked point."""
+    monkeypatch.setattr(executor, 'execute_readonly_sql',
+                        lambda *args, **kwargs: (['city', 'total'], [['Москва', 100.0]], False))
+
+    built = executor.build_section(SectionDefinition.model_validate({
+        'type': 'chart', 'kind': 'bar', 'datasetSlug': 'sales',
+        'sql': 'SELECT city, SUM(revenue) AS total FROM dataset GROUP BY city',
+    }), {})
+
+    assert built['drilldownScope'] == 'dataset'
+
+
 def test_единица_измерения_становится_подсказкой(model, rows, metabase):
     from app.semantic import registry as semantic
 
@@ -98,6 +112,7 @@ def test_таблица_собирает_колонки_разрезов_и_ме
 
     assert built['columns'] == [{'key': 'city', 'header': 'Город'},
                                 {'key': 'revenue', 'header': 'Выручка', 'format': 'money'}]
+    assert built['metricKeys'] == ['revenue']
     assert built['rows'] == [{'city': 'Москва', 'revenue': 100.0}]
     assert built['groupKeys'] == ['city']
 
@@ -140,7 +155,7 @@ def test_график_рисует_серию_на_метрику(model, rows):
 
     assert built['kind'] == 'line'
     assert built['xKey'] == 'day'
-    assert built['series'] == [{'key': 'revenue', 'name': 'Выручка'}]
+    assert built['series'] == [{'key': 'revenue', 'name': 'Выручка', 'metricKey': 'revenue'}]
 
 
 def test_график_по_умолчанию_столбцы(model, rows):
@@ -197,6 +212,8 @@ def test_combo_pivot_inherits_metric_marks(model, rows):
 
     assert {item['name']: item['type'] for item in built['series']} == {
         'Выручка · Москва': 'bar', 'План · Москва': 'line'}
+    assert {item['name']: item['metricKey'] for item in built['series']} == {
+        'Выручка · Москва': 'revenue', 'План · Москва': 'plan'}
 
 
 def test_второй_разрез_разворачивается_в_серии(model, rows):
@@ -210,6 +227,7 @@ def test_второй_разрез_разворачивается_в_серии(
     assert [s['key'] for s in built['series']] == ['Москва', 'Тверь']
     assert built['data'][0] == {'day': '2026-01-01', 'Москва': 10.0, 'Тверь': 20.0}
     assert built['seriesSplit'] == {'Москва': 'Москва', 'Тверь': 'Тверь'}
+    assert all(item['metricKey'] == 'revenue' for item in built['series'])
 
 
 def test_пустое_значение_второго_разреза_называется_прочерком(model, rows):

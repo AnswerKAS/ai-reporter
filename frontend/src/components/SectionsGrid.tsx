@@ -27,7 +27,8 @@ export function SectionsGrid({
   sections: ReportSection[]
   className?: string
   /** Детализация: индекс секции нужен, чтобы сервер знал, чьё сырьё показать. */
-  onDrill?: (sectionIndex: number, point: Record<string, string | number | null>, label: string) => void
+  onDrill?: (sectionIndex: number, point: Record<string, string | number | null>, label: string,
+             metricKey?: string, scope?: 'dataset') => void
 }) {
   return (
     <div className={cn('@container', className)}>
@@ -45,7 +46,8 @@ export function SectionsGrid({
                 section={section}
                 onDrill={
                   onDrill
-                    ? ((point, label) => onDrill(i, point, label)) satisfies DrillHandler
+                    ? ((point, label, metricKey) => onDrill(i, point, label, metricKey,
+                      section.type === 'markdown' ? undefined : section.drilldownScope)) satisfies DrillHandler
                     : undefined
                 }
               />

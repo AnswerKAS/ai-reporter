@@ -262,6 +262,64 @@ def test_сырые_строки_второго_держателя(two_facts):
     assert 't2.`plan` AS `plan`' in query.sql
 
 
+def test_selected_metric_limits_drilldown_to_its_dataset(two_facts):
+    """A clicked metric cannot silently show the first fact table's rows."""
+    from app.reports import drilldown
+
+    definition = {'drilldown': True, 'sections': [
+        {'type': 'kpi', 'metrics': ['revenue', 'plan']}], 'filters': []}
+
+    result = drilldown.fetch(definition, section_index=0, metric_key='plan', limit=2)
+
+    assert result['dataset'] == 'plans'
+    assert result['datasets'] == [{'slug': 'plans', 'title': 'plans'}]
+    assert result['columns'] == ['city', 'plan']
+
+
+def test_selected_metric_rejects_another_dataset(two_facts):
+    """Dataset override stays within the clicked metric's source set."""
+    from app.reports import drilldown
+
+    definition = {'drilldown': True, 'sections': [
+        {'type': 'kpi', 'metrics': ['revenue', 'plan']}], 'filters': []}
+
+    with pytest.raises(DatasetError, match='не относится к выбранному показателю'):
+        drilldown.fetch(definition, section_index=0, metric_key='plan', dataset_slug='sales')
+
+
+def test_unknown_drilldown_metric_is_rejected(two_facts):
+    """Only metrics visible in the selected report section may be drilled."""
+    from app.reports import drilldown
+
+    definition = {'drilldown': True, 'sections': [
+        {'type': 'kpi', 'metrics': ['revenue']}], 'filters': []}
+
+    with pytest.raises(DatasetError, match='не входит в секцию'):
+        drilldown.fetch(definition, section_index=0, metric_key='plan')
+
+
+def test_formula_exposes_both_raw_datasets(two_facts):
+    """A cross-dataset formula can be checked against each operand's rows."""
+    from app.reports import drilldown
+
+    definition = {'drilldown': True, 'sections': [
+        {'type': 'kpi', 'metrics': ['ratio']}],
+        'computed': [{'key': 'ratio', 'title': 'Выполнение', 'left': 'revenue',
+                      'right': 'plan', 'op': '/'}], 'filters': []}
+
+    result = drilldown.fetch(definition, section_index=0, metric_key='ratio', limit=1)
+
+    assert [item['slug'] for item in result['datasets']] == ['sales', 'plans']
+    assert result['dataset'] == 'sales'
+
+    from app.query.builder import Catalog
+    from app.schemas.definition import ReportDefinition
+
+    spec = ReportDefinition.model_validate(definition)
+    assert [item['slug'] for item in drilldown.report_datasets(spec, Catalog())] == [
+        'sales', 'plans']
+
+
 def test_сырые_строки_чужого_датасета_отклоняются(world):
     with pytest.raises(DatasetError, match='нечего показать построчно'):
         SectionQuery(['revenue'], []).raw_query('cities')

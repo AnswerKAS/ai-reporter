@@ -31,7 +31,7 @@ function RowsNote({ note }: { note?: string }) {
 const SECTION = 'rounded-card border border-line bg-surface p-5'
 
 /** Обработчик детализации: точка (значения разрезов) и подпись для окна. */
-export type DrillHandler = (point: Record<string, string | number | null>, label: string) => void
+export type DrillHandler = (point: Record<string, string | number | null>, label: string, metricKey?: string) => void
 
 /** Общий рендер всех секций отчёта с их заголовками и пометками. */
 export function SectionRenderer({ section, onDrill }: { section: ReportSection; onDrill?: DrillHandler }) {

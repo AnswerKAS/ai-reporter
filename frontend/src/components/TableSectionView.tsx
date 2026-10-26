@@ -46,7 +46,7 @@ export function TableSectionView({
   onDrill,
 }: {
   section: TableSection
-  onDrill?: (point: Record<string, string | number | null>, label: string) => void
+  onDrill?: (point: Record<string, string | number | null>, label: string, metricKey?: string) => void
 }) {
   const [wanted, setWanted] = useState(0)
 
@@ -120,7 +120,9 @@ export function TableSectionView({
             >
               {section.columns.map((c) => {
                 const level = levelOf(c)
-                if (level < 0) return <Td key={c.key}>{formatValue(row[c.key], c.format)}</Td>
+                if (level < 0) return <Td key={c.key} onClick={onDrill && section.metricKeys?.includes(c.key)
+                  ? (event) => { event.stopPropagation(); onDrill(pointOf(row), labelOf(row), c.key) }
+                  : undefined}>{formatValue(row[c.key], c.format)}</Td>
                 const repeated = level < levels[i]
                 const background = groupBackground(level, groupKeys.length - 1)
                 return (

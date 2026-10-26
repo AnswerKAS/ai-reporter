@@ -14,8 +14,9 @@ def _now() -> str:
 
 
 def conversation(user_id: str, kind: str, target: str,
-                 conversation_id: str | None = None, *, create: bool = False) -> dict | None:
-    """Find an owned conversation, or create one when the caller starts a turn."""
+                 conversation_id: str | None = None, *, create: bool = False,
+                 fresh: bool = False) -> dict | None:
+    """Find an owned conversation, or create a fresh one for a new draft."""
     with db._conn() as conn:
         if conversation_id:
             item = conn.execute(
@@ -26,7 +27,7 @@ def conversation(user_id: str, kind: str, target: str,
             if item is None:
                 raise DatasetError('диалог не найден или нет доступа')
             return dict(item)
-        item = conn.execute(
+        item = None if fresh else conn.execute(
             'SELECT * FROM agent_conversations WHERE user_id = %s AND kind = %s '
             'AND target = %s ORDER BY updated_at DESC LIMIT 1',
             (user_id, kind, target),
@@ -43,6 +44,47 @@ def conversation(user_id: str, kind: str, target: str,
         )
         return {'id': identifier, 'user_id': user_id, 'kind': kind,
                 'target': target, 'created_at': now, 'updated_at': now}
+
+
+def attach_report(user_id: str, conversation_id: str, report_slug: str) -> None:
+    """Move an owned draft conversation from the new-report target to its report."""
+    with db._conn() as conn:
+        item = conn.execute(
+            'SELECT id FROM agent_conversations WHERE id = %s AND user_id = %s '
+            'AND kind = %s AND target = %s',
+            (conversation_id, user_id, 'report', 'new'),
+        ).fetchone()
+        if item is None:
+            raise DatasetError('диалог нового отчёта не найден или нет доступа')
+        conn.execute('UPDATE agent_conversations SET target = %s, updated_at = %s '
+                     'WHERE id = %s', (report_slug, _now(), conversation_id))
+
+
+def save_named(user_id: str, kind: str, target: str, title: str,
+               conversation_id: str | None = None) -> dict:
+    """Name an owned conversation, creating an empty one when needed."""
+    item = conversation(user_id, kind, target, conversation_id,
+                        create=True, fresh=not conversation_id)
+    now = _now()
+    with db._conn() as conn:
+        conn.execute('UPDATE agent_conversations SET title = %s, '
+                     'saved_at = COALESCE(saved_at, %s), updated_at = %s '
+                     'WHERE id = %s AND user_id = %s',
+                     (title, now, now, item['id'], user_id))
+        row = conn.execute('SELECT * FROM agent_conversations WHERE id = %s '
+                           'AND user_id = %s', (item['id'], user_id)).fetchone()
+    return dict(row)
+
+
+def list_saved(user_id: str, kind: str, target: str) -> list[dict]:
+    """List explicitly saved chats in one owner and target scope."""
+    with db._conn() as conn:
+        rows = conn.execute('SELECT id, kind, target, title, saved_at, updated_at '
+                            'FROM agent_conversations WHERE user_id = %s AND kind = %s '
+                            'AND target = %s AND saved_at IS NOT NULL '
+                            'ORDER BY updated_at DESC, id DESC',
+                            (user_id, kind, target)).fetchall()
+    return [dict(row) for row in rows]
 
 
 def messages(conversation_id: str) -> list[dict]:
@@ -85,5 +127,9 @@ def dataset_history(conversation_id: str) -> list[dict]:
         if user['role'] == 'user' and assistant['role'] == 'assistant':
             turns.append({'question': user['text'], 'answer': assistant['text'],
                           'sql': assistant['payload'].get('sql'),
-                          'plan': assistant['payload'].get('plan')})
+                          'plan': assistant['payload'].get('plan'),
+                          'datasetSlug': assistant['payload'].get('datasetSlug'),
+                          'datasetSlugs': assistant['payload'].get('datasetSlugs') or
+                          ([assistant['payload']['datasetSlug']]
+                           if assistant['payload'].get('datasetSlug') else [])})
     return turns

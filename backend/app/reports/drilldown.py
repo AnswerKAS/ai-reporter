@@ -60,17 +60,33 @@ def report_datasets(definition: ReportDefinition, catalog: builder.Catalog) -> l
     """Датасеты, на которых стоит отчёт, — для кнопки «сырые строки»."""
     slugs: list[str] = []
     own = {f.key: f.dataset_slug for f in definition.fields}
+    computed = {f.key: f for f in definition.computed}
+
+    def sources_of(key: str, seen: frozenset[str] = frozenset()) -> list[str]:
+        """Resolve a visible field to source datasets, including formula operands."""
+        if key in seen:
+            return []
+        formula = computed.get(key)
+        if formula:
+            visited = seen | {key}
+            return sources_of(formula.left, visited) + sources_of(formula.right, visited)
+        found = catalog.metrics.get(key) or catalog.dimensions.get(key)
+        dataset = found['dataset_slug'] if found else own.get(key)
+        return [dataset] if dataset else []
+
     for section in definition.sections:
+        if section.sql and section.dataset_slug and section.dataset_slug not in slugs:
+            slugs.append(section.dataset_slug)
         for slug in list(section.metrics) + list(section.by):
-            found = catalog.metrics.get(slug) or catalog.dimensions.get(slug)
-            dataset = found['dataset_slug'] if found else own.get(slug)
-            if dataset and dataset not in slugs:
-                slugs.append(dataset)
+            for dataset in sources_of(slug):
+                if dataset not in slugs:
+                    slugs.append(dataset)
     return [{'slug': s, 'title': catalog.dataset(s)['title']} for s in slugs]
 
 
 def dataset_rows(dataset_slug: str, filter_values: dict, catalog: builder.Catalog,
-                 *, limit: int = PAGE_LIMIT, offset: int = 0) -> tuple[list[str], list[list]]:
+                 *, limit: int = PAGE_LIMIT, offset: int = 0,
+                 own_dimensions: dict | None = None) -> tuple[list[str], list[list]]:
     """Строки датасета целиком: все колонки, фильтры отчёта учтены."""
     dataset = catalog.dataset(dataset_slug)
     fields = [f.get('name') for f in (dataset.get('schema') or []) if f.get('name')]
@@ -87,7 +103,7 @@ def dataset_rows(dataset_slug: str, filter_values: dict, catalog: builder.Catalo
         if value in (None, ''):
             continue
         slug, _ = builder.split_filter_key(key)
-        dim = catalog.dimensions.get(slug)
+        dim = catalog.dimensions.get(slug) or (own_dimensions or {}).get(slug)
         # фильтр по чужому датасету к этим строкам не относится
         if dim is None or dim['dataset_slug'] != dataset_slug:
             continue
@@ -112,7 +128,8 @@ def dataset_rows(dataset_slug: str, filter_values: dict, catalog: builder.Catalo
 
 def fetch(definition: dict | ReportDefinition, *, filter_values: dict | None = None,
           section_index: int | None = None, dataset_slug: str | None = None,
-          point: dict | None = None, limit: int = PAGE_LIMIT, offset: int = 0) -> dict:
+          point: dict | None = None, metric_key: str | None = None,
+          limit: int = PAGE_LIMIT, offset: int = 0) -> dict:
     """Сырые строки под отчётом: по датасету целиком или под точкой секции."""
     spec = (definition if isinstance(definition, ReportDefinition)
             else ReportDefinition.model_validate(definition))
@@ -122,24 +139,48 @@ def fetch(definition: dict | ReportDefinition, *, filter_values: dict | None = N
     catalog = builder.Catalog()
     try:
         available = report_datasets(spec, catalog)
+        own_dimensions = {field.key: {'dataset_slug': field.dataset_slug,
+                                      'field': field.field, 'type': field.type}
+                          for field in spec.fields if field.role == 'dimension'}
+        scope_note = None
         if section_index is None:
+            if metric_key:
+                raise DatasetError('показатель можно выбрать только для секции')
+            if dataset_slug and dataset_slug not in {item['slug'] for item in available}:
+                raise DatasetError('датасет не входит в отчёт')
             slug = dataset_slug or (available[0]['slug'] if available else None)
             if slug is None:
                 raise DatasetError('в отчёте нет ни одного датасета')
-            columns, rows = dataset_rows(slug, values, catalog, limit=limit + 1, offset=offset)
+            columns, rows = dataset_rows(slug, values, catalog, limit=limit + 1,
+                                         offset=offset, own_dimensions=own_dimensions)
             title = catalog.dataset(slug)['title']
         else:
             if not 0 <= section_index < len(spec.sections):
                 raise DatasetError('секция не найдена')
             section = spec.sections[section_index]
-            query = _section_query(spec, section, values, catalog)
-            holders = [{'slug': s, 'title': catalog.dataset(s)['title']}
-                       for s in query.raw_datasets()]
-            available = holders or available
-            slug = dataset_slug or (holders[0]['slug'] if holders else None)
-            columns, rows = query.run_raw(slug, point=point or {},
-                                          limit=limit + 1, offset=offset)
-            title = catalog.dataset(slug)['title'] if slug else ''
+            if section.sql:
+                if metric_key:
+                    raise DatasetError('у SQL-секции нет показателей словаря')
+                slug = section.dataset_slug
+                available = [{'slug': slug, 'title': catalog.dataset(slug)['title']}]
+                columns, rows = dataset_rows(slug, values, catalog,
+                                             limit=limit + 1, offset=offset,
+                                             own_dimensions=own_dimensions)
+                title = catalog.dataset(slug)['title']
+                scope_note = ('Показаны исходные строки датасета. Условия SQL-блока '
+                              'и выбранная точка графика к ним не применяются.')
+            else:
+                query = _section_query(spec, section, values, catalog)
+                holder_slugs = query.raw_datasets(metric_key)
+                holders = [{'slug': s, 'title': catalog.dataset(s)['title']}
+                           for s in holder_slugs]
+                available = holders or available
+                if dataset_slug and dataset_slug not in holder_slugs:
+                    raise DatasetError('датасет не относится к выбранному показателю')
+                slug = dataset_slug or (holders[0]['slug'] if holders else None)
+                columns, rows = query.run_raw(slug, point=point or {},
+                                              limit=limit + 1, offset=offset)
+                title = catalog.dataset(slug)['title'] if slug else ''
     finally:
         catalog.close()
 
@@ -153,6 +194,7 @@ def fetch(definition: dict | ReportDefinition, *, filter_values: dict | None = N
         'rows': _rows(columns, rows[:limit]),
         'offset': offset,
         'hasMore': has_more,
+        'scopeNote': scope_note,
     }
 
 

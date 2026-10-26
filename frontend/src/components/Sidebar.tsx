@@ -1,13 +1,18 @@
 import { useRef, useState, type PointerEvent as ReactPointerEvent, type KeyboardEvent } from 'react'
 import { cn } from '../lib/cn'
 import { ReportTree } from './ReportTree'
+import { ChatSidebar } from './ChatSidebar'
 
-/** Левое меню: список отчётов с поиском и управлением. */
-export function Sidebar({ className, onNavigate }: { className?: string; onNavigate?: () => void }) {
+type SidebarKind = 'reports' | 'chats'
+
+/** Левое меню текущего раздела: каталог отчётов или сохранённые консультации. */
+export function Sidebar({ className, onNavigate, kind = 'reports' }: {
+  className?: string; onNavigate?: () => void; kind?: SidebarKind
+}) {
   return (
     <div className={className}>
       <div className="flex flex-col gap-4">
-        <ReportTree onNavigate={onNavigate} />
+        {kind === 'reports' ? <ReportTree onNavigate={onNavigate} /> : <ChatSidebar onNavigate={onNavigate} />}
       </div>
     </div>
   )
@@ -36,7 +41,7 @@ function readWidth(): number {
 
     Ручка — не только мышь: это `separator` с фокусом и стрелками, иначе
     настроить ширину с клавиатуры было бы нельзя. */
-export function SidebarPanel({ className }: { className?: string }) {
+export function SidebarPanel({ className, kind = 'reports' }: { className?: string; kind?: SidebarKind }) {
   const [width, setWidth] = useState(readWidth)
   const [resizing, setResizing] = useState(false)
   const panel = useRef<HTMLDivElement>(null)
@@ -94,7 +99,7 @@ export function SidebarPanel({ className }: { className?: string }) {
       className={cn('sticky top-0 hidden h-dvh shrink-0 xl:flex', className)}
       style={{ width }}
     >
-      <Sidebar className="min-w-0 flex-1 overflow-y-auto border-r border-line bg-surface" />
+      <Sidebar kind={kind} className="min-w-0 flex-1 overflow-y-auto border-r border-line bg-surface" />
       <div
         role="separator"
         aria-orientation="vertical"

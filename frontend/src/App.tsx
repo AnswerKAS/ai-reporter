@@ -45,7 +45,7 @@ function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
 }
 
 /** Постоянная навигация на широком экране и компактная шапка на узком. */
-function Navbar({ showCatalog }: { showCatalog: boolean }) {
+function Navbar({ sidebarKind }: { sidebarKind: 'reports' | 'chats' | null }) {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
   const [menuOpen, setMenuOpen] = useState(false)
@@ -90,7 +90,7 @@ function Navbar({ showCatalog }: { showCatalog: boolean }) {
         </div>
         {menuOpen && <div className="max-h-[calc(100dvh-4rem)] overflow-y-auto border-t border-line p-4 shadow-pop">
           <nav aria-label="Основная навигация" className="flex flex-col gap-1"><NavLinks onNavigate={() => setMenuOpen(false)} /></nav>
-          {showCatalog && <Sidebar className="mt-4 border-t border-line pt-4" onNavigate={() => setMenuOpen(false)} />}
+          {sidebarKind && <Sidebar kind={sidebarKind} className="mt-4 border-t border-line pt-4" onNavigate={() => setMenuOpen(false)} />}
           <div className="mt-4 flex items-center justify-between border-t border-line pt-3">
             <NavLink to="/account" onClick={() => setMenuOpen(false)} className="text-sm font-medium text-fg">{user?.username}</NavLink>
             <Button size="sm" variant="ghost" onClick={() => void signOut()}>Выйти</Button>
@@ -146,15 +146,18 @@ function LegacyBuilderRedirect() {
     пользователь уже есть, и каталог отчётов успевал мелькнуть за формой. */
 function Layout() {
   const { user } = useAuth()
-  const { pathname } = useLocation()
+  const location = useLocation()
+  const { pathname } = location
   const showMenu = Boolean(user) && pathname !== '/login'
   const showCatalog = showMenu && (pathname === '/' || pathname.startsWith('/reports'))
+  const sidebarKind = showCatalog ? 'reports' : showMenu && pathname === '/workspace' &&
+    new URLSearchParams(location.search).get('mode') !== 'report' ? 'chats' : null
 
   return (
     <div className="flex min-h-dvh flex-col bg-bg text-fg lg:flex-row">
-      {showMenu && <Navbar showCatalog={showCatalog} />}
+      {showMenu && <Navbar sidebarKind={sidebarKind} />}
       <div className="flex min-w-0 flex-1 items-stretch">
-        {showCatalog && <SidebarPanel />}
+        {sidebarKind && <SidebarPanel kind={sidebarKind} />}
         <div className="min-w-0 flex-1">
           <Suspense fallback={<RouteLoading />}><Routes>
             <Route path="/login" element={<LoginRoute />} />

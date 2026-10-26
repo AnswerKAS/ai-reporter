@@ -432,10 +432,9 @@ def test_report_chat_returns_verified_definition(client, model, user_headers, mo
     """The report endpoint returns a layout after the visual preview tool."""
     definition = {'sections': [{'type': 'table', 'metrics': ['revenue'], 'by': ['city']}],
                   'filters': [{'dimension': 'city', 'kind': 'select'}]}
-    actions = iter([{'tool': 'get_vocabulary'},
-                    {'tool': 'preview_report', 'args': {'definition': definition}},
-                    {'final': {'reply': 'Собрал выручку по городам.',
-                               'title': 'Продажи по городам'}}])
+    actions = iter([{'tool': 'preview_report', 'args': {
+        'definition': definition, 'reply': 'Собрал выручку по городам.',
+        'title': 'Продажи по городам'}}])
     monkeypatch.setattr(interpret, '_openrouter_key', lambda: 'fake')
     monkeypatch.setattr(interpret, '_chat_models', lambda: ('fake-model', None))
     monkeypatch.setattr(runner, '_invoke', lambda *_: next(actions))
@@ -458,20 +457,17 @@ def test_метод_на_пустой_переписке_422(client, model, user
     assert 'обычными словами' in answer.json()['detail']
 
 
-def test_report_chat_without_model_chooses_visual_layout(client, model, user_headers,
-                                                          monkeypatch):
-    """The parser picks a concrete layout without making the user choose a card."""
+def test_report_chat_requires_configured_model(client, model, user_headers,
+                                               monkeypatch):
+    """The universal report agent reports missing model configuration."""
     monkeypatch.setattr(interpret, '_openrouter_key', lambda: None)
 
     response = client.post('/api/reports/chat',
                            json={'messages': [{'role': 'user', 'text': 'собери отчёт'}]},
                            headers=user_headers)
 
-    assert response.status_code == 200
-    body = response.json()
-    assert body['source'] == 'parser'
-    assert body['definition']['sections']
-    assert 'recommendations' not in body
+    assert response.status_code == 422
+    assert 'Модель для конструктора не настроена' in response.json()['detail']
 
 
 def test_рекомендации_доступны_без_реплики_и_модели(client, model, user_headers,

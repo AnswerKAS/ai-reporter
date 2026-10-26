@@ -975,14 +975,20 @@ class SectionQuery:
 
     # --- сырые строки (детализация) ---
 
-    def raw_datasets(self) -> list[str]:
+    def raw_datasets(self, metric_key: str | None = None) -> list[str]:
         """Датасеты, чьи строки имеет смысл показывать как сырьё секции.
 
         Это держатели метрик: именно их строки сложились в число, на которое
         смотрит читатель. Справочники в плане участвуют как путь к разрезу и
         своих фактов не несут.
         """
-        return list(self.metric_datasets) or self.dataset_slugs[:1]
+        if metric_key is None:
+            return list(self.metric_datasets) or self.dataset_slugs[:1]
+        if metric_key not in self.metric_defs:
+            raise DatasetError(f'показатель {metric_key} не входит в секцию')
+        holders = (self._operand_datasets(metric_key) if metric_key in self.computed_defs
+                   else {self._holder_of(metric_key)})
+        return [slug for slug in self.metric_datasets if slug in holders]
 
     def raw_query(self, dataset: str | None = None, *, point: dict[str, str] | None = None,
                   limit: int = 500, offset: int = 0) -> tuple[Query, list[str]]:

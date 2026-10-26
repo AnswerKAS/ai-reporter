@@ -20,6 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .api import admin as admin_api
 from .api import auth as auth_api
+from .api import chats as chats_api
 from .api import datasets as datasets_api
 from .api import mail as mail_api
 from .api import reports as reports_api
@@ -59,6 +60,7 @@ app.add_middleware(
 )
 
 app.include_router(auth_api.router)
+app.include_router(chats_api.router)
 app.include_router(reports_api.router)
 app.include_router(datasets_api.router)
 app.include_router(semantic_api.router)

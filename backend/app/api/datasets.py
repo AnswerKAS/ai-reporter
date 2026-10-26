@@ -15,7 +15,9 @@ from ..datasets import answer as dataset_answer
 from ..datasets import servers as ds_servers
 from ..datasets import sqlsource
 from ..agent import store as agent_store
+from ..agent.tracing import agent_trace, record_output
 from ..agent.runner import ask_dataset as agent_ask_dataset
+from ..agent.runner import ask_datasets as agent_ask_datasets
 from ..datasets.base import DatasetError, sanitize_error
 from ..schemas.dataset import (
     DatasetCreate,
@@ -179,6 +181,84 @@ def test_connection(key: str, user: dict = Depends(require_admin)) -> dict:
     return {'ok': True}
 
 
+@router.get('/chat/history')
+def workspace_chat_history(conversation_id: str | None = None,
+                           user: dict = Depends(get_current_user)) -> dict:
+    """Restore the selected owned consultation or the latest active one."""
+    try:
+        item = agent_store.conversation(user['id'], 'dataset', 'workspace',
+                                        conversation_id)
+    except DatasetError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    if item is None:
+        return {'conversationId': None, 'turns': []}
+    return {'conversationId': item['id'], 'turns': [
+        turn['payload'] for turn in agent_store.messages(item['id'])
+        if turn['role'] == 'assistant' and turn['payload'].get('question')
+    ]}
+
+
+@router.post('/chat/stream')
+def stream_workspace_chat(payload: dict,
+                          user: dict = Depends(get_current_user)) -> StreamingResponse:
+    """Answer one question using every dataset attached to this chat turn."""
+    raw_slugs = payload.get('datasetSlugs')
+    if raw_slugs is None:
+        raw_slugs = [payload.get('datasetSlug')]
+    if not isinstance(raw_slugs, list) or not raw_slugs or any(
+            not isinstance(slug, str) or not slug.strip() for slug in raw_slugs):
+        raise HTTPException(422, 'прикрепите хотя бы один датасет через @')
+    slugs = list(dict.fromkeys(slug.strip() for slug in raw_slugs))
+    datasets = [_get_or_404(slug) for slug in slugs]
+    question = payload.get('question')
+    if (not isinstance(question, str) or not question.strip()
+            or len(question) > 1000 or not any(char.isalnum() for char in question)):
+        raise HTTPException(422, 'вопрос должен быть непустым и не длиннее 1000 символов')
+    try:
+        conversation = agent_store.conversation(
+            user['id'], 'dataset', 'workspace', payload.get('conversationId'),
+            create=True, fresh=not payload.get('conversationId'))
+    except DatasetError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    history = agent_store.dataset_history(conversation['id'])
+    events: queue.Queue[dict | None] = queue.Queue()
+
+    def worker() -> None:
+        """Run the dataset agent and persist a source-tagged completed turn."""
+        try:
+            with agent_trace('dataset-question', user_id=user['id'],
+                             session_id=conversation['id'],
+                             input_data={'datasets': slugs, 'question': question.strip()}) as trace:
+                answer = agent_ask_datasets(datasets, question.strip(), history,
+                                            reveal_sql=_is_admin(user), on_event=events.put)
+                titles = [dataset.get('title') or dataset['slug'] for dataset in datasets]
+                result = {'question': question.strip(), 'datasetSlug': slugs[0],
+                          'datasetTitle': titles[0], 'datasetSlugs': slugs,
+                          'datasetTitles': titles, **answer}
+                agent_store.save_exchange(conversation['id'], question.strip(),
+                                          result['answer'], result)
+                record_output(trace, {'answer': result.get('answer'),
+                                      'rows': len(result.get('rows') or [])})
+            events.put({'type': 'done', 'conversationId': conversation['id'],
+                        'result': result})
+        except Exception as exc:
+            events.put({'type': 'error', 'message': sanitize_error(str(exc))})
+        finally:
+            events.put(None)
+
+    def stream():
+        """Yield ordered progress and completion events from the worker."""
+        threading.Thread(target=worker, daemon=True).start()
+        while True:
+            event = events.get()
+            if event is None:
+                break
+            yield json.dumps(event, ensure_ascii=False, default=str) + '\n'
+
+    return StreamingResponse(stream(), media_type='application/x-ndjson',
+                             headers={'Cache-Control': 'no-cache'})
+
+
 @router.get('/{slug}')
 def get_dataset(slug: str, user: dict = Depends(get_current_user)) -> dict:
     dataset = _get_or_404(slug)
@@ -249,10 +329,15 @@ def stream_dataset_answer(slug: str, payload: dict,
     def worker() -> None:
         """Run the blocking LangGraph agent outside the response generator."""
         try:
-            result = agent_ask_dataset(dataset, question.strip(), history,
-                                       reveal_sql=_is_admin(user), on_event=events.put)
-            agent_store.save_exchange(item['id'], question.strip(), result['answer'],
-                                      {'question': question.strip(), **result})
+            with agent_trace('dataset-question', user_id=user['id'],
+                             session_id=item['id'],
+                             input_data={'dataset': slug, 'question': question.strip()}) as trace:
+                result = agent_ask_dataset(dataset, question.strip(), history,
+                                           reveal_sql=_is_admin(user), on_event=events.put)
+                agent_store.save_exchange(item['id'], question.strip(), result['answer'],
+                                          {'question': question.strip(), **result})
+                record_output(trace, {'answer': result.get('answer'),
+                                      'rows': len(result.get('rows') or [])})
             events.put({'type': 'done', 'conversationId': item['id'], 'result': result})
         except Exception as exc:
             events.put({'type': 'error', 'message': sanitize_error(str(exc))})
