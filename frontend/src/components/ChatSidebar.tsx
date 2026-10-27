@@ -1,16 +1,18 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link, useLocation } from 'react-router-dom'
-import { ApiError, fetchSavedChats, type SavedChat } from '../lib/api'
-import { Alert, Input } from './ui'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { ApiError, fetchSavedChats, saveNamedChat, type SavedChat } from '../lib/api'
+import { Alert, Button, Input } from './ui'
 
 /** Show the user's named data consultations beside the workspace, like report navigation. */
 export function ChatSidebar({ onNavigate }: { onNavigate?: () => void }) {
   const location = useLocation()
+  const navigate = useNavigate()
   const selectedId = new URLSearchParams(location.search).get('chat')
   const [chats, setChats] = useState<SavedChat[]>([])
   const [query, setQuery] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [creating, setCreating] = useState(false)
   const visible = useMemo(() => chats.filter((chat) =>
     chat.title.toLocaleLowerCase('ru').includes(query.trim().toLocaleLowerCase('ru'))), [chats, query])
 
@@ -38,11 +40,32 @@ export function ChatSidebar({ onNavigate }: { onNavigate?: () => void }) {
     }
   }, [])
 
+  /** Persist a new empty consultation before navigating to it. */
+  async function createChat(): Promise<void> {
+    setCreating(true)
+    setError(null)
+    try {
+      const chat = await saveNamedChat('dataset', 'workspace', 'Новый чат', null)
+      setChats((items) => [chat, ...items.filter((item) => item.id !== chat.id)])
+      window.dispatchEvent(new Event('dataset-chats-changed'))
+      navigate(`/workspace?chat=${encodeURIComponent(chat.id)}`)
+      onNavigate?.()
+    } catch (failure) {
+      setError(failure instanceof ApiError ? failure.message : 'Не удалось создать чат')
+    } finally {
+      setCreating(false)
+    }
+  }
+
   return <nav aria-label="Сохранённые чаты" className="min-w-0">
     <div className="border-b border-line bg-surface px-3 pb-4 pt-5 xl:sticky xl:top-0">
-      <div className="mb-4 px-1">
-        <h2 className="text-lg font-semibold tracking-tight">Чаты по данным</h2>
-        <p className="text-xs text-fg-muted tabular-nums">Сохранено: {chats.length}</p>
+      <div className="mb-4 flex items-start justify-between gap-2 px-1">
+        <div>
+          <h2 className="text-lg font-semibold tracking-tight">Чаты по данным</h2>
+          <p className="text-xs text-fg-muted tabular-nums">Сохранено: {chats.length}</p>
+        </div>
+        <Button size="sm" aria-label="Создать чат" title="Создать чат"
+          disabled={creating} onClick={() => { void createChat() }}>+</Button>
       </div>
       <label className="text-xs text-fg-muted" htmlFor="chat-sidebar-search">Поиск по чатам</label>
       <Input id="chat-sidebar-search" className="mt-1" value={query}

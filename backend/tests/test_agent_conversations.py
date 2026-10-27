@@ -187,6 +187,22 @@ def test_empty_new_chat_survives_reload_and_can_be_saved(client, user_headers):
     assert saved['id'] == identifier
 
 
+def test_named_chat_creation_is_immediately_persistent(client, user_headers):
+    """Creating a named empty chat through the plus action lists it before a message."""
+    created = client.post('/api/chats', headers=user_headers, json={
+        'kind': 'dataset', 'target': 'workspace', 'title': 'Новый чат',
+    }).json()['chat']
+
+    listed = client.get('/api/chats?kind=dataset&target=workspace',
+                        headers=user_headers).json()['chats']
+    restored = client.get('/api/datasets/chat/history', headers=user_headers,
+                          params={'conversation_id': created['id']}).json()
+
+    assert [item['id'] for item in listed] == [created['id']]
+    assert created['savedAt']
+    assert restored == {'conversationId': created['id'], 'turns': []}
+
+
 def test_new_report_chat_within_saved_report_uses_fresh_context(
         client, model, plain_user, user_headers, monkeypatch):
     """A new report chat can start beside an older chat for the same report."""

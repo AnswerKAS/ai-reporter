@@ -5,6 +5,7 @@ import type { ComputedField, ReportDefinition, ReportField } from '../../types/s
 import type { Dataset } from '../../types/dataset'
 import { Alert, Button, Input, Textarea } from '../ui'
 import { DatasetDataDialog } from './DatasetDataDialog'
+import { searchDatasetMentions } from '../../lib/dataset-mentions'
 
 /** Persistent inline report chat, styled like the dataset question chat. */
 export function ReportChat({ fields, computed, datasets, availableDatasets, definition,
@@ -46,12 +47,8 @@ export function ReportChat({ fields, computed, datasets, availableDatasets, defi
   const mentionRange = useRef<{ start: number; end: number } | null>(null)
   const attachedDatasets = useMemo(() => availableDatasets.filter((item) => attachedSlugs.includes(item.slug)),
     [availableDatasets, attachedSlugs])
-  const mentionMatches = useMemo(() => {
-    if (mentionQuery === null) return []
-    const query = mentionQuery.toLocaleLowerCase('ru')
-    return availableDatasets.filter((item) => !attachedSlugs.includes(item.slug)
-      && `${item.title} ${item.slug}`.toLocaleLowerCase('ru').includes(query)).slice(0, 8)
-  }, [availableDatasets, attachedSlugs, mentionQuery])
+  const mentionMatches = useMemo(() => searchDatasetMentions(
+    availableDatasets, mentionQuery, attachedSlugs), [availableDatasets, attachedSlugs, mentionQuery])
 
   /** Remember the chosen chat for this saved report, leaving new reports fresh. */
   function activateConversation(id: string | null): void {
@@ -285,7 +282,7 @@ export function ReportChat({ fields, computed, datasets, availableDatasets, defi
                 {busy ? 'Собираю…' : 'Отправить ↑'}
               </Button>
             </div>
-            <p className="mt-2 text-xs text-fg-muted">@ — прикрепить датасет · Enter — отправить · Shift+Enter — новая строка. Поля агент выберет сам.</p>
+            <p className="mt-2 text-xs text-fg-muted">@ — прикрепить датасет; слова названия разделяйте _ · Enter — отправить · Shift+Enter — новая строка. Поля агент выберет сам.</p>
           </form>
         </footer>
       </section>

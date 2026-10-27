@@ -2,12 +2,11 @@ import { useEffect, useState } from 'react'
 import { ApiError, fetchSavedChats, saveNamedChat, type SavedChat } from '../lib/api'
 import { Alert, Button, Input, Modal } from './ui'
 
-/** Create and name dataset consultations; the sidebar owns navigation between them. */
-export function ChatControls({ currentId, busy, suggestedTitle, onNew, onSaved }: {
+/** Rename the selected consultation while the sidebar creates new chats. */
+export function ChatControls({ currentId, busy, suggestedTitle, onSaved }: {
   currentId: string | null
   busy: boolean
   suggestedTitle: string
-  onNew: () => Promise<void>
   onSaved: (id: string) => void
 }) {
   const [saveOpen, setSaveOpen] = useState(false)
@@ -19,14 +18,23 @@ export function ChatControls({ currentId, busy, suggestedTitle, onNew, onSaved }
 
   useEffect(() => {
     let active = true
-    void fetchSavedChats('dataset', 'workspace').then((items) => {
-      if (active) setChats(items)
-    }).catch(() => { /* saving remains available if the title lookup fails */ })
-    return () => { active = false }
+    /** Refresh the current title when the sidebar creates a chat. */
+    async function reload(): Promise<void> {
+      try {
+        const items = await fetchSavedChats('dataset', 'workspace')
+        if (active) setChats(items)
+      } catch { /* renaming remains available if the title lookup fails */ }
+    }
+    void reload()
+    window.addEventListener('dataset-chats-changed', reload)
+    return () => {
+      active = false
+      window.removeEventListener('dataset-chats-changed', reload)
+    }
   }, [])
 
-  /** Save or rename the current consultation and refresh the sidebar list. */
-  async function save(): Promise<void> {
+  /** Rename the selected consultation and refresh the sidebar list. */
+  async function renameChat(): Promise<void> {
     if (!title.trim()) return
     setWorking(true)
     setError(null)
@@ -37,20 +45,7 @@ export function ChatControls({ currentId, busy, suggestedTitle, onNew, onSaved }
       window.dispatchEvent(new Event('dataset-chats-changed'))
       setSaveOpen(false)
     } catch (failure) {
-      setError(failure instanceof ApiError ? failure.message : 'Не удалось сохранить чат')
-    } finally {
-      setWorking(false)
-    }
-  }
-
-  /** Create a separate conversation before clearing the visible messages. */
-  async function startNew(): Promise<void> {
-    setWorking(true)
-    setError(null)
-    try {
-      await onNew()
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : 'Не удалось начать чат')
+      setError(failure instanceof ApiError ? failure.message : 'Не удалось переименовать чат')
     } finally {
       setWorking(false)
     }
@@ -59,14 +54,13 @@ export function ChatControls({ currentId, busy, suggestedTitle, onNew, onSaved }
   return <>
     <div className="flex flex-wrap items-center gap-2">
       {current && <span className="max-w-36 truncate text-xs text-fg-muted" title={current.title}>{current.title}</span>}
-      <Button size="sm" onClick={() => { void startNew() }} disabled={busy || working}>Новый чат</Button>
       <Button size="sm" onClick={() => { setTitle(current?.title || suggestedTitle.slice(0, 120)); setError(null); setSaveOpen(true) }}
-        disabled={busy || working}>Сохранить чат</Button>
+        disabled={busy || working || !currentId}>Переименовать</Button>
     </div>
     {error && !saveOpen && <Alert>{error}</Alert>}
 
-    {saveOpen && <Modal title="Сохранить чат" onClose={() => setSaveOpen(false)} footer={<>
-      <Button variant="primary" disabled={working || !title.trim()} onClick={() => { void save() }}>
+    {saveOpen && <Modal title="Переименовать чат" onClose={() => setSaveOpen(false)} footer={<>
+      <Button variant="primary" disabled={working || !title.trim()} onClick={() => { void renameChat() }}>
         {working ? 'Сохраняю…' : 'Сохранить'}
       </Button>
       <Button variant="ghost" disabled={working} onClick={() => setSaveOpen(false)}>Отмена</Button>

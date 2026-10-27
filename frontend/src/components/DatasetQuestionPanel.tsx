@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Dataset, DatasetQuestionTurn } from '../types/dataset'
-import { ApiError, createAgentChat, fetchWorkspaceConversation, streamWorkspaceAnswer } from '../lib/api'
+import { ApiError, fetchWorkspaceConversation, streamWorkspaceAnswer } from '../lib/api'
 import { DatasetOverview } from './DatasetOverview'
 import { ChatControls } from './ChatControls'
 import { AgentMarkdown } from './AgentMarkdown'
+import { searchDatasetMentions } from '../lib/dataset-mentions'
 import { Alert, Button, Table, Td, Textarea, Th, Tr } from './ui'
 
 const ACTIVE_DATASET_CHAT = 'active-dataset-chat'
@@ -46,13 +47,10 @@ export function DatasetQuestionPanel({ datasets, initialDatasetSlug, requestedCo
   const tail = useRef<HTMLDivElement | null>(null)
   const input = useRef<HTMLTextAreaElement | null>(null)
   const mentionRange = useRef<{ start: number; end: number } | null>(null)
+  const requestSerial = useRef(0)
   const selectedDatasets = datasets.filter((item) => selectedSlugs.includes(item.slug))
-  const mentionMatches = useMemo(() => {
-    if (mentionQuery === null) return []
-    const query = mentionQuery.toLocaleLowerCase('ru')
-    return datasets.filter((item) => !selectedSlugs.includes(item.slug)
-      && `${item.title} ${item.slug}`.toLocaleLowerCase('ru').includes(query)).slice(0, 8)
-  }, [datasets, mentionQuery, selectedSlugs])
+  const mentionMatches = useMemo(() => searchDatasetMentions(
+    datasets, mentionQuery, selectedSlugs), [datasets, mentionQuery, selectedSlugs])
 
   /** Remember which owned conversation should reopen after a page reload. */
   function activateConversation(id: string | null): void {
@@ -69,8 +67,19 @@ export function DatasetQuestionPanel({ datasets, initialDatasetSlug, requestedCo
 
   useEffect(() => {
     let active = true
+    requestSerial.current += 1
     setLoading(true)
     setTurns([])
+    setQuestion('')
+    setPendingQuestion(null)
+    setPendingSlugs([])
+    setStreamedAnswer('')
+    setStatus('')
+    setAsking(false)
+    setMentionQuery(null)
+    setOverviewOpen(false)
+    setError(null)
+    mentionRange.current = null
     const remembered = requestedConversationId || window.localStorage.getItem(ACTIVE_DATASET_CHAT) || undefined
     void fetchWorkspaceConversation(remembered)
       .catch(async (failure) => {
@@ -132,22 +141,11 @@ export function DatasetQuestionPanel({ datasets, initialDatasetSlug, requestedCo
     setOverviewOpen(false)
   }
 
-  /** Clear the consultation so its next question starts an independent chat. */
-  async function newChat(): Promise<void> {
-    const id = await createAgentChat('dataset', 'workspace')
-    activateConversation(id)
-    setTurns([])
-    setQuestion('')
-    setSelectedSlugs([])
-    setOverviewOpen(false)
-    setError(null)
-    onDatasetChange('')
-  }
-
   /** Submit a user turn and render each progress or text event immediately. */
   async function ask(): Promise<void> {
     const text = question.trim()
-    if (!text || !selectedDatasets.length || asking || loading) return
+    if (!text || !conversationId || !selectedDatasets.length || asking || loading) return
+    const serial = ++requestSerial.current
     const slugs = [...selectedSlugs]
     const titles = slugs.map((slug) => datasets.find((item) => item.slug === slug)?.title || slug)
     setAsking(true)
@@ -159,6 +157,7 @@ export function DatasetQuestionPanel({ datasets, initialDatasetSlug, requestedCo
     setError(null)
     try {
       await streamWorkspaceAnswer(slugs, text, conversationId, (event) => {
+        if (serial !== requestSerial.current) return
         if (event.type === 'status') setStatus(event.text ?? '')
         if (event.type === 'delta') {
           setStatus('')
@@ -176,13 +175,17 @@ export function DatasetQuestionPanel({ datasets, initialDatasetSlug, requestedCo
         }
       })
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : 'Не удалось получить ответ')
-      setQuestion(text)
-      setPendingQuestion(null)
-      setPendingSlugs([])
+      if (serial === requestSerial.current) {
+        setError(failure instanceof Error ? failure.message : 'Не удалось получить ответ')
+        setQuestion(text)
+        setPendingQuestion(null)
+        setPendingSlugs([])
+      }
     } finally {
-      setAsking(false)
-      setStatus('')
+      if (serial === requestSerial.current) {
+        setAsking(false)
+        setStatus('')
+      }
     }
   }
 
@@ -198,7 +201,7 @@ export function DatasetQuestionPanel({ datasets, initialDatasetSlug, requestedCo
         <div className="flex flex-wrap items-center gap-2">
           <ChatControls currentId={conversationId}
             busy={asking || loading} suggestedTitle={turns.at(-1)?.question || question || 'Новый чат по данным'}
-            onNew={newChat} onSaved={activateConversation} />
+            onSaved={activateConversation} />
           {selectedDatasets.length > 0 && <Button size="sm" aria-expanded={overviewOpen} onClick={() => setOverviewOpen((open) => !open)}>
             {overviewOpen ? 'Скрыть состав датасетов' : 'Что есть в датасетах'}
           </Button>}
@@ -209,6 +212,7 @@ export function DatasetQuestionPanel({ datasets, initialDatasetSlug, requestedCo
         {overviewOpen && <div className="mb-5 space-y-3">{selectedDatasets.map((item) =>
           <DatasetOverview key={item.slug} dataset={item} />)}</div>}
         {loading && <p className="text-sm text-fg-muted">Загружаю историю диалога…</p>}
+        {!loading && !conversationId && <p className="text-sm text-fg-muted">Нажмите + в меню чатов, чтобы начать сохранённый диалог.</p>}
         {!loading && turns.length === 0 && !pendingQuestion && (
           <div className="mx-auto flex h-full max-w-lg flex-col items-center justify-center text-center">
             <span className="mb-3 text-3xl" aria-hidden="true">✦</span>
@@ -299,7 +303,7 @@ export function DatasetQuestionPanel({ datasets, initialDatasetSlug, requestedCo
           <div className="flex items-end gap-2">
             <button type="button" title="Прикрепить датасет" aria-label="Прикрепить датасет"
               className="mb-1 cursor-pointer rounded-card border border-line px-3 py-2 text-sm text-accent hover:bg-accent-soft"
-              disabled={asking || loading}
+              disabled={asking || loading || !conversationId}
               onClick={() => { const next = `${question}${question && !/\s$/.test(question) ? ' ' : ''}@`; setQuestion(next); mentionRange.current = { start: next.length - 1, end: next.length }; setMentionQuery(''); input.current?.focus(); requestAnimationFrame(() => input.current?.setSelectionRange(next.length, next.length)) }}>@</button>
             <Textarea ref={input} id="workspace-question" rows={2} value={question}
               onChange={(event) => { setQuestion(event.target.value); updateMention(event.target.value, event.target.selectionStart) }}
@@ -316,13 +320,13 @@ export function DatasetQuestionPanel({ datasets, initialDatasetSlug, requestedCo
                   void ask()
                 }
               }}
-              placeholder="Напишите вопрос и прикрепите @датасет…" disabled={asking || loading}
+              placeholder="Напишите вопрос и прикрепите @датасет…" disabled={asking || loading || !conversationId}
               className="min-h-16 flex-1 resize-none" />
-            <Button type="submit" variant="primary" disabled={asking || loading || !selectedDatasets.length || !question.trim()}>
+            <Button type="submit" variant="primary" disabled={asking || loading || !conversationId || !selectedDatasets.length || !question.trim()}>
               {asking ? 'Отвечаю…' : 'Отправить ↑'}
             </Button>
           </div>
-          <p className="mt-2 text-xs text-fg-muted">@ — прикрепить несколько датасетов · Enter — отправить · Shift+Enter — новая строка. Поля агент выберет сам.</p>
+          <p className="mt-2 text-xs text-fg-muted">@ — прикрепить датасет; слова названия разделяйте _ · Enter — отправить · Shift+Enter — новая строка. Поля агент выберет сам.</p>
         </form>
       </footer>
     </section>
