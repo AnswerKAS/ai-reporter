@@ -233,3 +233,12 @@ def test_дефолтные_датасеты_не_трогают_непусто�
     ds.ensure_default_datasets()
 
     assert [d['slug'] for d in ds.list_all()] == ['sales']
+
+
+def test_deleted_demo_datasets_do_not_return_on_startup(metabase):
+    """Explicitly emptied catalogs stay empty when startup runs again."""
+    ds.ensure_default_datasets()
+    for item in ds.list_all():
+        ds.delete(item['slug'])
+    ds.ensure_default_datasets()
+    assert ds.list_all() == []

@@ -8,7 +8,7 @@ import json
 import os
 from pathlib import Path
 
-from ..core.database import _conn, utcnow
+from ..core.database import _conn, _meta_get, _meta_set, utcnow
 from ..core.config import connection as db_connection
 from ..services import storage
 from .base import DatasetAdapter, DatasetError, sanitize_error
@@ -177,8 +177,10 @@ def update(slug: str, *, title: str | None = None, description: str | None = Non
 
 
 def delete(slug: str) -> None:
+    """Delete the dataset and keep explicit catalog cleanup across restarts."""
     with _conn() as conn:
         conn.execute('DELETE FROM datasets WHERE slug = %s', (slug,))
+        _meta_set(conn, 'default_datasets_initialized', '1')
     storage.delete_owner('csv', slug)
 
 
@@ -230,7 +232,10 @@ def refresh_schema(slug: str) -> dict:
 
 
 def ensure_default_datasets() -> None:
-    """При пустом реестре регистрирует дефолтные датасеты витрины ClickHouse."""
+    """Seed a new demo catalog, preserving one explicitly emptied by an admin."""
+    with _conn() as conn:
+        if _meta_get(conn, 'default_datasets_initialized') == '1':
+            return
     if list_all():
         return
     if os.environ.get('DB_CONNECTIONS'):
