@@ -5,6 +5,7 @@ import { DatasetOverview } from './DatasetOverview'
 import { ChatControls } from './ChatControls'
 import { AgentMarkdown } from './AgentMarkdown'
 import { searchDatasetMentions } from '../lib/dataset-mentions'
+import { hasMarkdownTable } from '../lib/answer-tables'
 import { Alert, Button, Table, Td, Textarea, Th, Tr } from './ui'
 
 const ACTIVE_DATASET_CHAT = 'active-dataset-chat'
@@ -20,6 +21,28 @@ function EvidenceTable({ title, columns, rows }: { title: string; columns: strin
       ))}</tbody>
     </Table>
   </div>
+}
+
+/** Keep SQL evidence accessible while avoiding a second visible table beside a Markdown table. */
+function EvidenceResults({ turn }: { turn: DatasetQuestionTurn }) {
+  const evidence = turn.evidence && turn.evidence.length > 1
+    ? <div className="space-y-4">{turn.evidence.map((item, evidenceIndex) =>
+      <div key={`${item.datasetSlug}-${evidenceIndex}`} className="space-y-2">
+        <p className="text-xs text-fg-muted">Источник: @{item.datasetTitle}</p>
+        {item.columns.length > 0 && <EvidenceTable title={item.title || item.datasetTitle} columns={item.columns} rows={item.rows} />}
+        {item.truncated && <p className="text-xs text-fg-muted">Показана часть строк этого результата.</p>}
+        <details className="text-xs text-fg-muted"><summary className="cursor-pointer">SQL источника</summary>
+          <pre className="mt-2 max-w-full overflow-x-auto font-mono">{item.sql}</pre></details>
+      </div>)}</div>
+    : turn.columns.length > 0
+      ? <EvidenceTable title={turn.title || turn.evidence?.[0]?.title || 'Результат запроса'} columns={turn.columns} rows={turn.rows} />
+      : null
+  if (!evidence) return null
+  if (!hasMarkdownTable(turn.answer)) return evidence
+  return <details className="rounded-control border border-line px-3 py-2 text-sm">
+    <summary className="cursor-pointer font-medium text-accent">Показать данные запроса</summary>
+    <div className="mt-3">{evidence}</div>
+  </details>
 }
 
 /** Persistent dataset chat with streamed agent progress and Enter to send. */
@@ -239,15 +262,7 @@ export function DatasetQuestionPanel({ datasets, initialDatasetSlug, requestedCo
               <div className="max-w-[95%] space-y-3 rounded-card border border-line bg-surface-sunken px-4 py-4 sm:max-w-[88%]">
                 <p className="text-[11px] font-semibold tracking-[0.12em] text-accent uppercase">Агент · ответ</p>
                 <AgentMarkdown content={turn.answer} />
-                {turn.evidence && turn.evidence.length > 1 ? <div className="space-y-4">
-                  {turn.evidence.map((item, evidenceIndex) => <div key={`${item.datasetSlug}-${evidenceIndex}`} className="space-y-2">
-                    <p className="text-xs text-fg-muted">Источник: @{item.datasetTitle}</p>
-                    {item.columns.length > 0 && <EvidenceTable title={item.title || item.datasetTitle} columns={item.columns} rows={item.rows} />}
-                    {item.truncated && <p className="text-xs text-fg-muted">Показана часть строк этого результата.</p>}
-                    <details className="text-xs text-fg-muted"><summary className="cursor-pointer">SQL источника</summary>
-                      <pre className="mt-2 max-w-full overflow-x-auto font-mono">{item.sql}</pre></details>
-                  </div>)}
-                </div> : turn.columns.length > 0 && <EvidenceTable title={turn.title || turn.evidence?.[0]?.title || 'Результат запроса'} columns={turn.columns} rows={turn.rows} />}
+                <EvidenceResults turn={turn} />
                 {!!turn.hypotheses?.length && <div className="rounded-control border border-line bg-surface px-3 py-3 text-sm">
                   <p className="font-semibold">Гипотезы для проверки</p>
                   <ul className="mt-2 list-disc space-y-2 pl-5">{turn.hypotheses.map((item, hypothesisIndex) =>
