@@ -25,33 +25,6 @@ def test_agent_model_call_uses_chat_timeout(monkeypatch):
     assert observed == [interpret.CHAT_TIMEOUT]
 
 
-def test_streamed_dataset_answer_uses_chat_timeout(monkeypatch):
-    """The final wording stream cannot wait indefinitely for a model response."""
-    import langchain_openai
-
-    options = {}
-
-    class FakeChat:
-        """Capture model options and return one short streamed message."""
-
-        def __init__(self, **kwargs):
-            """Record the timeout configured for the final wording call."""
-            options.update(kwargs)
-
-        def stream(self, _messages):
-            """Yield a fixed answer without contacting a model provider."""
-            yield type('Chunk', (), {'content': 'Готово'})()
-
-    monkeypatch.setattr(langchain_openai, 'ChatOpenAI', FakeChat)
-    events = []
-
-    answer = runner._stream_answer('Сколько?', ['Количество'], [['1']],
-                                   'Одна запись', 'model', 'key', events.append)
-
-    assert answer == 'Готово'
-    assert options['timeout'] == interpret.CHAT_TIMEOUT
-
-
 def test_agent_extracts_action_from_explanation_and_fenced_json():
     """Extra prose and example JSON do not hide the model's actual action."""
     raw = ('Пример: {"tool":"unknown"}\n'
@@ -483,6 +456,76 @@ def test_dataset_agent_compares_attached_datasets_with_evidence(dataset, monkeyp
         'Выручка по месяцам', 'Расходы по месяцам']
     assert response['evidence'][1]['rows'] == [['2026-01', '80']]
     assert response['hypotheses'][0]['howToCheck'] == 'Сравнить одинаковые периоды'
+
+
+def test_dataset_agent_reuses_sql_when_switching_models(dataset, monkeypatch):
+    """Fallback finalizes previous SQL evidence without repeating source queries."""
+    second = {**dataset, 'slug': 'costs', 'title': 'Расходы'}
+    calls = []
+    queries = []
+
+    def fake_invoke(prompt, model, _key):
+        """Keep the primary model exploring and let the fallback finish."""
+        calls.append((model, prompt))
+        if model == 'primary':
+            slug = 'sales' if sum(name == 'primary' for name, _ in calls) % 2 else 'costs'
+            return {'tool': 'execute_sql', 'args': {
+                'datasetSlug': slug, 'sql': 'SELECT city, revenue FROM dataset'}}
+        return {'final': {'answer': 'Продажи выше расходов.',
+                          'columnLabels': {
+                              'sales': {'city': 'Город', 'revenue': 'Выручка'},
+                              'costs': {'city': 'Город', 'revenue': 'Расходы'}},
+                          'tableTitles': {'sales': 'Продажи по городам',
+                                          'costs': 'Расходы по городам'}}}
+
+    def fake_execute(source, _sql):
+        """Count source queries across both model attempts."""
+        queries.append(source['slug'])
+        return ['city', 'revenue'], [['Москва', 100]], False
+
+    monkeypatch.setattr(interpret, '_openrouter_key', lambda: 'fake')
+    monkeypatch.setattr(interpret, '_chat_models', lambda: ('primary', 'fallback'))
+    monkeypatch.setattr(runner, '_invoke', fake_invoke)
+    monkeypatch.setattr(runner, 'execute_readonly_sql', fake_execute)
+
+    response = runner.ask_datasets([dataset, second], 'Сравни результаты', [],
+                                   reveal_sql=True)
+
+    assert response['answer'] == 'Продажи выше расходов.'
+    assert queries == ['sales', 'costs', 'sales', 'costs']
+    assert [name for name, _ in calls] == ['primary'] * 5 + ['fallback']
+    assert 'Проверенные результаты предыдущей модели' in calls[-1][1]
+
+
+def test_dataset_agent_sends_validated_final_without_rewording(dataset, monkeypatch):
+    """A checked final answer is streamed once without another model call."""
+    actions = iter([
+        {'tool': 'execute_sql', 'args': {'sql': 'SELECT count(*) AS total FROM dataset'}},
+        {'final': {'answer': '**Итого:** 1 запись.',
+                   'columnLabels': {'total': 'Количество'},
+                   'tableTitles': {'sales': 'Количество записей'}}},
+    ])
+    events = []
+    calls = []
+
+    def fake_invoke(*_args):
+        """Count model decisions and supply their fixed actions."""
+        calls.append(True)
+        return next(actions)
+
+    monkeypatch.setattr(interpret, '_openrouter_key', lambda: 'fake')
+    monkeypatch.setattr(interpret, '_chat_models', lambda: ('primary', None))
+    monkeypatch.setattr(runner, '_invoke', fake_invoke)
+    monkeypatch.setattr(runner, 'execute_readonly_sql', lambda *_args: (
+        ['total'], [[1]], False))
+
+    response = runner.ask_dataset(dataset, 'Сколько строк?', [], reveal_sql=True,
+                                  on_event=events.append)
+
+    assert response['answer'] == '**Итого:** 1 запись.'
+    assert len(calls) == 2
+    assert [event for event in events if event['type'] == 'delta'] == [
+        {'type': 'delta', 'text': response['answer']}]
 
 
 def test_dataset_agent_uses_latest_result_instead_of_exploratory_queries(dataset, monkeypatch):

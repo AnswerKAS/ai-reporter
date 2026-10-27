@@ -88,44 +88,6 @@ def _russian_columns(columns: list[str], final: dict, dataset: dict) -> list[str
     return translated
 
 
-def _stream_answer(question: str, columns: list[str], rows: list[list],
-                   draft: str, model: str, key: str,
-                   emit: Callable[[dict], None], evidence: list[dict] | None = None) -> str:
-    """Stream the agent's final wording from the model, grounded in SQL rows."""
-    from langchain_core.messages import HumanMessage
-    from langchain_openai import ChatOpenAI
-
-    evidence = evidence or []
-    visible_evidence = [{'datasetTitle': item['datasetTitle'],
-                         'title': item['title'],
-                         'columns': item['columns'],
-                         'rows': item['rows'][:max(3, 30 // max(1, len(evidence)))]}
-                        for item in evidence]
-    prompt = (
-        'Ответь пользователю по-русски. Используй только значения результата SQL. '
-        'Не добавляй новых чисел. Не упоминай внутренние инструменты. '
-        f'Вопрос: {question}. Черновик: {draft}. '
-        f'Колонки: {json.dumps(columns, ensure_ascii=False)}. '
-        f'Строки: {json.dumps(rows[:20], ensure_ascii=False, default=str)}. '
-        f'Доказательства по источникам: {json.dumps(visible_evidence, ensure_ascii=False, default=str)}. '
-        'Дай короткий понятный ответ в Markdown: выделяй выводы и используй списки, '
-        'когда это помогает чтению. Не повторяй таблицы доказательств в тексте. '
-        'Гипотезы явно назови предположениями '
-        'и укажи, как их проверить; причинность не объявляй доказанной.'
-    )
-    chat = ChatOpenAI(model=interpret._model_id(model), api_key=key,
-                      base_url=interpret.OPENROUTER_URL, temperature=0,
-                      timeout=interpret.CHAT_TIMEOUT,
-                      max_retries=0)
-    chunks: list[str] = []
-    for chunk in chat.stream([HumanMessage(content=prompt)]):
-        piece = chunk.content
-        if isinstance(piece, str) and piece:
-            chunks.append(piece)
-            emit({'type': 'delta', 'text': piece})
-    return ''.join(chunks).strip()
-
-
 def ask_dataset(dataset: dict, question: str, history: list[dict], *, reveal_sql: bool,
                 on_event: Callable[[dict], None] | None = None) -> dict:
     """Keep the single-dataset API compatible with the multi-source agent."""
@@ -191,6 +153,8 @@ def ask_datasets(datasets: list[dict], question: str, history: list[dict], *,
         'Сопоставляй только сравнимые периоды, единицы и ключи. Если общего ключа '
         'нет, не выдумывай связь. Гипотезы отделяй от фактов и добавляй способ проверки. '
         'Отвечай только по фактическим результатам инструментов, без вымышленных чисел. '
+        'final.answer — готовый короткий ответ по-русски в Markdown. '
+        'Не повторяй таблицы доказательств в тексте и не упоминай инструменты. '
         f'Прикреплённые датасеты: {json.dumps(sources, ensure_ascii=False)}. '
         f'Виртуальные отношения по основному датасету: '
         f'{json.dumps(relations, ensure_ascii=False)}. '
@@ -198,15 +162,42 @@ def ask_datasets(datasets: list[dict], question: str, history: list[dict], *,
         f'Вопрос: {question[:1000]}.'
     )
     errors: list[str] = []
+    results: list[dict] = []
+    successful_budget = len(datasets) + 2
     for model in interpret._chat_models():
         if not model:
             continue
-        results: list[dict] = []
+        latest_before_model = {item['datasetSlug']: item for item in results}
+        prior_results = [{
+            'datasetSlug': item['datasetSlug'], 'sql': item['sql'],
+            'columns': item['columns'], 'rows': item['rows'][:20],
+            'rowCount': len(item['rows']), 'truncated': item['truncated'],
+        } for item in latest_before_model.values()]
 
         def decide(observations: list[dict]) -> dict:
             """Ask the model for a tool call or final answer."""
-            return _invoke(base + '\nНаблюдения: ' + json.dumps(
-                observations, ensure_ascii=False, default=str)[-16000:], model, key)
+            covered = {item['datasetSlug'] for item in results}
+            missing = [slug for slug in selected if slug not in covered]
+            final_only = not missing and len(results) >= successful_budget
+            if final_only:
+                guidance = ('Все прикреплённые датасеты уже проверены, дополнительных '
+                            'SQL-запросов достаточно. Сейчас верни только final с '
+                            'ответом, columnLabels и tableTitles; инструменты больше '
+                            'не вызывай.')
+            elif missing and results:
+                guidance = ('Следующий SQL выполни по ещё не проверенному датасету: '
+                            + ', '.join(missing))
+            else:
+                guidance = 'Если наблюдений достаточно, заверши ответ через final.'
+            prompt = (base + '\nПроверенные результаты предыдущей модели: '
+                      + json.dumps(prior_results, ensure_ascii=False, default=str)[-8000:]
+                      + '\nНаблюдения: ' + json.dumps(
+                          observations, ensure_ascii=False, default=str)[-12000:]
+                      + '\n' + guidance)
+            action = _invoke(prompt, model, key)
+            if final_only and 'final' not in action:
+                raise DatasetError('модель не завершила ответ после проверенных SQL-результатов')
+            return action
 
         def use_tool(action: dict) -> dict:
             """Inspect the dataset or run a bounded read-only SQL query."""
@@ -279,12 +270,7 @@ def ask_datasets(datasets: list[dict], question: str, history: list[dict], *,
                           and str(item.get('text') or '').strip()]
             answer = str(final.get('answer') or '').strip() or f'Показано строк: {len(primary["rows"])}.'
             if on_event:
-                on_event({'type': 'status', 'text': 'Формулирую ответ…'})
-                try:
-                    answer = _stream_answer(question, primary['columns'], primary['rows'],
-                                            answer, model, key, on_event, evidence) or answer
-                except Exception:
-                    on_event({'type': 'delta', 'text': answer})
+                on_event({'type': 'delta', 'text': answer})
             explanation = {
                 'source': ', '.join(str(item.get('title') or item['slug']) for item in datasets),
                 'calculations': [str(item) for item in final.get('calculations', [])],
@@ -304,8 +290,9 @@ def ask_datasets(datasets: list[dict], question: str, history: list[dict], *,
                      'sql': primary['sql'] if len(evidence) == 1 else None,
                      'parameters': {}}, None)
 
-        state = run_graph(decide, use_tool, finish,
-                          max_steps=max(MAX_STEPS, len(datasets) * 3 + 3))
+        step_limit = (max(MAX_STEPS, len(datasets) * 3 + 3)
+                      if not prior_results else max(4, len(datasets) + 2))
+        state = run_graph(decide, use_tool, finish, max_steps=step_limit)
         if state['output'] is not None:
             return state['output']
         errors.append(state['error'] or 'агент не завершил ответ за допустимое число шагов')
