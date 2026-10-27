@@ -5,7 +5,7 @@ import { DatasetOverview } from './DatasetOverview'
 import { ChatControls } from './ChatControls'
 import { AgentMarkdown } from './AgentMarkdown'
 import { searchDatasetMentions } from '../lib/dataset-mentions'
-import { hasMarkdownTable } from '../lib/answer-tables'
+import { tablePresentation } from '../lib/answer-tables'
 import { Alert, Button, Table, Td, Textarea, Th, Tr } from './ui'
 
 const ACTIVE_DATASET_CHAT = 'active-dataset-chat'
@@ -23,22 +23,44 @@ function EvidenceTable({ title, columns, rows }: { title: string; columns: strin
   </div>
 }
 
-/** Keep SQL evidence accessible while avoiding a second visible table beside a Markdown table. */
-function EvidenceResults({ turn }: { turn: DatasetQuestionTurn }) {
-  const evidence = turn.evidence && turn.evidence.length > 1
-    ? <div className="space-y-4">{turn.evidence.map((item, evidenceIndex) =>
-      <div key={`${item.datasetSlug}-${evidenceIndex}`} className="space-y-2">
-        <p className="text-xs text-fg-muted">Источник: @{item.datasetTitle}</p>
-        {item.columns.length > 0 && <EvidenceTable title={item.title || item.datasetTitle} columns={item.columns} rows={item.rows} />}
-        {item.truncated && <p className="text-xs text-fg-muted">Показана часть строк этого результата.</p>}
-        <details className="text-xs text-fg-muted"><summary className="cursor-pointer">SQL источника</summary>
-          <pre className="mt-2 max-w-full overflow-x-auto font-mono">{item.sql}</pre></details>
-      </div>)}</div>
-    : turn.columns.length > 0
-      ? <EvidenceTable title={turn.title || turn.evidence?.[0]?.title || 'Результат запроса'} columns={turn.columns} rows={turn.rows} />
-      : null
+/** Render one source's verified result with its origin and SQL. */
+function EvidenceSource({ item }: { item: NonNullable<DatasetQuestionTurn['evidence']>[number] }) {
+  return <div className="space-y-2">
+    <p className="text-xs text-fg-muted">Источник: @{item.datasetTitle}</p>
+    {item.columns.length > 0 && <EvidenceTable title={item.title || item.datasetTitle} columns={item.columns} rows={item.rows} />}
+    {item.truncated && <p className="text-xs text-fg-muted">Показана часть строк этого результата.</p>}
+    <details className="text-xs text-fg-muted"><summary className="cursor-pointer">SQL источника</summary>
+      <pre className="mt-2 max-w-full overflow-x-auto font-mono">{item.sql}</pre></details>
+  </div>
+}
+
+/** Show one answer table by default and keep other SQL results expandable. */
+export function EvidenceResults({ turn }: { turn: DatasetQuestionTurn }) {
+  const items = turn.evidence || []
+  const plan = tablePresentation(turn.question, turn.answer, items.length)
+  if (items.length > 1) {
+    const all = <div className="space-y-4">{items.map((item, index) =>
+      <EvidenceSource key={`${item.datasetSlug}-${index}`} item={item} />)}</div>
+    if (plan.hasAnswerTable) return <details className="rounded-control border border-line px-3 py-2 text-sm">
+      <summary className="cursor-pointer font-medium text-accent">Показать данные запросов</summary>
+      <div className="mt-3">{all}</div>
+    </details>
+    if (plan.showAll) return all
+    const primary = items[plan.primaryEvidenceIndex]
+    return <div className="space-y-3">
+      <EvidenceSource item={primary} />
+      <details className="rounded-control border border-line px-3 py-2 text-sm">
+        <summary className="cursor-pointer font-medium text-accent">Другие результаты запросов</summary>
+        <div className="mt-3 space-y-4">{items.slice(0, -1).map((item, index) =>
+          <EvidenceSource key={`${item.datasetSlug}-${index}`} item={item} />)}</div>
+      </details>
+    </div>
+  }
+  const evidence = turn.columns.length > 0
+    ? <EvidenceTable title={turn.title || items[0]?.title || 'Результат запроса'} columns={turn.columns} rows={turn.rows} />
+    : null
   if (!evidence) return null
-  if (!hasMarkdownTable(turn.answer)) return evidence
+  if (!plan.hasAnswerTable) return evidence
   return <details className="rounded-control border border-line px-3 py-2 text-sm">
     <summary className="cursor-pointer font-medium text-accent">Показать данные запроса</summary>
     <div className="mt-3">{evidence}</div>
@@ -261,7 +283,8 @@ export function DatasetQuestionPanel({ datasets, initialDatasetSlug, requestedCo
               </div>
               <div className="max-w-[95%] space-y-3 rounded-card border border-line bg-surface-sunken px-4 py-4 sm:max-w-[88%]">
                 <p className="text-[11px] font-semibold tracking-[0.12em] text-accent uppercase">Агент · ответ</p>
-                <AgentMarkdown content={turn.answer} />
+                <AgentMarkdown content={turn.answer} primaryTableOnly={!tablePresentation(
+                  turn.question, turn.answer, turn.evidence?.length || 0).showAll} />
                 <EvidenceResults turn={turn} />
                 {!!turn.hypotheses?.length && <div className="rounded-control border border-line bg-surface px-3 py-3 text-sm">
                   <p className="font-semibold">Гипотезы для проверки</p>
@@ -297,7 +320,8 @@ export function DatasetQuestionPanel({ datasets, initialDatasetSlug, requestedCo
             </div>
             <div className="max-w-[95%] rounded-card border border-line bg-surface-sunken px-4 py-4 sm:max-w-[88%]">
               <p className="text-[11px] font-semibold tracking-[0.12em] text-accent uppercase">Агент · отвечает</p>
-              {streamedAnswer ? <div className="mt-2"><AgentMarkdown content={streamedAnswer} /><span className="ml-0.5 animate-pulse text-sm" aria-hidden="true">▍</span></div>
+              {streamedAnswer ? <div className="mt-2"><AgentMarkdown content={streamedAnswer}
+                primaryTableOnly={!tablePresentation(pendingQuestion, streamedAnswer, 0).showAll} /><span className="ml-0.5 animate-pulse text-sm" aria-hidden="true">▍</span></div>
                 : <p className="mt-2 text-sm text-fg-muted">{status || 'Думаю…'}</p>}
             </div>
           </div>}

@@ -1,5 +1,6 @@
 import Markdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { markdownTableStarts } from '../lib/answer-tables'
 
 const components: Components = {
   h1: ({ children }) => <h3 className="text-lg font-semibold">{children}</h3>,
@@ -25,9 +26,24 @@ const components: Components = {
   img: ({ alt }) => <span>{alt || ''}</span>,
 }
 
-/** Render untrusted agent Markdown without interpreting raw HTML or loading images. */
-export function AgentMarkdown({ content }: { content: string }) {
+/** Render untrusted Markdown, collapsing additional tables unless requested. */
+export function AgentMarkdown({ content, primaryTableOnly = false }: {
+  content: string
+  primaryTableOnly?: boolean
+}) {
+  const firstTableStart = markdownTableStarts(content)[0]
+  /** Keep the first answer table visible and preserve the others on demand. */
+  const renderTable: NonNullable<Components['table']> = ({ children, node }) => {
+    const table = <div className="max-w-full overflow-x-auto rounded-control border border-line">
+      <table className="w-full min-w-max border-collapse text-left text-xs">{children}</table>
+    </div>
+    if (!primaryTableOnly || node?.position?.start?.offset === firstTableStart) return table
+    return <details className="rounded-control border border-line px-3 py-2">
+      <summary className="cursor-pointer font-medium text-accent">Дополнительная таблица</summary>
+      <div className="mt-3">{table}</div>
+    </details>
+  }
   return <div className="min-w-0 space-y-3 break-words text-sm leading-relaxed text-fg">
-    <Markdown remarkPlugins={[remarkGfm]} components={components}>{content}</Markdown>
+    <Markdown remarkPlugins={[remarkGfm]} components={{ ...components, table: renderTable }}>{content}</Markdown>
   </div>
 }

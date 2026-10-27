@@ -508,9 +508,9 @@ def test_dataset_agent_sends_validated_final_without_rewording(dataset, monkeypa
     events = []
     calls = []
 
-    def fake_invoke(*_args):
-        """Count model decisions and supply their fixed actions."""
-        calls.append(True)
+    def fake_invoke(prompt, *_args):
+        """Capture the table instruction and supply fixed model actions."""
+        calls.append(prompt)
         return next(actions)
 
     monkeypatch.setattr(interpret, '_openrouter_key', lambda: 'fake')
@@ -524,6 +524,7 @@ def test_dataset_agent_sends_validated_final_without_rewording(dataset, monkeypa
 
     assert response['answer'] == '**Итого:** 1 запись.'
     assert len(calls) == 2
+    assert 'По умолчанию показывай одну итоговую таблицу' in calls[0]
     assert [event for event in events if event['type'] == 'delta'] == [
         {'type': 'delta', 'text': response['answer']}]
 
