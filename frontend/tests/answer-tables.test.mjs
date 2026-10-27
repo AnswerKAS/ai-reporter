@@ -20,21 +20,21 @@ test('shows one table for a normal question with several generated tables', () =
   const windowsAnswer = answer.replaceAll('\n', '\r\n')
   assert.deepEqual(markdownTableStarts(windowsAnswer), [0, windowsAnswer.indexOf('| Район')])
   assert.deepEqual(tablePresentation('Сколько учеников в школах?', answer, 2), {
-    showAll: false, hasAnswerTable: true, primaryEvidenceIndex: 1,
+    showAll: false, hasAnswerTable: true, primaryEvidenceIndex: 0,
   })
 })
 
-/** With no prose table, only the final verified SQL result is visible by default. */
-test('shows the final evidence table for a normal question', () => {
+/** With no prose table, only the primary verified SQL result is visible by default. */
+test('shows the primary evidence table for a normal question', () => {
   assert.deepEqual(tablePresentation('Сравни школы и районы', 'Итог сравнения', 2), {
-    showAll: false, hasAnswerTable: false, primaryEvidenceIndex: 1,
+    showAll: false, hasAnswerTable: false, primaryEvidenceIndex: 0,
   })
 })
 
 /** An explicit request for several tables keeps all requested results visible. */
 test('shows separate tables when requested explicitly', () => {
   assert.deepEqual(tablePresentation('Сделай две отдельные таблицы по школам', 'Итог', 2), {
-    showAll: true, hasAnswerTable: false, primaryEvidenceIndex: 1,
+    showAll: true, hasAnswerTable: false, primaryEvidenceIndex: 0,
   })
 })
 
@@ -53,5 +53,6 @@ test('requires an explicit request for multiple tables', () => {
     'Покажи три лучшие школы в таблице',
     'Выведи отдельную таблицу по школам',
     'Сравни две школы в одной таблице',
+    'В таблице по каждому статусу должна быть сумма',
   ]) assert.equal(tablePresentation(question, '', 2).showAll, false, question)
 })

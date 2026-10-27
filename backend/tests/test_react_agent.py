@@ -878,3 +878,35 @@ def test_sql_report_section_applies_report_filter_before_aggregation(dataset, mo
     assert 'WHERE `day` >= {f_day__from:Date}' in calls[0][0]
     assert calls[0][1] == {'f_day__from': '2026-01-01'}
     assert rendered.get('filterNote') is None
+
+
+@pytest.mark.parametrize('primary_slug', [None, 'sales', 'lessons'])
+def test_dataset_agent_selects_primary_answer_instead_of_source_sample(dataset, monkeypatch, primary_slug):
+    """The final selects the answer source independently of SQL execution order."""
+    lessons = {**dataset, 'slug': 'lessons', 'title': 'Занятия'}
+    final = {'answer': 'Сумма по школам и статусам.',
+             'columnLabels': {'sales': {'amount': 'Сумма'},
+                              'lessons': {'amount': 'Сумма'}},
+             'tableTitles': {'sales': 'Суммы по школам и статусам',
+                             'lessons': 'Выборка занятий'}}
+    if primary_slug is not None:
+        final['primaryDatasetSlug'] = primary_slug
+    actions = iter([
+        {'tool': 'execute_sql', 'args': {'datasetSlug': 'sales',
+                                       'sql': 'SELECT sum(revenue) AS amount FROM dataset'}},
+        {'tool': 'execute_sql', 'args': {'datasetSlug': 'lessons',
+                                       'sql': 'SELECT revenue AS amount FROM dataset LIMIT 20'}},
+        {'final': final},
+    ])
+    monkeypatch.setattr(interpret, '_openrouter_key', lambda: 'fake')
+    monkeypatch.setattr(interpret, '_chat_models', lambda: ('fake-model', None))
+    monkeypatch.setattr(runner, '_invoke', lambda *_args: next(actions))
+    monkeypatch.setattr(runner, 'execute_readonly_sql', lambda source, _sql: (
+        ['amount'], [[100 if source['slug'] == 'sales' else 20]], False))
+    response = runner.ask_datasets([dataset, lessons], 'Сумма по школам и статусам', [],
+                                   reveal_sql=True)
+    expected_slug = primary_slug or 'sales'
+    assert response['primaryDatasetSlug'] == expected_slug
+    assert response['title'] == final['tableTitles'][expected_slug]
+    assert response['rows'] == [['20' if expected_slug == 'lessons' else '100']]
+    assert len(response['evidence']) == 2

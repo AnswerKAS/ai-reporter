@@ -46,12 +46,14 @@ export function EvidenceResults({ turn }: { turn: DatasetQuestionTurn }) {
       <div className="mt-3">{all}</div>
     </details>
     if (plan.showAll) return all
-    const primary = items[plan.primaryEvidenceIndex]
+    const selectedIndex = items.findIndex((item) => item.datasetSlug === turn.primaryDatasetSlug)
+    const primaryIndex = selectedIndex >= 0 ? selectedIndex : plan.primaryEvidenceIndex
+    const primary = items[primaryIndex]
     return <div className="space-y-3">
       <EvidenceSource item={primary} />
       <details className="rounded-control border border-line px-3 py-2 text-sm">
         <summary className="cursor-pointer font-medium text-accent">Другие результаты запросов</summary>
-        <div className="mt-3 space-y-4">{items.slice(0, -1).map((item, index) =>
+        <div className="mt-3 space-y-4">{items.filter((_, index) => index !== primaryIndex).map((item, index) =>
           <EvidenceSource key={`${item.datasetSlug}-${index}`} item={item} />)}</div>
       </details>
     </div>

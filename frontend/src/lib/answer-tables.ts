@@ -1,29 +1,21 @@
-/** Locate GFM tables outside fenced and indented code blocks. */
+import { unified } from 'unified'
+import remarkParse from 'remark-parse'
+import remarkGfm from 'remark-gfm'
+
+const parser = unified().use(remarkParse).use(remarkGfm)
+
+/** Locate every rendered GFM table, including nested and single-column tables. */
 export function markdownTableStarts(answer: string): number[] {
-  const lines = answer.split(/\r?\n/u)
   const starts: number[] = []
-  let fence: string | null = null
-  let lineStart = 0
-  let previousStart = 0
-  for (let index = 0; index < lines.length; index += 1) {
-    const raw = lines[index]
-    const line = raw.trim()
-    const marker = line.match(/^(`{3,}|~{3,})/u)?.[1]
-    if (marker) {
-      if (!fence) fence = marker
-      else if (marker[0] === fence[0] && marker.length >= fence.length) fence = null
-    } else if (!fence && index > 0 && !/^(?: {4}|\t)/u.test(raw)
-        && !/^(?: {4}|\t)/u.test(lines[index - 1])) {
-      const isDivider = /^\|?\s*:?-{3,}:?\s*\|\s*:?-{3,}:?(?:\s*\|\s*:?-{3,}:?)*\s*\|?$/u.test(line)
-      if (isDivider && lines[index - 1].includes('|')) {
-        starts.push(previousStart)
-      }
+  const pending = [...parser.parse(answer).children]
+  while (pending.length) {
+    const node = pending.pop()!
+    if (node.type === 'table' && node.position?.start.offset !== undefined) {
+      starts.push(node.position.start.offset)
     }
-    previousStart = lineStart
-    const separator = answer[lineStart + raw.length]
-    lineStart += raw.length + (separator === '\r' ? 2 : separator === '\n' ? 1 : 0)
+    if ('children' in node) pending.push(...node.children as typeof pending)
   }
-  return starts
+  return starts.sort((left, right) => left - right)
 }
 
 /** Detect a GFM table that the answer already presents to the reader. */
@@ -37,10 +29,14 @@ export function tablePresentation(question: string, answer: string, evidenceCoun
   hasAnswerTable: boolean
   primaryEvidenceIndex: number
 } {
-  const showAll = /(?:(?:две|два|двух|три|трёх|трех|четыре|несколько|много|отдельн[а-яё]*|кажд[а-яё]*|[2-9])[^.!?]{0,50}таблиц[а-яё]*|таблиц[а-яё]*[^.!?]{0,50}(?:отдельн[а-яё]*|по кажд[а-яё]*))/iu.test(question)
+  const pluralTable = 'таблиц(?:ы|ах|ами)?'
+  const count = '(?:две|два|двух|двумя|три|трёх|трех|тремя|четыре|четырёх|четырех|пять|шесть|семь|восемь|девять|десять|несколько|[2-9]|[1-9][0-9]+)'
+  const adjective = '(?:(?:отдельные|отдельных|разные|разных|итоговые|итоговых|сводные|сводных)\\s+)*'
+  const multipleTables = new RegExp(`(?:^|[^а-яё0-9])${count}\\s+${adjective}${pluralTable}(?![а-яё])`, 'iu')
+  const separateTables = /(?:отдельные|отдельных|разные|разных)\s+таблиц(?:ы|ах|ами)?(?![а-яё])|по\s+(?:отдельной\s+)?таблице\s+(?:на\s+кажд|для\s+кажд)|таблиц(?:ы|ах|ами)?\s+(?:отдельно\s+)?(?:по\s+кажд|для\s+кажд)/iu
   return {
-    showAll,
+    showAll: multipleTables.test(question) || separateTables.test(question),
     hasAnswerTable: hasMarkdownTable(answer),
-    primaryEvidenceIndex: evidenceCount - 1,
+    primaryEvidenceIndex: evidenceCount > 0 ? 0 : -1,
   }
 }

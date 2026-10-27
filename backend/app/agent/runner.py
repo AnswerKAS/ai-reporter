@@ -128,6 +128,7 @@ def ask_datasets(datasets: list[dict], question: str, history: list[dict], *,
         '"groupBy":["..."],"filters":["..."],"orderBy":null,"scope":"...",'
         '"columnLabels":{"slug":{"sql_column":"Русское название"}},'
         '"tableTitles":{"slug":"Краткое название результата"},'
+        '"primaryDatasetSlug":"slug итоговой таблицы",'
         '"hypotheses":[{"text":"предположение","howToCheck":"способ проверки"}]}}. '
         'Для sample_rows и execute_sql укажи args.datasetSlug из прикреплённого списка; '
         'для execute_sql также укажи args.sql = "SELECT ... FROM dataset ...". '
@@ -154,10 +155,13 @@ def ask_datasets(datasets: list[dict], question: str, history: list[dict], *,
         'нет, не выдумывай связь. Гипотезы отделяй от фактов и добавляй способ проверки. '
         'Отвечай только по фактическим результатам инструментов, без вымышленных чисел. '
         'final.answer — готовый короткий ответ по-русски в Markdown. '
+        'В final.primaryDatasetSlug укажи датасет с итоговым результатом, который '
+        'прямо отвечает на вопрос; служебная выборка другого источника не является итогом. '
         'По умолчанию показывай одну итоговую таблицу, которая прямо отвечает на вопрос; '
         'последний SQL-запрос по одному датасету должен возвращать именно её, '
         'а промежуточные расчёты не представляй отдельными таблицами. '
-        'Для одного датасета не вставляй Markdown-таблицы в final.answer: '
+        'Если несколько таблиц не запрошены явно, для одного датасета '
+        'не вставляй Markdown-таблицы в final.answer: '
         'таблица последнего SQL-результата будет показана автоматически. '
         'При сравнении разных подключений можешь дать одну сводную Markdown-таблицу, '
         'основанную на проверенных результатах. Несколько отдельных таблиц делай '
@@ -271,7 +275,11 @@ def ask_datasets(datasets: list[dict], question: str, history: list[dict], *,
                 evidence.append({**item, 'title': title.strip(), 'columns': display_columns,
                                  'rows': [[str(value) if value is not None else '' for value in row]
                                           for row in item['rows']]})
-            primary = evidence[-1]
+            primary_slug = final.get('primaryDatasetSlug') or datasets[0]['slug']
+            if not isinstance(primary_slug, str) or primary_slug not in selected:
+                raise DatasetError('Укажи в final.primaryDatasetSlug прикреплённый датасет '
+                                   'с итоговой таблицей ответа.')
+            primary = next(item for item in evidence if item['datasetSlug'] == primary_slug)
             hypotheses = [{'text': str(item.get('text') or '').strip(),
                            'howToCheck': str(item.get('howToCheck') or '').strip()}
                           for item in final.get('hypotheses', []) if isinstance(item, dict)
@@ -290,6 +298,7 @@ def ask_datasets(datasets: list[dict], question: str, history: list[dict], *,
                 'totalRows': None, 'hasMore': any(item['truncated'] for item in evidence),
             }
             return ({'answer': answer, 'title': primary['title'],
+                     'primaryDatasetSlug': primary_slug,
                      'columns': primary['columns'], 'rows': primary['rows'],
                      'plan': {'queries': [{'datasetSlug': item['datasetSlug'], 'sql': item['sql']}
                                           for item in evidence]},

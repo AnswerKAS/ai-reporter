@@ -6,7 +6,7 @@ import { createServer } from 'vite'
 
 /** A normal answer shows one table and keeps every other table expandable. */
 test('renders one visible table for a normal answer', async () => {
-  const server = await createServer({ server: { middlewareMode: true }, appType: 'custom' })
+  const server = await createServer({ server: { middlewareMode: true, hmr: false, ws: false }, appType: 'custom' })
   try {
     const { AgentMarkdown } = await server.ssrLoadModule('/src/components/AgentMarkdown.tsx')
     const { EvidenceResults } = await server.ssrLoadModule('/src/components/DatasetQuestionPanel.tsx')

@@ -102,6 +102,8 @@ export interface DatasetAnswerExplanation {
 }
 
 export interface DatasetQuestionTurn {
+  /** Источник итоговой таблицы; у старых ответов используется первый результат. */
+  primaryDatasetSlug?: string
   datasetSlug?: string
   datasetTitle?: string
   datasetSlugs?: string[]
