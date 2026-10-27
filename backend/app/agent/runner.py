@@ -73,7 +73,10 @@ def _russian_columns(columns: list[str], final: dict, dataset: dict) -> list[str
     for name in columns:
         field = schema.get(name) or {}
         configured = (settings.get(name) or {}).get('title')
-        candidates = (configured, field.get('comment'), labels.get(name), name)
+        supplied = labels.get(name)
+        if isinstance(supplied, dict):
+            supplied = supplied.get('Русское название') if supplied.get('sql_column', name) == name else None
+        candidates = (configured, field.get('comment'), supplied, name)
         label = next((str(value).strip() for value in candidates
                       if value and re.search(r'[А-Яа-яЁё]', str(value))
                       and str(value).strip() not in translated), None)
@@ -163,7 +166,8 @@ def ask_datasets(datasets: list[dict], question: str, history: list[dict], *,
         'Запрещено изменение данных или схемы. Сначала вызови execute_sql, '
         'для сравнения вызови его хотя бы раз для КАЖДОГО прикреплённого датасета. '
         'При ошибке исправь SQL и вызови инструмент снова. '
-        'В final.columnLabels дай русское название каждому столбцу каждого результата SQL. '
+        'В final.columnLabels дай русское название каждому столбцу последнего '
+        'результата SQL по каждому датасету; промежуточные запросы подписывать не нужно. '
         'Сопоставляй только сравнимые периоды, единицы и ключи. Если общего ключа '
         'нет, не выдумывай связь. Гипотезы отделяй от фактов и добавляй способ проверки. '
         'Отвечай только по фактическим результатам инструментов, без вымышленных чисел. '
@@ -224,8 +228,10 @@ def ask_datasets(datasets: list[dict], question: str, history: list[dict], *,
                               + ', '.join(missing)}
             final = action.get('final') or {}
             labels = final.get('columnLabels') if isinstance(final.get('columnLabels'), dict) else {}
+            latest_results = {item['datasetSlug']: item for item in results}
             evidence = []
-            for item in results:
+            for dataset in datasets:
+                item = latest_results[dataset['slug']]
                 source = selected[item['datasetSlug']]
                 if len(datasets) > 1 and not isinstance(labels.get(item['datasetSlug']), dict):
                     raise DatasetError('Укажи final.columnLabels отдельно для каждого '

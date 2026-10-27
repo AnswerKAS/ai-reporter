@@ -270,6 +270,38 @@ def test_dataset_agent_compares_attached_datasets_with_evidence(dataset, monkeyp
     assert response['hypotheses'][0]['howToCheck'] == 'Сравнить одинаковые периоды'
 
 
+def test_dataset_agent_uses_latest_result_instead_of_exploratory_queries(dataset, monkeypatch):
+    """A final answer only needs labels for the latest SQL result of each source."""
+    actions = iter([
+        {'tool': 'execute_sql', 'args': {'sql': 'SELECT count(*) AS cnt FROM dataset'}},
+        {'tool': 'execute_sql', 'args': {'sql': 'SELECT city, sum(revenue) AS total FROM dataset GROUP BY city'}},
+        {'final': {'answer': 'Москва: 100',
+                   'columnLabels': {'city': 'Город', 'total': 'Выручка'}}},
+    ])
+    monkeypatch.setattr(interpret, '_openrouter_key', lambda: 'fake')
+    monkeypatch.setattr(interpret, '_chat_models', lambda: ('fake-model', None))
+    monkeypatch.setattr(runner, '_invoke', lambda *_: next(actions))
+    monkeypatch.setattr(runner, 'execute_readonly_sql', lambda _dataset, sql: (
+        (['cnt'], [[1]], False) if 'AS cnt' in sql else
+        (['city', 'total'], [['Москва', 100]], False)))
+
+    response = runner.ask_datasets([dataset], 'Выручка по городам', [], reveal_sql=True)
+
+    assert response['columns'] == ['Город', 'Выручка']
+    assert response['rows'] == [['Москва', '100']]
+    assert len(response['evidence']) == 1
+    assert len(response['plan']['queries']) == 1
+    assert 'GROUP BY city' in response['sql']
+
+
+def test_dataset_agent_accepts_nested_russian_column_labels(dataset):
+    """A model's structured Russian label maps to the matching SQL column."""
+    assert runner._russian_columns(
+        ['total'], {'columnLabels': {'total': {'sql_column': 'total',
+                                              'Русское название': 'Выручка'}}}, dataset
+    ) == ['Выручка']
+
+
 def test_dataset_agent_rejects_query_for_unattached_dataset(dataset, monkeypatch):
     """A model action cannot query a source that the user did not attach."""
     actions = iter([
