@@ -64,6 +64,8 @@ export interface SectionDefinition {
   /** SQL authored by the agent; dataset is available as the dataset relation. */
   sql?: string | null
   datasetSlug?: string | null
+  /** Extra dataset relations for agent SQL: dataset_2, dataset_3, ... */
+  joinDatasetSlugs?: string[]
   grain?: Grain | null
   orderBy?: string | null
   orderDir: 'asc' | 'desc'

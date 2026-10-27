@@ -2,6 +2,11 @@
 
 import re
 
+import sqlglot
+from sqlglot import exp
+from sqlglot.errors import SqlglotError
+from sqlglot.optimizer.scope import traverse_scope
+
 from ..datasets import registry, sqlsource
 from ..datasets.base import DatasetError, sanitize_error
 from ..query import dialects
@@ -13,17 +18,72 @@ _FORBIDDEN = re.compile(r'\b(?:' + '|'.join(sqlsource.FORBIDDEN) + r')\b', re.IG
 _LOCK = re.compile(r'\bFOR\s+(?:UPDATE|SHARE)\b', re.IGNORECASE)
 
 
-def scope_dataset_sql(dataset: dict, statement: str,
-                      conditions: list[str] | None = None) -> str:
-    """Expose the selected dataset as a virtual SQL relation named dataset."""
-    adapter = registry.adapter_for(dataset)
+def joinable_datasets(dataset: dict, attached: list[dict]) -> list[dict]:
+    """Return attached datasets that share the primary source and exact connection."""
+    if dataset['source'] == 'csv':
+        return []
     try:
-        source = adapter.source_sql('dataset_source')
-    finally:
-        adapter.close()
+        primary_dsn = registry.resolve_dataset_dsn(dataset)
+    except DatasetError:
+        return []
+    compatible = []
+    for item in attached:
+        if item['slug'] == dataset['slug'] or item['source'] != dataset['source']:
+            continue
+        try:
+            if registry.resolve_dataset_dsn(item) == primary_dsn:
+                compatible.append(item)
+        except DatasetError:
+            continue
+    return compatible
+
+
+def _validate_dataset_references(statement: str, names: set[str], source: str) -> None:
+    """Reject every physical table or table function outside granted dataset CTEs."""
+    try:
+        tree = sqlglot.parse_one(statement, read=source)
+    except (SqlglotError, ValueError) as exc:
+        raise DatasetError('не удалось разобрать SQL агента; уточните запрос') from exc
+    if tree is None:
+        raise DatasetError('SQL агента пуст')
+    if any(cte.alias_or_name.lower() in names for cte in tree.find_all(exp.CTE)):
+        raise DatasetError('имя виртуального датасета нельзя переопределять в CTE')
+    for scope in traverse_scope(tree):
+        for table in scope.tables:
+            relation = scope.sources.get(table.alias_or_name)
+            if isinstance(relation, exp.Table):
+                if (not table.name or table.db or table.catalog
+                        or table.name.lower() not in names
+                        or not isinstance(table.this, exp.Identifier)):
+                    raise DatasetError('SQL может читать только прикреплённые датасеты '
+                                       '(dataset, dataset_2 и далее)')
+
+
+def scope_dataset_sql(dataset: dict, statement: str,
+                      conditions: list[str] | None = None,
+                      datasets: list[dict] | None = None) -> str:
+    """Expose only the primary and same-connection datasets as virtual relations."""
+    statement = validate_readonly_sql(statement)
+    extra = datasets or []
+    if len({item['slug'] for item in extra}) != len(extra) or any(
+            item['slug'] == dataset['slug'] for item in extra):
+        raise DatasetError('дополнительные датасеты не должны повторяться')
+    if len(joinable_datasets(dataset, extra)) != len(extra):
+        raise DatasetError('JOIN доступен только для датасетов одного подключения')
+    names = {'dataset', *(f'dataset_{index}' for index in range(2, len(extra) + 2))}
+    _validate_dataset_references(statement, names, dataset['source'])
     where = ' WHERE ' + ' AND '.join(conditions) if conditions else ''
-    prefix = f'dataset AS (SELECT * FROM {source}{where})'
-    statement = statement.strip()
+    prefixes = []
+    for index, item in enumerate([dataset, *extra], start=1):
+        adapter = registry.adapter_for(item)
+        try:
+            source = adapter.source_sql(f'dataset_source_{index}')
+        finally:
+            adapter.close()
+        name = 'dataset' if index == 1 else f'dataset_{index}'
+        item_where = where if index == 1 else ''
+        prefixes.append(f'{name} AS (SELECT * FROM {source}{item_where})')
+    prefix = ', '.join(prefixes)
     if dataset['source'] == 'postgres':
         # The adapter passes an empty parameter mapping to psycopg; literal
         # percent signs in model SQL must follow the same rule as source_sql.

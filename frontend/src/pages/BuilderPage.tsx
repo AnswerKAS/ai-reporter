@@ -610,7 +610,8 @@ function Builder({ embedded, suggestedPrompt }: {
         setComputed((prev) => prev.filter((c) => !gone.has(c.key)))
         setFilters((prev) => prev.filter((f) => !gone.has(f.dimension)))
         setSections((prev) =>
-          prev.map((s) => {
+          prev.filter((s) => !(s.sql && (s.datasetSlug === slug ||
+            s.joinDatasetSlugs?.includes(slug)))).map((s) => {
             const by = s.by.filter((b) => !gone.has(b))
             return {
               ...s,
@@ -632,7 +633,8 @@ function Builder({ embedded, suggestedPrompt }: {
       let hitSections = 0
       for (const s of sections) {
         const hit = [...s.metrics, ...s.by].filter((key) => gone.has(key))
-        if (hit.length === 0) continue
+        if (hit.length === 0 && !(s.sql && (s.datasetSlug === slug ||
+          s.joinDatasetSlugs?.includes(slug)))) continue
         hitSections += 1
         hit.forEach((key) => hitFields.add(key))
       }

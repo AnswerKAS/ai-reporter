@@ -7,6 +7,7 @@ from app.datasets.base import DatasetError
 from app.query import interpret
 from app.reports import executor
 from app.schemas.definition import SectionDefinition
+from tests.fakesource import FakeSource
 
 
 def test_agent_model_call_uses_chat_timeout(monkeypatch):
@@ -22,6 +23,33 @@ def test_agent_model_call_uses_chat_timeout(monkeypatch):
 
     assert runner._invoke('prompt', 'model', 'key') == {'final': {'reply': 'Готово'}}
     assert observed == [interpret.CHAT_TIMEOUT]
+
+
+def test_streamed_dataset_answer_uses_chat_timeout(monkeypatch):
+    """The final wording stream cannot wait indefinitely for a model response."""
+    import langchain_openai
+
+    options = {}
+
+    class FakeChat:
+        """Capture model options and return one short streamed message."""
+
+        def __init__(self, **kwargs):
+            """Record the timeout configured for the final wording call."""
+            options.update(kwargs)
+
+        def stream(self, _messages):
+            """Yield a fixed answer without contacting a model provider."""
+            yield type('Chunk', (), {'content': 'Готово'})()
+
+    monkeypatch.setattr(langchain_openai, 'ChatOpenAI', FakeChat)
+    events = []
+
+    answer = runner._stream_answer('Сколько?', ['Количество'], [['1']],
+                                   'Одна запись', 'model', 'key', events.append)
+
+    assert answer == 'Готово'
+    assert options['timeout'] == interpret.CHAT_TIMEOUT
 
 
 def test_agent_extracts_action_from_explanation_and_fenced_json():
@@ -69,6 +97,88 @@ def test_report_agent_retries_other_dataset_when_attached(dataset, monkeypatch):
     result = runner.chat_report([{'role': 'user', 'text': 'Продажи'}], Catalog(),
                                 attached_datasets=['sales'])
     assert result['definition']['sections'][0]['datasetSlug'] == 'sales'
+
+
+def test_report_agent_preserves_attached_join_dependencies(dataset, monkeypatch):
+    """A joined SQL block keeps its attached dataset list after preview."""
+    second = {**dataset, 'slug': 'costs', 'title': 'Расходы', 'table_name': 'costs'}
+    observed = []
+
+    class Catalog:
+        """Expose two compatible datasets for a report proposal."""
+
+        metrics = {}
+        dimensions = {}
+
+        def __init__(self):
+            """Store the datasets available to the report agent."""
+            self.datasets = {'sales': dataset, 'costs': second}
+
+        def dataset(self, slug):
+            """Resolve a dataset for preview rendering."""
+            return self.datasets[slug]
+
+    def fake_build(section, *_args, **_kwargs):
+        """Record the joined relations present in the previewed section."""
+        observed.append(section.join_dataset_slugs)
+        return {'type': 'table', 'title': section.title, 'columns': [], 'rows': []}
+
+    monkeypatch.setattr(interpret, '_openrouter_key', lambda: 'fake')
+    monkeypatch.setattr(interpret, '_chat_models', lambda: ('fake-model', None))
+    monkeypatch.setattr(runner, '_invoke', lambda *_: {
+        'tool': 'preview_report', 'args': {'definition': {'sections': [{
+            'type': 'table', 'title': 'Продажи и расходы', 'datasetSlug': 'sales',
+            'joinDatasetSlugs': ['costs'],
+            'sql': 'SELECT * FROM dataset LEFT JOIN dataset_2 USING (id)',
+        }]}}})
+    monkeypatch.setattr(executor, 'build_section', fake_build)
+
+    result = runner.chat_report([{'role': 'user', 'text': 'Сравни продажи и расходы'}],
+                                Catalog(), attached_datasets=['sales', 'costs'])
+
+    assert observed == [['costs']]
+    assert result['definition']['sections'][0]['joinDatasetSlugs'] == ['costs']
+
+
+def test_report_agent_rejects_unattached_join_dataset(dataset, monkeypatch):
+    """Preview returns an unattached JOIN dependency for model repair."""
+    second = {**dataset, 'slug': 'costs', 'title': 'Расходы'}
+
+    class Catalog:
+        """Expose both registered datasets while attaching only one."""
+
+        metrics = {}
+        dimensions = {}
+
+        def __init__(self):
+            """Store both datasets in the catalog."""
+            self.datasets = {'sales': dataset, 'costs': second}
+
+        def dataset(self, slug):
+            """Resolve a catalog dataset for preview."""
+            return self.datasets[slug]
+
+    prompts = []
+
+    def fake_invoke(prompt, *_args):
+        """Return an invalid JOIN first and capture the repair observation."""
+        prompts.append(prompt)
+        return {'tool': 'preview_report', 'args': {'definition': {'sections': [{
+            'type': 'table', 'datasetSlug': 'sales',
+            'joinDatasetSlugs': ['costs'] if len(prompts) == 1 else [],
+            'sql': 'SELECT * FROM dataset',
+        }]}}}
+
+    monkeypatch.setattr(interpret, '_openrouter_key', lambda: 'fake')
+    monkeypatch.setattr(interpret, '_chat_models', lambda: ('fake-model', None))
+    monkeypatch.setattr(runner, '_invoke', fake_invoke)
+    monkeypatch.setattr(executor, 'build_section', lambda *_args, **_kwargs: {
+        'type': 'table', 'title': 'Продажи', 'columns': [], 'rows': []})
+
+    runner.chat_report([{'role': 'user', 'text': 'Продажи'}], Catalog(),
+                       attached_datasets=['sales'])
+
+    assert 'не на прикреплённый датасет' in prompts[1]
 
 
 def test_report_agent_sees_failed_sql_before_repair(dataset, monkeypatch):
@@ -192,14 +302,108 @@ def test_readonly_sql_rejects_mutations(sql):
         readonly.validate_readonly_sql(sql)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    'The SQL scope only adds a dataset CTE; parse table references and reject '
-    'reads outside the selected dataset before execution.'
-))
 def test_dataset_sql_rejects_other_source_tables(dataset, sources):
     """A dataset question cannot query another table on the same connection."""
     with pytest.raises(DatasetError):
         readonly.scope_dataset_sql(dataset, 'SELECT * FROM private_table')
+
+
+@pytest.mark.parametrize('sql', [
+    'SELECT * FROM dataset LEFT JOIN private_table p ON dataset.id = p.id',
+    'WITH hidden AS (SELECT * FROM private_table) SELECT * FROM hidden',
+    'SELECT * FROM dataset WHERE EXISTS (SELECT 1 FROM private_table)',
+    'SELECT * FROM remote("host")',
+    'WITH dataset AS (SELECT * FROM private_table) SELECT * FROM dataset',
+])
+def test_dataset_sql_rejects_hidden_source_references(dataset, sql):
+    """Nested queries and relation functions cannot escape dataset relations."""
+    with pytest.raises(DatasetError):
+        readonly.scope_dataset_sql(dataset, sql)
+
+
+@pytest.mark.parametrize('join_type', ['INNER', 'LEFT', 'RIGHT', 'FULL', 'CROSS'])
+def test_dataset_sql_joins_attached_dataset_relations(dataset, sources, join_type):
+    """Every ordinary join type can use a second dataset on the same connection."""
+    second = {**dataset, 'slug': 'costs', 'title': 'Расходы', 'table_name': 'costs'}
+    sources.add('costs', FakeSource(source='clickhouse', table='costs'))
+    join = f'{join_type} JOIN dataset_2 c'
+    predicate = '' if join_type == 'CROSS' else ' ON s.id = c.id'
+    query = f'SELECT * FROM dataset s {join}{predicate}'
+
+    scoped = readonly.scope_dataset_sql(dataset, query, datasets=[second])
+
+    assert 'dataset_2 AS (SELECT * FROM' in scoped
+    assert 'costs' in scoped
+    assert query in scoped
+
+
+def test_dataset_sql_rejects_join_across_connections(dataset, sources):
+    """A second virtual dataset cannot point at another connection."""
+    second = {**dataset, 'slug': 'costs', 'dsn': 'clickhouse://other/db'}
+    with pytest.raises(DatasetError, match='подключен'):
+        readonly.scope_dataset_sql(dataset, 'SELECT * FROM dataset JOIN dataset_2 USING (id)',
+                                   datasets=[second])
+
+
+def test_joinable_datasets_skips_broken_connections(dataset):
+    """One broken catalog entry cannot prevent a report agent from starting."""
+    broken = {**dataset, 'slug': 'broken', 'dsn': 'invalid://source'}
+
+    assert readonly.joinable_datasets(dataset, [broken]) == []
+    assert readonly.joinable_datasets(broken, [dataset]) == []
+
+
+@pytest.mark.parametrize('source,dsn', [
+    ('postgres', 'postgresql://user:pass@host:5432/db'),
+    ('oracle', 'oracle://user:pass@host:1521/db'),
+])
+def test_dataset_sql_keeps_cte_joins_across_dialects(dataset, sources, source, dsn):
+    """PostgreSQL and Oracle keep CTEs while joining granted virtual datasets."""
+    primary = {**dataset, 'source': source, 'dsn': dsn, 'table_name': 'orders'}
+    second = {**primary, 'slug': 'costs', 'table_name': 'costs'}
+    sources.add('sales', FakeSource(source=source, table='orders'))
+    sources.add('costs', FakeSource(source=source, table='costs'))
+    query = ('WITH totals AS (SELECT id FROM dataset) '
+             'SELECT * FROM totals t FULL JOIN dataset_2 c ON t.id = c.id')
+
+    scoped = readonly.scope_dataset_sql(primary, query, datasets=[second])
+
+    assert scoped.startswith('WITH dataset AS (SELECT * FROM')
+    assert 'dataset_2 AS (SELECT * FROM' in scoped
+    assert 'totals AS (SELECT id FROM dataset)' in scoped
+
+
+def test_report_sql_section_keeps_joined_datasets(dataset, sources, monkeypatch):
+    """A saved SQL block expands the same joined dataset when rendered again."""
+    second = {**dataset, 'slug': 'costs', 'title': 'Расходы', 'table_name': 'costs'}
+    sources.add('costs', FakeSource(source='clickhouse', table='costs'))
+    captured = []
+
+    class Catalog:
+        """Resolve the two datasets used by one SQL report block."""
+
+        dimensions = {}
+
+        def dataset(self, slug):
+            """Return only one of the registered SQL block datasets."""
+            return {'sales': dataset, 'costs': second}[slug]
+
+    def fake_execute(_dataset, sql, **_kwargs):
+        """Capture the SQL used to render the report block."""
+        captured.append(sql)
+        return ['city', 'cost'], [['Москва', 20]], False
+
+    monkeypatch.setattr(executor, 'execute_readonly_sql', fake_execute)
+    section = SectionDefinition.model_validate({
+        'type': 'table', 'datasetSlug': 'sales', 'joinDatasetSlugs': ['costs'],
+        'sql': 'SELECT s.city, c.cost FROM dataset s LEFT JOIN dataset_2 c ON s.id = c.id',
+    })
+
+    result = executor.build_section(section, {}, Catalog())
+
+    assert result['rows'] == [{'city': 'Москва', 'cost': 20}]
+    assert 'dataset_2 AS (SELECT * FROM' in captured[0]
+    assert 'LEFT JOIN dataset_2 c' in captured[0]
 
 
 def test_dataset_agent_executes_window_query(dataset, sources, monkeypatch):
@@ -239,7 +443,8 @@ def test_dataset_agent_compares_attached_datasets_with_evidence(dataset, monkeyp
     actions = iter([
         {'tool': 'describe_schema'},
         {'tool': 'execute_sql', 'args': {'datasetSlug': 'sales',
-            'sql': 'SELECT month, sum(revenue) AS amount FROM dataset GROUP BY month'}},
+            'sql': 'SELECT s.month, sum(s.revenue) AS amount FROM dataset s '
+                   'LEFT JOIN dataset_2 c ON s.month = c.month GROUP BY s.month'}},
         {'final': {'answer': 'Предварительно выручка растёт быстрее расходов.'}},
         {'tool': 'execute_sql', 'args': {'datasetSlug': 'costs',
             'sql': 'SELECT month, sum(cost) AS amount FROM dataset GROUP BY month'}},
@@ -254,10 +459,12 @@ def test_dataset_agent_compares_attached_datasets_with_evidence(dataset, monkeyp
                                    'costs': 'Расходы по месяцам'}}},
     ])
     observed = []
+    queries = []
 
-    def fake_query(source, _sql):
+    def fake_query(source, sql):
         """Return a distinct verified aggregate for each attached source."""
         observed.append(source['slug'])
+        queries.append(sql)
         return ['month', 'amount'], [['2026-01', 100 if source['slug'] == 'sales' else 80]], False
 
     monkeypatch.setattr(interpret, '_openrouter_key', lambda: 'fake')
@@ -269,6 +476,7 @@ def test_dataset_agent_compares_attached_datasets_with_evidence(dataset, monkeyp
                                    reveal_sql=True)
 
     assert observed == ['sales', 'costs']
+    assert 'dataset_2 AS (SELECT * FROM' in queries[0]
     assert [item['datasetSlug'] for item in response['evidence']] == ['sales', 'costs']
     assert response['evidence'][0]['columns'] == ['Месяц', 'Выручка']
     assert [item['title'] for item in response['evidence']] == [

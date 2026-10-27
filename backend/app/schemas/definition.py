@@ -39,6 +39,7 @@ class SectionDefinition(CamelModel):
     metrics: list[str] = []
     by: list[str] = []
     dataset_slug: str | None = None
+    join_dataset_slugs: list[str] = Field(default_factory=list)
     sql: str | None = None
     grain: GRAINS | None = None
     order_by: str | None = None
@@ -67,6 +68,9 @@ class SectionDefinition(CamelModel):
         if self.sql:
             if not self.dataset_slug:
                 raise ValueError('для SQL-блока нужен датасет')
+            if (len(self.join_dataset_slugs) != len(set(self.join_dataset_slugs))
+                    or self.dataset_slug in self.join_dataset_slugs):
+                raise ValueError('дополнительные датасеты SQL-блока не должны повторяться')
             return self
         if not self.metrics:
             raise ValueError('для блока нужен показатель или SQL-запрос')

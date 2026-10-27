@@ -277,7 +277,8 @@ def _build_sql_section(section: SectionDefinition, catalog: builder.Catalog,
         if clause:
             conditions.append(clause)
             params.update(values)
-    sql = scope_dataset_sql(dataset, section.sql, conditions)
+    joined = [catalog.dataset(slug) for slug in section.join_dataset_slugs]
+    sql = scope_dataset_sql(dataset, section.sql, conditions, datasets=joined)
     columns, rows, truncated = execute_readonly_sql(
         dataset, sql, visible_rows=min(section.limit or MAX_SECTION_ROWS, MAX_SECTION_ROWS),
         parameters=params)

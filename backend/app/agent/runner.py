@@ -10,7 +10,7 @@ from ..query import interpret
 from ..reports import executor
 from ..schemas.definition import ReportDefinition
 from .graph import run_graph
-from .readonly import MAX_VISIBLE_ROWS, execute_readonly_sql, scope_dataset_sql
+from .readonly import MAX_VISIBLE_ROWS, execute_readonly_sql, joinable_datasets, scope_dataset_sql
 
 MAX_STEPS = 6
 REPORT_MAX_STEPS = 8
@@ -115,6 +115,7 @@ def _stream_answer(question: str, columns: list[str], rows: list[list],
     )
     chat = ChatOpenAI(model=interpret._model_id(model), api_key=key,
                       base_url=interpret.OPENROUTER_URL, temperature=0,
+                      timeout=interpret.CHAT_TIMEOUT,
                       max_retries=0)
     chunks: list[str] = []
     for chunk in chat.stream([HumanMessage(content=prompt)]):
@@ -152,6 +153,12 @@ def ask_datasets(datasets: list[dict], question: str, history: list[dict], *,
                   for item in dataset.get('schema') or []]
         sources.append({'slug': dataset['slug'], 'title': dataset.get('title'),
                         'dialect': dataset['source'], 'fields': fields})
+    relations = {
+        dataset['slug']: {'dataset': dataset['slug'], **{
+            f'dataset_{index}': item['slug']
+            for index, item in enumerate(joinable_datasets(dataset, datasets), start=2)}}
+        for dataset in datasets
+    }
     base = (
         'Ты ReAct агент анализа данных. На каждом шаге верни ОДИН JSON-объект: '
         '{"tool":"describe_schema|sample_rows|execute_sql", "args":{...}} '
@@ -162,8 +169,15 @@ def ask_datasets(datasets: list[dict], question: str, history: list[dict], *,
         '"hypotheses":[{"text":"предположение","howToCheck":"способ проверки"}]}}. '
         'Для sample_rows и execute_sql укажи args.datasetSlug из прикреплённого списка; '
         'для execute_sql также укажи args.sql = "SELECT ... FROM dataset ...". '
-        'Таблица dataset означает указанный датасет. Каждое подключение выполняет '
-        'свой SQL. Можно применять все функции SELECT, CTE, JOIN, подзапросы, '
+        'Таблица dataset означает указанный датасет. dataset_2, dataset_3 и далее '
+        'означают другие прикреплённые датасеты того же подключения по карте ниже. '
+        'Используй поддерживаемые СУБД виды JOIN, включая INNER, LEFT, RIGHT, '
+        'FULL, CROSS, SEMI, ANTI и ASOF, только между этими '
+        'виртуальными отношениями. Физические таблицы, на которых основаны '
+        'датасеты, и прочие таблицы подключения читать нельзя. '
+        'Каждое подключение выполняет свой SQL. Для датасетов разных подключений '
+        'делай отдельные запросы и сравнивай их результаты. '
+        'Можно применять все функции SELECT, CTE, JOIN, подзапросы, '
         'оконные функции и выражения SQL соответствующего диалекта. '
         'Запрещено изменение данных или схемы. Сначала вызови execute_sql, '
         'для сравнения вызови его хотя бы раз для КАЖДОГО прикреплённого датасета. '
@@ -178,6 +192,8 @@ def ask_datasets(datasets: list[dict], question: str, history: list[dict], *,
         'нет, не выдумывай связь. Гипотезы отделяй от фактов и добавляй способ проверки. '
         'Отвечай только по фактическим результатам инструментов, без вымышленных чисел. '
         f'Прикреплённые датасеты: {json.dumps(sources, ensure_ascii=False)}. '
+        f'Виртуальные отношения по основному датасету: '
+        f'{json.dumps(relations, ensure_ascii=False)}. '
         f'Предыдущие вопросы: {json.dumps(_history(history), ensure_ascii=False)}. '
         f'Вопрос: {question[:1000]}.'
     )
@@ -215,7 +231,8 @@ def ask_datasets(datasets: list[dict], question: str, history: list[dict], *,
                 if on_event:
                     on_event({'type': 'status', 'text': f'Считаю: {dataset["title"]}…'})
                 logical_sql = str(args.get('sql') or '')
-                sql = scope_dataset_sql(dataset, logical_sql)
+                sql = scope_dataset_sql(dataset, logical_sql,
+                                        datasets=joinable_datasets(dataset, datasets))
                 columns, rows, truncated = execute_readonly_sql(dataset, sql)
                 results.append({'datasetSlug': slug, 'datasetTitle': dataset['title'],
                                 'sql': logical_sql, 'columns': columns,
@@ -302,6 +319,7 @@ def _report_resources(catalog, metrics: dict, dimensions: dict,
     items = sorted((item for item in catalog.datasets.values()
                     if not attached or item['slug'] in attached),
                    key=lambda item: (item['slug'] not in requested, item['slug']))
+    items = items[:max(30, len(attached))]
     visible_metrics = {slug: item for slug, item in metrics.items()
                        if not attached or item.get('dataset_slug') in attached}
     visible_dimensions = {slug: item for slug, item in dimensions.items()
@@ -309,12 +327,14 @@ def _report_resources(catalog, metrics: dict, dimensions: dict,
     return {
         'datasets': [
             {'slug': item['slug'], 'title': item.get('title'), 'source': item['source'],
+             'joinableDatasetSlugs': [other['slug'] for other in
+                                      joinable_datasets(item, items)],
              'fields': [{'name': field['name'], 'type': field['type'],
                          'title': (item.get('field_settings') or {}).get(
                              field['name'], {}).get('title'),
                          'comment': field.get('comment')}
                         for field in item.get('schema') or []]}
-            for item in items[:max(30, len(attached))]],
+            for item in items],
         'metrics': visible_metrics,
         'dimensions': visible_dimensions,
     }
@@ -382,7 +402,8 @@ def chat_report(messages: list[dict], catalog, fields=None, computed=None,
         'кратким reply и названием title. Успешная проверка завершит ход; '
         'после ошибки исправь определение следующим вызовом. '
         'Формат args.definition: {"sections":[{"type":"table|chart|kpi",'
-        '"title":"...","datasetSlug":"slug","sql":"SELECT ... FROM dataset"}],'
+        '"title":"...","datasetSlug":"slug","joinDatasetSlugs":[], '
+        '"sql":"SELECT ... FROM dataset"}],'
         '"filters":[]}. Список карточек называется sections, не blocks. '
         'Если пользователь просит фильтры или по полям есть полезные разрезы, '
         'добавь filters:[{"dimension":"ключ разреза","kind":"select|daterange|number"}] '
@@ -399,8 +420,14 @@ def chat_report(messages: list[dict], catalog, fields=None, computed=None,
         'Когда словарной раскладки недостаточно, создай SQL-блок: '
         '{"type":"table|chart|kpi","title":"...","datasetSlug":"slug",'
         '"sql":"SELECT ... FROM dataset ...","metrics":[],"by":[]}. '
-        'SQL-блок поддерживает любые функции чтения, включая оконные, CTE, JOIN. '
-        'Нельзя изменять данные. Таблица dataset означает выбранный датасет. '
+        'SQL-блок поддерживает оконные функции, CTE и все виды JOIN, доступные '
+        'СУБД (включая INNER, LEFT, RIGHT, FULL, CROSS, SEMI, ANTI, ASOF). '
+        'Таблица dataset означает основной datasetSlug; '
+        'dataset_2, dataset_3 и далее означают элементы joinDatasetSlugs по порядку. '
+        'В joinDatasetSlugs указывай только датасеты из joinableDatasetSlugs '
+        'основного датасета; если датасеты прикреплены явно, используй только их. '
+        'Нельзя читать исходные '
+        'физические таблицы и другие таблицы подключения. Нельзя изменять данные. '
         'Для графика первая колонка SQL — ось, следующие — ряды. '
         f'Прикреплённые датасеты (обязательные источники для SQL-блоков): '
         f'{json.dumps(attached, ensure_ascii=False)}. '
@@ -462,6 +489,9 @@ def chat_report(messages: list[dict], catalog, fields=None, computed=None,
                 if attached:
                     wrong = [section.get('datasetSlug') for section in candidate['sections']
                              if section.get('sql') and section.get('datasetSlug') not in attached]
+                    wrong += [slug for section in candidate['sections'] if section.get('sql')
+                              for slug in (section.get('joinDatasetSlugs') or [])
+                              if slug not in attached]
                     if wrong:
                         raise DatasetError('SQL-блок ссылается не на прикреплённый датасет: '
                                            + ', '.join(str(slug) for slug in wrong))
