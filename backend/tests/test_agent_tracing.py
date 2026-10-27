@@ -135,3 +135,48 @@ def test_graph_records_named_tool_result(monkeypatch):
         'action': {'tool': 'get_vocabulary'},
         'output': {'metrics': ['revenue']},
     }
+
+
+def test_failed_agent_trace_keeps_attempt_diagnostics(monkeypatch):
+    """The root trace retains formatting and timeout causes from failed models."""
+    import pytest
+    from app.agent.errors import AgentFailure
+
+    captured = {}
+
+    class Span:
+        """Store the error output without exporting to Langfuse."""
+
+        def __enter__(self):
+            """Activate this fake observation."""
+            return self
+
+        def __exit__(self, *_args):
+            """Propagate the original agent failure."""
+            return False
+
+        def update(self, **kwargs):
+            """Capture the structured diagnostic payload."""
+            captured.update(kwargs)
+
+    class Client:
+        """Create a local trace span."""
+
+        def start_as_current_observation(self, **_kwargs):
+            """Provide the root error observation."""
+            return Span()
+
+    @contextmanager
+    def attributes(**_kwargs):
+        """Avoid external trace attribute propagation in the test."""
+        yield
+
+    monkeypatch.setattr(tracing, 'enabled', lambda: True)
+    monkeypatch.setattr(tracing, 'get_client', lambda: Client())
+    monkeypatch.setattr(tracing, 'propagate_attributes', attributes)
+    attempts = [{'code': 'answer_validation', 'error': 'missing titles'},
+                {'code': 'model_timeout', 'error': '90 seconds'}]
+    with pytest.raises(AgentFailure):
+        with tracing.agent_trace('dataset-question'):
+            raise AgentFailure('model_timeout', attempts=attempts)
+    assert captured['output']['attempts'] == attempts

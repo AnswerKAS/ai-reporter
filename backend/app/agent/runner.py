@@ -9,6 +9,8 @@ from ..datasets.base import DatasetError
 from ..query import interpret
 from ..reports import executor
 from ..schemas.definition import ReportDefinition
+from ..semantic.suggest import field_kind, unwrap
+from .errors import AgentFailure, failure_code
 from .graph import run_graph
 from .readonly import MAX_VISIBLE_ROWS, execute_readonly_sql, joinable_datasets, scope_dataset_sql
 
@@ -54,12 +56,38 @@ def _history(history: list[dict]) -> list[dict]:
             for turn in history[-8:]]
 
 
+def _dataset_fields(dataset: dict) -> list[dict]:
+    """Expose native types, SQL analysis categories and human field labels."""
+    fields = []
+    for field in dataset.get('schema') or []:
+        settings = (dataset.get('field_settings') or {}).get(field['name']) or {}
+        native_type = field.get('type') or ''
+        kind = ('boolean' if unwrap(native_type).lower() in ('bool', 'boolean')
+                else field_kind(native_type, dataset['source']))
+        fields.append({'name': field['name'], 'type': native_type, 'kind': kind,
+                       'title': settings.get('title') or field.get('comment') or '',
+                       'comment': field.get('comment') or '',
+                       'role': settings.get('role'), 'aggregation': settings.get('agg')})
+    return fields
+
+
+def _optional_list(final: dict, key: str) -> list:
+    """Normalize null collections while returning invalid types for repair."""
+    value = final.get(key)
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise DatasetError(f'В final.{key} передай массив или null, а не {type(value).__name__}.')
+    return value
+
+
 def _sample(dataset: dict) -> dict:
     """Read five example rows through the existing dataset adapter."""
     adapter = registry.adapter_for(dataset)
     try:
         columns, rows = adapter.sample_rows(limit=5)
-        return {'columns': list(columns), 'rows': [list(map(str, row)) for row in rows]}
+        return {'fields': _dataset_fields(dataset), 'columns': list(columns),
+                'rows': [list(map(str, row)) for row in rows]}
     finally:
         adapter.close()
 
@@ -70,6 +98,7 @@ def _russian_columns(columns: list[str], final: dict, dataset: dict) -> list[str
     schema = {item['name']: item for item in dataset.get('schema') or []}
     settings = dataset.get('field_settings') or {}
     translated: list[str] = []
+    missing: list[str] = []
     for name in columns:
         field = schema.get(name) or {}
         configured = (settings.get(name) or {}).get('title')
@@ -81,10 +110,13 @@ def _russian_columns(columns: list[str], final: dict, dataset: dict) -> list[str
                       if value and re.search(r'[А-Яа-яЁё]', str(value))
                       and str(value).strip() not in translated), None)
         if label is None:
-            raise DatasetError(
-                f'Для столбца {name!r} укажи русское название в final.columnLabels; '
-                'SQL и значения менять не нужно.')
-        translated.append(label)
+            missing.append(name)
+        else:
+            translated.append(label)
+    if missing:
+        raise DatasetError(
+            f'Для столбцов {missing!r} укажи русские названия в final.columnLabels; '
+            'SQL и значения менять не нужно.')
     return translated
 
 
@@ -106,15 +138,9 @@ def ask_datasets(datasets: list[dict], question: str, history: list[dict], *,
     key = interpret._openrouter_key()
     if not key:
         raise DatasetError('модель вопросов не настроена: нужен OPENROUTER_API_KEY')
-    sources = []
-    for dataset in datasets:
-        settings = dataset.get('field_settings') or {}
-        fields = [{'name': item['name'], 'type': item['type'],
-                   'comment': item.get('comment') or '',
-                   'title': (settings.get(item['name']) or {}).get('title') or ''}
-                  for item in dataset.get('schema') or []]
-        sources.append({'slug': dataset['slug'], 'title': dataset.get('title'),
-                        'dialect': dataset['source'], 'fields': fields})
+    sources = [{'slug': dataset['slug'], 'title': dataset.get('title'),
+                'dialect': dataset['source'], 'fields': _dataset_fields(dataset)}
+               for dataset in datasets]
     relations = {
         dataset['slug']: {'dataset': dataset['slug'], **{
             f'dataset_{index}': item['slug']
@@ -132,6 +158,14 @@ def ask_datasets(datasets: list[dict], question: str, history: list[dict], *,
         '"hypotheses":[{"text":"предположение","howToCheck":"способ проверки"}]}}. '
         'Для sample_rows и execute_sql укажи args.datasetSlug из прикреплённого списка; '
         'для execute_sql также укажи args.sql = "SELECT ... FROM dataset ...". '
+        'Для поля переданы name (имя для SQL), type (точный тип СУБД), '
+        'kind (number/date/string/boolean/other), title и comment. '
+        'Начинай с простых агрегатов COUNT, SUM, AVG, MIN, MAX и GROUP BY; '
+        'для дат ограничивай период, для флагов используй условия. '
+        'Идентификаторы не суммируй. Сначала агрегируй каждую таблицу фактов по ключу '
+        'и только затем соединяй итоги, чтобы JOIN не размножал суммы. '
+        'Не приписывай техническому имени поля неподтверждённый бизнес-смысл; '
+        'укажи допущения и ограничения выводов. '
         'Таблица dataset означает указанный датасет. dataset_2, dataset_3 и далее '
         'означают другие прикреплённые датасеты того же подключения по карте ниже. '
         'Используй поддерживаемые СУБД виды JOIN, включая INNER, LEFT, RIGHT, '
@@ -173,8 +207,11 @@ def ask_datasets(datasets: list[dict], question: str, history: list[dict], *,
         f'Предыдущие вопросы: {json.dumps(_history(history), ensure_ascii=False)}. '
         f'Вопрос: {question[:1000]}.'
     )
-    errors: list[str] = []
+    errors: list[dict] = []
     results: list[dict] = []
+    saved_labels: dict[str, dict] = {}
+    saved_titles: dict[str, str] = {}
+    saved_primary: str | None = None
     successful_budget = len(datasets) + 2
     for model in interpret._chat_models():
         if not model:
@@ -201,13 +238,18 @@ def ask_datasets(datasets: list[dict], question: str, history: list[dict], *,
                             + ', '.join(missing))
             else:
                 guidance = 'Если наблюдений достаточно, заверши ответ через final.'
+            if on_event:
+                text = ('Готовлю итоговый ответ по проверенным результатам…' if final_only
+                        else 'Анализирую данные и выбираю следующий расчёт…')
+                on_event({'type': 'status', 'text': text})
             prompt = (base + '\nПроверенные результаты предыдущей модели: '
                       + json.dumps(prior_results, ensure_ascii=False, default=str)[-8000:]
                       + '\nНаблюдения: ' + json.dumps(
                           observations, ensure_ascii=False, default=str)[-12000:]
                       + '\n' + guidance)
             action = _invoke(prompt, model, key)
-            if final_only and 'final' not in action:
+            if final_only and 'final' not in action and not any(
+                    'final' in (item.get('action') or {}) for item in observations):
                 raise DatasetError('модель не завершила ответ после проверенных SQL-результатов')
             return action
 
@@ -215,6 +257,10 @@ def ask_datasets(datasets: list[dict], question: str, history: list[dict], *,
             """Inspect the dataset or run a bounded read-only SQL query."""
             tool = action.get('tool')
             args = action.get('args') if isinstance(action.get('args'), dict) else {}
+            if len(results) >= successful_budget and all(
+                    slug in {item['datasetSlug'] for item in results} for slug in selected):
+                return {'error': 'Лимит SQL-исследования достигнут. Верни final, '
+                        'исправив только оформление проверенных результатов; SQL не выполнялся.'}
             if tool == 'describe_schema':
                 if on_event:
                     on_event({'type': 'status', 'text': 'Изучаю поля датасетов…'})
@@ -237,6 +283,8 @@ def ask_datasets(datasets: list[dict], question: str, history: list[dict], *,
                 sql = scope_dataset_sql(dataset, logical_sql,
                                         datasets=joinable_datasets(dataset, datasets))
                 columns, rows, truncated = execute_readonly_sql(dataset, sql)
+                saved_labels.pop(slug, None)
+                saved_titles.pop(slug, None)
                 results.append({'datasetSlug': slug, 'datasetTitle': dataset['title'],
                                 'sql': logical_sql, 'columns': columns,
                                 'rows': rows, 'truncated': truncated})
@@ -246,57 +294,81 @@ def ask_datasets(datasets: list[dict], question: str, history: list[dict], *,
             return {'error': 'Неизвестный инструмент. Выбери инструмент из списка.'}
 
         def finish(action: dict) -> tuple[dict | None, dict | None]:
-            """Accept an answer only after the SQL tool returned real rows."""
+            """Validate the whole answer and reuse metadata across repair attempts."""
+            nonlocal saved_primary
             missing = [slug for slug in selected if slug not in
                        {item['datasetSlug'] for item in results}]
             if missing:
                 return None, {'error': 'Сначала вызови execute_sql для каждого датасета: '
                               + ', '.join(missing)}
             final = action.get('final') or {}
+            if not isinstance(final, dict):
+                raise DatasetError('В final передай JSON-объект с ответом и подписями.')
+            proposed_primary = final.get('primaryDatasetSlug')
+            if proposed_primary is not None:
+                if not isinstance(proposed_primary, str) or proposed_primary not in selected:
+                    raise DatasetError('Укажи в final.primaryDatasetSlug прикреплённый датасет '
+                                       'с итоговой таблицей ответа.')
+                saved_primary = proposed_primary
+            optional = {key: _optional_list(final, key) for key in
+                        ('calculations', 'groupBy', 'filters', 'hypotheses')}
             labels = final.get('columnLabels') if isinstance(final.get('columnLabels'), dict) else {}
             titles = final.get('tableTitles') if isinstance(final.get('tableTitles'), dict) else {}
             latest_results = {item['datasetSlug']: item for item in results}
             evidence = []
+            issues = []
             for dataset in datasets:
                 item = latest_results[dataset['slug']]
                 source = selected[item['datasetSlug']]
-                title = titles.get(item['datasetSlug'])
-                if not isinstance(title, str) or not title.strip() or not re.search(
-                        r'[А-Яа-яЁё]', title):
-                    raise DatasetError('Укажи в final.tableTitles короткое русское '
-                                       f'название результата для датасета {item["datasetSlug"]}.')
-                if len(datasets) > 1 and not isinstance(labels.get(item['datasetSlug']), dict):
-                    raise DatasetError('Укажи final.columnLabels отдельно для каждого '
-                                       f'датасета, включая {item["datasetSlug"]}.')
-                source_labels = labels.get(item['datasetSlug']) if isinstance(
-                    labels.get(item['datasetSlug']), dict) else labels
-                display_columns = _russian_columns(item['columns'],
-                                                   {'columnLabels': source_labels}, source)
-                evidence.append({**item, 'title': title.strip(), 'columns': display_columns,
-                                 'rows': [[str(value) if value is not None else '' for value in row]
-                                          for row in item['rows']]})
-            primary_slug = final.get('primaryDatasetSlug') or datasets[0]['slug']
-            if not isinstance(primary_slug, str) or primary_slug not in selected:
-                raise DatasetError('Укажи в final.primaryDatasetSlug прикреплённый датасет '
-                                   'с итоговой таблицей ответа.')
+                slug = dataset['slug']
+                title = titles.get(slug) or saved_titles.get(slug)
+                if isinstance(title, str) and title.strip() and re.search(r'[А-Яа-яЁё]', title):
+                    saved_titles[slug] = title.strip()
+                else:
+                    issues.append('Укажи в final.tableTitles короткое русское '
+                                  f'название результата для датасета {slug}.')
+                supplied_labels = labels.get(slug) if isinstance(labels.get(slug), dict) else (
+                    labels if len(datasets) == 1 else {})
+                source_labels = {**saved_labels.get(slug, {}), **supplied_labels}
+                saved_labels[slug] = source_labels
+                try:
+                    display_columns = _russian_columns(item['columns'],
+                                                       {'columnLabels': source_labels}, source)
+                except DatasetError as exc:
+                    issues.append(f'{slug}: {exc}')
+                    continue
+                if slug in saved_titles:
+                    evidence.append({**item, 'title': saved_titles[slug], 'columns': display_columns,
+                                     'rows': [[str(value) if value is not None else '' for value in row]
+                                              for row in item['rows']]})
+            if issues:
+                if on_event:
+                    on_event({'type': 'status', 'text': 'Уточняю подписи итоговых таблиц…'})
+                return None, {'error': 'Исправь только оформление final; новые SQL не нужны.',
+                              'issues': issues, 'requiredResults': [
+                                  {'datasetSlug': item['datasetSlug'], 'columns': item['columns'],
+                                   'columnLabels': saved_labels.get(item['datasetSlug'], {}),
+                                   'tableTitle': saved_titles.get(item['datasetSlug'])}
+                                  for item in latest_results.values()]}
+            primary_slug = saved_primary or datasets[0]['slug']
             primary = next(item for item in evidence if item['datasetSlug'] == primary_slug)
             hypotheses = [{'text': str(item.get('text') or '').strip(),
                            'howToCheck': str(item.get('howToCheck') or '').strip()}
-                          for item in final.get('hypotheses', []) if isinstance(item, dict)
+                          for item in optional['hypotheses'] if isinstance(item, dict)
                           and str(item.get('text') or '').strip()]
             answer = str(final.get('answer') or '').strip() or f'Показано строк: {len(primary["rows"])}.'
-            if on_event:
-                on_event({'type': 'delta', 'text': answer})
             explanation = {
                 'source': ', '.join(str(item.get('title') or item['slug']) for item in datasets),
-                'calculations': [str(item) for item in final.get('calculations', [])],
-                'groupBy': [str(item) for item in final.get('groupBy', [])],
-                'filters': [str(item) for item in final.get('filters', [])],
+                'calculations': [str(item) for item in optional['calculations']],
+                'groupBy': [str(item) for item in optional['groupBy']],
+                'filters': [str(item) for item in optional['filters']],
                 'orderBy': final.get('orderBy'),
                 'scope': str(final.get('scope') or 'Расчёт выполнен SQL-запросом по датасету.'),
                 'limit': MAX_VISIBLE_ROWS, 'shownRows': sum(len(item['rows']) for item in evidence),
                 'totalRows': None, 'hasMore': any(item['truncated'] for item in evidence),
             }
+            if on_event:
+                on_event({'type': 'delta', 'text': answer})
             return ({'answer': answer, 'title': primary['title'],
                      'primaryDatasetSlug': primary_slug,
                      'columns': primary['columns'], 'rows': primary['rows'],
@@ -312,8 +384,15 @@ def ask_datasets(datasets: list[dict], question: str, history: list[dict], *,
         state = run_graph(decide, use_tool, finish, max_steps=step_limit)
         if state['output'] is not None:
             return state['output']
-        errors.append(state['error'] or 'агент не завершил ответ за допустимое число шагов')
-    raise DatasetError(errors[0] if errors else 'модель вопросов недоступна')
+        last = next((item for item in reversed(state['observations'])
+                     if isinstance(item.get('result'), dict) and item['result'].get('error')), {})
+        detail = (last.get('result') or {}).get('error')
+        stage = ('final' if 'final' in (last.get('action') or {}) else 'tool') if last else 'model'
+        reason = state['error'] or detail or 'агент не завершил ответ за допустимое число шагов'
+        errors.append({'model': model, 'code': failure_code(
+            reason, stage='model' if state['error'] else stage),
+            'error': reason, 'lastObservation': last.get('result')})
+    raise AgentFailure(errors[-1]['code'] if errors else 'model_unavailable', attempts=errors)
 
 
 def _report_resources(catalog, metrics: dict, dimensions: dict,
@@ -333,11 +412,7 @@ def _report_resources(catalog, metrics: dict, dimensions: dict,
             {'slug': item['slug'], 'title': item.get('title'), 'source': item['source'],
              'joinableDatasetSlugs': [other['slug'] for other in
                                       joinable_datasets(item, items)],
-             'fields': [{'name': field['name'], 'type': field['type'],
-                         'title': (item.get('field_settings') or {}).get(
-                             field['name'], {}).get('title'),
-                         'comment': field.get('comment')}
-                        for field in item.get('schema') or []]}
+             'fields': _dataset_fields(item)}
             for item in items],
         'metrics': visible_metrics,
         'dimensions': visible_dimensions,
@@ -397,6 +472,11 @@ def chat_report(messages: list[dict], catalog, fields=None, computed=None,
         '"reply":"...","title":"..."}}. '
         'Если для SQL действительно нужны примеры значений, сначала вызови '
         '{"tool":"sample_dataset","args":{"datasetSlug":"..."}}. '
+        'В fields переданы name (SQL-имя), type (тип СУБД), kind '
+        '(number/date/string/boolean/other), title и comment. '
+        'Выбирай простые COUNT, SUM, AVG, MIN, MAX и GROUP BY по типам полей; '
+        'не суммируй идентификаторы. Перед JOIN нескольких таблиц фактов '
+        'агрегируй каждую по ключу, чтобы не размножать строки и суммы. '
         'Схемы датасетов и словарь уже приведены ниже. Сразу собери полный визуальный '
         'отчёт с понятными названиями блоков. Выбирай KPI для главных чисел, '
         'линию или область для динамики, столбцы для сравнения, таблицу для деталей; '

@@ -431,6 +431,7 @@ export async function testDbConnection(key: string): Promise<void> {
 }
 
 export interface DatasetStreamEvent {
+  code?: string
   type: 'status' | 'delta' | 'done' | 'error'
   text?: string
   message?: string

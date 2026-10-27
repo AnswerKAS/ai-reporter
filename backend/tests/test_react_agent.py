@@ -250,6 +250,8 @@ def test_report_agent_uses_attached_schema_without_selected_fields(dataset, monk
     assert result['definition']['sections'][0]['datasetSlug'] == 'sales'
     assert '"name": "revenue"' in prompts[1]
     assert '2026-01-01' in prompts[2]
+    assert '"kind": "number"' in prompts[0]
+    assert '"kind": "date"' in prompts[0]
 
 
 @pytest.mark.parametrize('sql', [
@@ -910,3 +912,128 @@ def test_dataset_agent_selects_primary_answer_instead_of_source_sample(dataset, 
     assert response['title'] == final['tableTitles'][expected_slug]
     assert response['rows'] == [['20' if expected_slug == 'lessons' else '100']]
     assert len(response['evidence']) == 2
+
+
+def test_dataset_agent_accepts_null_optional_final_lists(dataset, monkeypatch):
+    """The trace's null groupBy and filters must not reject a checked final."""
+    actions = iter([
+        {'tool': 'execute_sql', 'args': {'sql': 'SELECT count(*) AS total FROM dataset'}},
+        {'final': {'answer': 'Всего одна запись.', 'columnLabels': {'total': 'Количество'},
+                   'tableTitles': {'sales': 'Количество записей'}, 'calculations': None,
+                   'groupBy': None, 'filters': None, 'hypotheses': None}},
+    ])
+    monkeypatch.setattr(interpret, '_openrouter_key', lambda: 'fake')
+    monkeypatch.setattr(interpret, '_chat_models', lambda: ('primary', None))
+    monkeypatch.setattr(runner, '_invoke', lambda *_args: next(actions))
+    monkeypatch.setattr(runner, 'execute_readonly_sql', lambda *_args: (['total'], [[1]], False))
+    events = []
+    result = runner.ask_dataset(dataset, 'Сколько записей?', [], reveal_sql=False,
+                                on_event=events.append)
+    assert result['answer'] == 'Всего одна запись.'
+    assert result['explanation']['groupBy'] == []
+    assert result['explanation']['filters'] == []
+    assert result['explanation']['calculations'] == []
+    assert result['hypotheses'] == []
+    assert [item['text'] for item in events if item['type'] == 'delta'] == [result['answer']]
+
+
+def test_dataset_agent_preserves_metadata_across_final_repairs(dataset, monkeypatch):
+    """Fixing one source must not erase valid headings already supplied for another."""
+    second = {**dataset, 'slug': 'costs', 'title': 'Расходы'}
+    actions = iter([
+        {'tool': 'execute_sql', 'args': {'datasetSlug': 'sales', 'sql': 'SELECT count(*) AS total FROM dataset'}},
+        {'tool': 'execute_sql', 'args': {'datasetSlug': 'costs', 'sql': 'SELECT count(*) AS total FROM dataset'}},
+        {'final': {'answer': 'Проверено.', 'columnLabels': {'sales': {'total': 'Количество продаж'}},
+                   'tableTitles': {'sales': 'Продажи'}, 'primaryDatasetSlug': 'costs'}},
+        {'final': {'answer': 'Проверено.', 'columnLabels': {'costs': {'total': 'Количество расходов'}},
+                   'tableTitles': {'costs': 'Расходы'}}},
+    ])
+    monkeypatch.setattr(interpret, '_openrouter_key', lambda: 'fake')
+    monkeypatch.setattr(interpret, '_chat_models', lambda: ('primary', None))
+    monkeypatch.setattr(runner, '_invoke', lambda *_args: next(actions))
+    monkeypatch.setattr(runner, 'execute_readonly_sql', lambda *_args: (['total'], [[1]], False))
+    result = runner.ask_datasets([dataset, second], 'Сравни', [], reveal_sql=False)
+    assert [item['title'] for item in result['evidence']] == ['Продажи', 'Расходы']
+    assert [item['columns'] for item in result['evidence']] == [['Количество продаж'], ['Количество расходов']]
+
+    assert result['primaryDatasetSlug'] == 'costs'
+
+
+def test_dataset_agent_provides_native_and_analytical_field_types(dataset, monkeypatch):
+    """Initial context carries real DB types and simple SQL analysis categories."""
+    dataset['source'] = 'postgres'
+    dataset['schema'] = [
+        {'name': 'amount', 'type': 'numeric(18,2)', 'comment': 'Сумма'},
+        {'name': 'event_date', 'type': 'date', 'comment': 'Дата'},
+        {'name': 'active', 'type': 'boolean', 'comment': 'Действует'},
+    ]
+    actions = iter([
+        {'tool': 'execute_sql', 'args': {'sql': 'SELECT sum(amount) AS total FROM dataset'}},
+        {'final': {'answer': 'Сумма 100.', 'columnLabels': {'total': 'Сумма'},
+                   'tableTitles': {'sales': 'Итоговая сумма'}}},
+    ])
+    prompts = []
+
+    def fake_invoke(prompt, *_args):
+        """Record the schema received before choosing the first SQL action."""
+        prompts.append(prompt)
+        return next(actions)
+
+    monkeypatch.setattr(interpret, '_openrouter_key', lambda: 'fake')
+    monkeypatch.setattr(interpret, '_chat_models', lambda: ('primary', None))
+    monkeypatch.setattr(runner, '_invoke', fake_invoke)
+    monkeypatch.setattr(runner, 'execute_readonly_sql', lambda *_args: (['total'], [[100]], False))
+    runner.ask_dataset(dataset, 'Посчитай сумму', [], reveal_sql=False)
+    assert 'numeric(18,2)' in prompts[0]
+    assert '"kind": "number"' in prompts[0]
+    assert '"kind": "date"' in prompts[0]
+    assert '"kind": "boolean"' in prompts[0]
+
+
+def test_dataset_agent_streams_only_fully_validated_answers(dataset, monkeypatch):
+    """Rejected final metadata cannot leak an answer delta before repair."""
+    final = {'answer': 'Готовый итог.', 'columnLabels': {'total': 'Количество'},
+             'tableTitles': {'sales': 'Итог'}}
+    actions = iter([
+        {'tool': 'execute_sql', 'args': {'sql': 'SELECT count(*) AS total FROM dataset'}},
+        {'final': {**final, 'answer': 'Этот ответ ещё не проверен.', 'groupBy': 'city'}},
+        {'final': final},
+    ])
+    events = []
+    monkeypatch.setattr(interpret, '_openrouter_key', lambda: 'fake')
+    monkeypatch.setattr(interpret, '_chat_models', lambda: ('primary', None))
+    monkeypatch.setattr(runner, '_invoke', lambda *_args: next(actions))
+    monkeypatch.setattr(runner, 'execute_readonly_sql', lambda *_args: (['total'], [[1]], False))
+    runner.ask_dataset(dataset, 'Сколько?', [], reveal_sql=False, on_event=events.append)
+    assert [item['text'] for item in events if item['type'] == 'delta'] == ['Готовый итог.']
+
+
+def test_dataset_agent_retains_validation_cause_when_fallback_times_out(dataset, monkeypatch):
+    """A fallback timeout does not hide why the primary answer was rejected."""
+    from app.agent.errors import AgentFailure, error_event
+
+    calls = 0
+
+    def fake_invoke(_prompt, model, _key):
+        """Reject primary headings, then simulate the trace's fallback timeout."""
+        nonlocal calls
+        if model == 'fallback':
+            raise DatasetError('модель не ответила за 90 с')
+        calls += 1
+        if calls == 1:
+            return {'tool': 'execute_sql', 'args': {'sql': 'SELECT count(*) AS total FROM dataset'}}
+        return {'final': {'answer': 'Итог готов.'}}
+
+    monkeypatch.setattr(interpret, '_openrouter_key', lambda: 'fake')
+    monkeypatch.setattr(interpret, '_chat_models', lambda: ('primary', 'fallback'))
+    monkeypatch.setattr(runner, '_invoke', fake_invoke)
+    monkeypatch.setattr(runner, 'execute_readonly_sql', lambda *_args: (['total'], [[1]], False))
+    with pytest.raises(AgentFailure) as failure:
+        runner.ask_dataset(dataset, 'Сколько?', [], reveal_sql=False)
+    assert [item['code'] for item in failure.value.attempts] == ['answer_validation', 'model_timeout']
+    assert failure.value.attempts[0]['lastObservation']['issues']
+    event = error_event(failure.value)
+    assert event['code'] == 'model_timeout'
+    assert 'Основная модель' in event['message']
+    assert 'не успела' in event['message']
+    assert 'columnLabels' not in event['message']

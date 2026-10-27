@@ -164,7 +164,7 @@ def _ask(prompt_text: str, model: str, key: str, timeout: int | None = None) -> 
     except _Timeout:
         raise DatasetError(
             f'модель не ответила за {limit} с — попробуйте ещё раз '
-            'или соберите отчёт мышью: поля слева, секции по центру'
+            'или задайте более узкий вопрос'
         )
     content = answer.content
     if isinstance(content, list):

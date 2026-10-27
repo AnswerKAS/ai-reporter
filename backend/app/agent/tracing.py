@@ -43,7 +43,12 @@ def agent_trace(name: str, *, user_id: str | None = None,
         with propagate_attributes(user_id=str(user_id) if user_id else None,
                                   session_id=str(session_id) if session_id else None,
                                   tags=['ai-reporter', name]):
-            yield span
+            try:
+                yield span
+            except Exception as exc:
+                record_output(span, {'error': str(exc),
+                                     'attempts': getattr(exc, 'attempts', [])})
+                raise
 
 
 @contextmanager

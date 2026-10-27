@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
+from ..agent.errors import error_event
 from ..core import database as db
 from ..core.security import get_current_user
 from ..core import report_access
@@ -224,7 +225,7 @@ def stream_report_chat(payload: dict, user: dict = Depends(get_current_user)) ->
                                       'sections': len((result.get('definition') or {}).get('sections', []))})
             events.put({'type': 'done', 'conversationId': conversation['id'], 'result': result})
         except Exception as exc:
-            events.put({'type': 'error', 'message': sanitize_error(str(exc))})
+            events.put(error_event(exc))
         finally:
             catalog.close()
             events.put(None)

@@ -1,6 +1,10 @@
 """Database persistence and streamed agent API routes."""
 
 import json
+
+import pytest
+
+from app.datasets.base import DatasetError
 from contextlib import contextmanager
 
 from app.agent import runner, store
@@ -451,3 +455,48 @@ def test_stream_traces_cover_conversation_persistence(client, dataset, model,
     assert report_response.status_code == 200
     assert [name for name, _ in saved] == ['dataset-question', 'report-builder']
     assert all(session_id for _, session_id in saved)
+
+
+@pytest.mark.parametrize('path,agent_name,payload', [
+    ('/api/datasets/chat/stream', 'agent_ask_datasets', {'datasetSlug': 'sales'}),
+    ('/api/datasets/sales/ask/stream', 'agent_ask_dataset', {}),
+])
+@pytest.mark.parametrize('failure,code,explanation', [
+    (RuntimeError("'NoneType' object is not iterable"), 'internal_error', 'внутренней ошибки'),
+    (TimeoutError('model timed out'), 'model_timeout', 'не успела'),
+    (DatasetError('canceling statement due to statement timeout'), 'source_timeout', 'Источник данных'),
+    (DatasetError('could not connect postgresql://user:secret@private.example/db'), 'source_unavailable', 'подключиться'),
+    (DatasetError('запрос не выполнен: column secret_field does not exist'), 'sql_error', 'SQL-запрос'),
+])
+def test_dataset_stream_explains_failures(client, dataset, user_headers, monkeypatch,
+                                         path, agent_name, payload, failure, code, explanation):
+    """Both question streams explain failures without exposing internal exception text."""
+    def fail(*_args, **_kwargs):
+        """Raise the requested failure at the agent boundary."""
+        raise failure
+
+    monkeypatch.setattr(dataset_api, agent_name, fail)
+    response = client.post(path, headers=user_headers,
+                           json={'question': 'Проанализируй продажи', **payload})
+    event = [json.loads(line) for line in response.text.splitlines()][-1]
+    assert event['type'] == 'error'
+    assert event['code'] == code
+    assert explanation in event['message']
+    assert 'NoneType' not in event['message']
+    assert 'secret_field' not in event['message']
+    assert 'secret' not in event['message']
+    assert 'private.example' not in event['message']
+
+
+def test_report_stream_explains_model_timeout(client, dataset, user_headers, monkeypatch):
+    """Report chat uses the same readable model timeout as question chat."""
+    def fail(*_args, **_kwargs):
+        """Simulate model timeout without contacting the model provider."""
+        raise TimeoutError('model timed out')
+
+    monkeypatch.setattr(runner, 'chat_report', fail)
+    response = client.post('/api/reports/chat/stream', headers=user_headers,
+                           json={'messages': [{'role': 'user', 'text': 'Отчёт по продажам'}]})
+    event = [json.loads(line) for line in response.text.splitlines()][-1]
+    assert event['code'] == 'model_timeout'
+    assert 'не успела' in event['message']

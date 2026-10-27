@@ -8,6 +8,7 @@ import threading
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from ..agent.errors import error_event
 from ..core.security import get_current_user, require_admin
 from ..core.config import connection as db_connection, connections as db_connections
 from ..datasets import registry as ds_registry
@@ -242,7 +243,7 @@ def stream_workspace_chat(payload: dict,
             events.put({'type': 'done', 'conversationId': conversation['id'],
                         'result': result})
         except Exception as exc:
-            events.put({'type': 'error', 'message': sanitize_error(str(exc))})
+            events.put(error_event(exc))
         finally:
             events.put(None)
 
@@ -345,7 +346,7 @@ def stream_dataset_answer(slug: str, payload: dict,
                                       'rows': len(result.get('rows') or [])})
             events.put({'type': 'done', 'conversationId': item['id'], 'result': result})
         except Exception as exc:
-            events.put({'type': 'error', 'message': sanitize_error(str(exc))})
+            events.put(error_event(exc))
         finally:
             events.put(None)
 
