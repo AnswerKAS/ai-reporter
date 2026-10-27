@@ -35,6 +35,11 @@ function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
       <NavLink to="/workspace" className={navLinkClass} onClick={onNavigate}>
         <span className="mr-3 text-base" aria-hidden="true">✦</span> Рабочее окно
       </NavLink>
+      <a href="/ai-reporter-presentation.html" target="_blank" rel="noopener noreferrer"
+        className={cn(NAV_LINK, 'text-fg-muted hover:bg-surface-sunken hover:text-fg')}
+        onClick={onNavigate}>
+        <span className="mr-3 text-base" aria-hidden="true">?</span> Руководство
+      </a>
       {isAdmin && (
         <NavLink to="/admin" className={navLinkClass} onClick={onNavigate}>
           <span className="mr-3 text-base" aria-hidden="true">⚙</span> Админка

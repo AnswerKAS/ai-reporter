@@ -65,6 +65,10 @@ export function LoginPage() {
         <Button type="submit" variant="primary" disabled={busy || !username || !password}>
           {busy ? 'Вход…' : 'Войти →'}
         </Button>
+        <a href="/ai-reporter-presentation.html" target="_blank" rel="noopener noreferrer"
+          className="text-center text-sm text-accent hover:underline">
+          Руководство по работе в приложении
+        </a>
       </form>
       </div>
     </main>
