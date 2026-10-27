@@ -38,10 +38,12 @@ export function ReportChat({ fields, computed, datasets, availableDatasets, defi
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [canRestore, setCanRestore] = useState(false)
   const [model, setModel] = useState<string | null>(null)
   const [progress, setProgress] = useState('')
   const [streamedReply, setStreamedReply] = useState('')
   const [proposed, setProposed] = useState(false)
+  const recoverySerial = useRef(0)
   const tail = useRef<HTMLDivElement | null>(null)
   const input = useRef<HTMLTextAreaElement | null>(null)
   const mentionRange = useRef<{ start: number; end: number } | null>(null)
@@ -62,6 +64,7 @@ export function ReportChat({ fields, computed, datasets, availableDatasets, defi
 
   useEffect(() => {
     let active = true
+    recoverySerial.current += 1
     setLoading(true)
     setMessages([])
     setConversationId(null)
@@ -88,7 +91,7 @@ export function ReportChat({ fields, computed, datasets, availableDatasets, defi
     }).catch((failure) => {
       if (active) setError(failure instanceof ApiError ? failure.message : 'Не удалось загрузить диалог')
     }).finally(() => { if (active) setLoading(false) })
-    return () => { active = false }
+    return () => { active = false; recoverySerial.current += 1 }
   }, [target, onConversationId])
 
   useEffect(() => {
@@ -119,6 +122,38 @@ export function ReportChat({ fields, computed, datasets, availableDatasets, defi
     input.current?.focus()
   }
 
+  /** Restore a saved proposal after transport loss without asking the model again. */
+  async function restoreHistory(): Promise<void> {
+    if (busy || loading) return
+    if (!conversationId) {
+      setError('Сервер не подтвердил создание диалога, поэтому проверить его историю невозможно. Дождитесь восстановления сайта и повторите вопрос.')
+      return
+    }
+    const serial = ++recoverySerial.current
+    setLoading(true)
+    try {
+      const saved = await fetchReportChatHistory(target, conversationId)
+      if (serial !== recoverySerial.current) return
+      const found = saved.messages.length > messages.length
+      setMessages(saved.messages)
+      if (found) {
+        if (saved.proposal) {
+          onProposal(saved.proposal.definition, saved.proposal.title)
+          setProposed(true)
+        }
+        setDraft('')
+        setError(null)
+        setCanRestore(false)
+      } else {
+        setError('Нового ответа в истории пока нет. Если расчёт ещё идёт, проверьте позже. Если сервер перезапустился, отправьте сохранённый вопрос повторно.')
+      }
+    } catch (failure) {
+      if (serial === recoverySerial.current) setError(failure instanceof Error ? failure.message : 'Не удалось проверить историю. Попробуйте позже.')
+    } finally {
+      if (serial === recoverySerial.current) setLoading(false)
+    }
+  }
+
   /** Send one turn and apply the verified layout to the builder. */
   async function send(): Promise<void> {
     const text = `${attachedSlugs.map((slug) => `@${slug}`).join(' ')} ${draft.trim()}`.trim()
@@ -128,6 +163,7 @@ export function ReportChat({ fields, computed, datasets, availableDatasets, defi
     setDraft('')
     setMentionQuery(null)
     setError(null)
+    setCanRestore(false)
     setProgress('Изучаю запрос…')
     setStreamedReply('')
     setBusy(true)
@@ -136,6 +172,7 @@ export function ReportChat({ fields, computed, datasets, availableDatasets, defi
         datasets: [...new Set([...attachedSlugs, ...datasets])],
         attachedDatasets: attachedSlugs, definition,
         conversationId, target }, (event) => {
+        if (event.conversationId) activateConversation(event.conversationId)
         if (event.type === 'status') setProgress(event.text ?? '')
         if (event.type === 'delta') {
           setProgress('')
@@ -157,6 +194,7 @@ export function ReportChat({ fields, computed, datasets, availableDatasets, defi
       setMessages(messages)
       setDraft(draft)
       setError(failure instanceof Error ? failure.message : 'Не удалось получить ответ')
+      setCanRestore(failure instanceof ApiError && (failure.status === 0 || [502, 503, 504].includes(failure.status)))
     } finally {
       setBusy(false)
       setProgress('')
@@ -240,7 +278,11 @@ export function ReportChat({ fields, computed, datasets, availableDatasets, defi
         )}
 
         <footer className="border-t border-line bg-surface px-4 py-4 sm:px-6">
-          {error && <Alert className="mb-3">{error}</Alert>}
+          {error && <Alert className="mb-3">
+            <p>{error}</p>
+            {canRestore && <Button className="mt-2" size="sm" variant="default" disabled={busy || loading}
+              onClick={() => { void restoreHistory() }}>Проверить историю</Button>}
+          </Alert>}
           <form onSubmit={(event) => { event.preventDefault(); void send() }}>
             <label htmlFor="report-chat-input" className="sr-only">Описание отчёта</label>
             {attachedDatasets.length > 0 && <div className="mb-3 flex flex-wrap items-center gap-2" aria-label="Прикреплённые датасеты">

@@ -1,7 +1,6 @@
 """Роутер датасетов: просмотр (все пользователи), CRUD и CSV (админ)."""
 
 import re
-import json
 import queue
 import threading
 
@@ -9,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from ..agent.errors import error_event
+from ..agent.streaming import STREAM_HEADERS, event_stream
 from ..core.security import get_current_user, require_admin
 from ..core.config import connection as db_connection, connections as db_connections
 from ..datasets import registry as ds_registry
@@ -250,14 +250,10 @@ def stream_workspace_chat(payload: dict,
     def stream():
         """Yield ordered progress and completion events from the worker."""
         threading.Thread(target=worker, daemon=True).start()
-        while True:
-            event = events.get()
-            if event is None:
-                break
-            yield json.dumps(event, ensure_ascii=False, default=str) + '\n'
+        yield from event_stream(events, conversation['id'])
 
     return StreamingResponse(stream(), media_type='application/x-ndjson',
-                             headers={'Cache-Control': 'no-cache'})
+                             headers=STREAM_HEADERS)
 
 
 @router.get('/{slug}')
@@ -353,15 +349,10 @@ def stream_dataset_answer(slug: str, payload: dict,
     def stream():
         """Serialize queued progress events as newline-delimited JSON."""
         threading.Thread(target=worker, daemon=True).start()
-        while True:
-            event = events.get()
-            if event is None:
-                break
-            yield json.dumps(event, ensure_ascii=False, default=str) + '\n'
+        yield from event_stream(events, item['id'])
 
     return StreamingResponse(stream(), media_type='application/x-ndjson',
-                             headers={'Cache-Control': 'no-cache',
-                                      'X-Accel-Buffering': 'no'})
+                             headers=STREAM_HEADERS)
 
 
 @router.post('', status_code=201)

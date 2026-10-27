@@ -274,7 +274,8 @@ def test_dataset_stream_saves_and_restores_turns(client, dataset, user_headers,
     response = client.post('/api/datasets/sales/ask/stream', headers=user_headers,
                            json={'question': 'Сколько строк?'})
     events = [json.loads(line) for line in response.text.splitlines()]
-    assert [event['type'] for event in events] == ['status', 'delta', 'done']
+    assert [event['type'] for event in events] == ['heartbeat', 'status', 'delta', 'done']
+    assert events[0]['conversationId'] == events[-1]['conversationId']
     conversation_id = events[-1]['conversationId']
 
     restored = client.get('/api/datasets/sales/conversation', headers=user_headers).json()
@@ -365,7 +366,8 @@ def test_report_stream_saves_visual_proposal(client, model, user_headers, monkey
                            json={'messages': [{'role': 'user', 'text': 'Продажи'}]})
     events = [json.loads(line) for line in response.text.splitlines()]
 
-    assert [event['type'] for event in events] == ['status', 'delta', 'done']
+    assert [event['type'] for event in events] == ['heartbeat', 'status', 'delta', 'done']
+    assert events[0]['conversationId'] == events[-1]['conversationId']
     assert events[-1]['result']['definition']['sections'][0]['title'] == 'Продажи'
     saved = client.get(f'/api/reports/chat/history?conversation_id={events[-1]["conversationId"]}',
                        headers=user_headers).json()

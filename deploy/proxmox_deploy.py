@@ -137,7 +137,7 @@ def deploy(repo_dir: Path, sha: str) -> None:
         sync_source(repo_dir, LIVE_DIR)
         run_command(['docker', 'compose', 'config', '-q'], cwd=LIVE_DIR,
                     timeout=30)
-        run_command(['docker', 'compose', 'up', '-d', '--build', 'backend', 'frontend'],
+        run_command(['docker', 'compose', 'up', '-d', '--build', '--timeout', '600', 'backend', 'frontend'],
                     cwd=LIVE_DIR, timeout=900)
         if not healthy():
             raise DeploymentError('Application health check failed after rollout')
@@ -145,7 +145,7 @@ def deploy(repo_dir: Path, sha: str) -> None:
         print('Rollout failed; restoring previous source and containers', flush=True)
         sync_source(backup, LIVE_DIR)
         try:
-            run_command(['docker', 'compose', 'up', '-d', '--build',
+            run_command(['docker', 'compose', 'up', '-d', '--build', '--timeout', '600',
                          'backend', 'frontend'], cwd=LIVE_DIR, timeout=900)
         except Exception as exc:
             print(f'Rollback container restart failed: {exc}', flush=True)

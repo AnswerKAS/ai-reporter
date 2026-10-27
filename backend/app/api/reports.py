@@ -6,7 +6,6 @@
 """
 
 import uuid
-import json
 import queue
 import threading
 
@@ -15,6 +14,7 @@ from fastapi.responses import StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
 from ..agent.errors import error_event
+from ..agent.streaming import STREAM_HEADERS, event_stream
 from ..core import database as db
 from ..core.security import get_current_user
 from ..core import report_access
@@ -233,15 +233,10 @@ def stream_report_chat(payload: dict, user: dict = Depends(get_current_user)) ->
     def stream():
         """Yield newline-delimited status, answer and completion events."""
         threading.Thread(target=worker, daemon=True).start()
-        while True:
-            event = events.get()
-            if event is None:
-                break
-            yield json.dumps(event, ensure_ascii=False, default=str) + '\n'
+        yield from event_stream(events, conversation['id'])
 
     return StreamingResponse(stream(), media_type='application/x-ndjson',
-                             headers={'Cache-Control': 'no-cache',
-                                      'X-Accel-Buffering': 'no'})
+                             headers=STREAM_HEADERS)
 
 
 @router.get('/reports/chat/history')

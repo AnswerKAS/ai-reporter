@@ -111,6 +111,8 @@ def test_failed_rollout_restores_previous_code(tmp_path, monkeypatch):
         if args[0] == 'rsync':
             return original_run(args, **kwargs)
         if args[:3] == ['docker', 'compose', 'up']:
+            assert args[args.index('--timeout') + 1] == '600'
+            assert kwargs['timeout'] >= 900
             builds += 1
             if builds == 1:
                 raise subprocess.CalledProcessError(1, args)

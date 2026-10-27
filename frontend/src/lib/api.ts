@@ -64,7 +64,13 @@ async function request<T>(
   }
   const token = getToken()
   if (token) headers['Authorization'] = `Bearer ${token}`
-  const res = await fetch(`${BASE}${path}`, { ...options, headers })
+  let res: Response
+  try {
+    res = await fetch(`${BASE}${path}`, { ...options, headers })
+  } catch {
+    const resource = path.includes('history') || path.includes('conversation') ? 'историю диалога' : 'данные'
+    throw new ApiError(0, `Не удалось загрузить ${resource}: нет соединения с сервером. Проверьте интернет и доступность сайта, затем повторите действие.`, 'connection_failed')
+  }
   // 401 на самом входе — это неверный логин или пароль, а не протухшая
   // сессия: чистить токен и уводить на страницу входа тут нечего, а текст
   // нужен серверный, иначе человек с опечаткой видит «требуется авторизация»
@@ -75,7 +81,12 @@ async function request<T>(
     throw new ApiError(401, 'требуется авторизация')
   }
   if (!res.ok) {
-    let detail = `HTTP ${res.status}`
+    const messages: Record<number, string> = {
+      502: 'Сервер приложения недоступен, возможно, он обновляется. Подождите минуту и повторите действие.',
+      503: 'Сервер временно недоступен или перегружен. Подождите минуту и повторите действие.',
+      504: 'Не удалось дождаться ответа сервера. Попробуйте проверить историю диалога позже.',
+    }
+    let detail = messages[res.status] || `Сервер отклонил запрос (код ${res.status}). Повторите действие; если ошибка повторится, сообщите администратору.`
     try {
       const body = (await res.json()) as { detail?: unknown }
       if (body?.detail) detail = describeDetail(body.detail)
@@ -85,48 +96,109 @@ async function request<T>(
     throw new ApiError(res.status, detail)
   }
   if (res.status === 204) return undefined as T
-  return (await res.json()) as T
+  try {
+    return (await res.json()) as T
+  } catch {
+    throw new ApiError(0, 'Получение данных с сервера прервалось или ответ повреждён. Проверьте соединение и повторите действие.', 'connection_failed')
+  }
 }
 
-/** Send a request and deliver each NDJSON event as it arrives. */
-async function streamEvents<T>(
+/** Explain a transport failure without exposing the browser's raw exception. */
+function streamFailure(code: 'connection_failed' | 'stream_interrupted' | 'incomplete_stream' | 'invalid_stream', lastStatus = ''): ApiError {
+  const messages = {
+    connection_failed: 'Не удалось отправить запрос: подтверждение от сервера не получено. Проверьте интернет и доступность сайта.',
+    stream_interrupted: 'Соединение с сервером оборвалось во время получения ответа. Возможна перезагрузка сервера или сбой сети.',
+    incomplete_stream: 'Сервер завершил передачу без итогового ответа.',
+    invalid_stream: 'Сервер прислал ответ в неподходящем формате; показать результат не удалось.',
+  }
+  const stage = lastStatus ? ` Последний этап: ${lastStatus}` : ''
+  return new ApiError(0, `${messages[code]}${stage} Нажмите «Проверить историю»: запрос мог дойти до сервера, а готовый результат — сохраниться.`, code)
+}
+
+/** Decode one event; distinguish corrupt transport data from application errors. */
+function parseStreamEvent<T extends { type: string }>(line: string): T {
+  try {
+    const value = JSON.parse(line)
+    if (!value || !['status', 'delta', 'done', 'error', 'heartbeat'].includes(value.type)) throw new Error()
+    if (value.type === 'done' && (!value.result || typeof value.result !== 'object')) throw new Error()
+    return value as T
+  } catch {
+    throw streamFailure('invalid_stream')
+  }
+}
+
+/** Send a chat request, preserving server errors and explaining transport failures. */
+async function streamEvents<T extends { type: string; text?: string }>(
   path: string,
   payload: unknown,
   onEvent: (event: T) => void,
 ): Promise<void> {
   const token = getToken()
-  const response = await fetch(`${BASE}${path}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify(payload),
-  })
+  let response: Response
+  try {
+    response = await fetch(`${BASE}${path}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(payload),
+    })
+  } catch {
+    throw streamFailure('connection_failed')
+  }
   if (response.status === 401) {
     setToken(null)
     onUnauthorized?.()
-    throw new ApiError(401, 'требуется авторизация')
+    throw new ApiError(401, 'Сессия закончилась. Войдите снова, затем откройте сохранённый диалог.')
   }
-  if (!response.ok || !response.body) {
-    let detail = `HTTP ${response.status}`
-    try { detail = describeDetail((await response.json() as { detail?: unknown }).detail) } catch { /* no JSON body */ }
+  if (!response.ok) {
+    const proxyMessages: Record<number, string> = {
+      502: 'Сервер приложения сейчас недоступен, возможно, он обновляется. Подождите минуту и проверьте историю диалога.',
+      503: 'Сервер временно недоступен или перегружен. Подождите минуту и проверьте историю диалога.',
+      504: 'Промежуточный сервер не дождался ответа приложения. Расчёт мог продолжиться. Нажмите «Проверить историю» перед повторной отправкой.',
+    }
+    if (proxyMessages[response.status]) throw new ApiError(response.status, proxyMessages[response.status], 'server_unavailable')
+    let detail = `Сервер отклонил запрос (код ${response.status}). Повторите действие; если ошибка повторится, сообщите администратору.`
+    try {
+      const body = await response.json() as { detail?: unknown }
+      if (body.detail) detail = describeDetail(body.detail)
+    } catch { /* The proxy may return an HTML error page. */ }
     throw new ApiError(response.status, detail)
   }
+  if (!response.body) throw streamFailure('incomplete_stream')
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let pending = ''
-  while (true) {
-    const { value, done } = await reader.read()
-    pending += decoder.decode(value, { stream: !done })
-    const lines = pending.split('\n')
-    pending = lines.pop() ?? ''
-    for (const line of lines) {
-      if (line.trim()) onEvent(JSON.parse(line) as T)
+  let lastStatus = ''
+  let terminal = false
+  try {
+    while (!terminal) {
+      let chunk: ReadableStreamReadResult<Uint8Array>
+      try {
+        chunk = await reader.read()
+      } catch {
+        throw streamFailure('stream_interrupted', lastStatus)
+      }
+      pending += decoder.decode(chunk.value, { stream: !chunk.done })
+      const lines = pending.split('\n')
+      pending = lines.pop() ?? ''
+      if (chunk.done && pending.trim()) { lines.push(pending); pending = '' }
+      for (const line of lines) {
+        if (!line.trim()) continue
+        const event = parseStreamEvent<T>(line)
+        if (event.type === 'status' && event.text) lastStatus = event.text
+        terminal = event.type === 'done' || event.type === 'error'
+        onEvent(event)
+        if (terminal) break
+      }
+      if (chunk.done) break
     }
-    if (done) break
+    if (!terminal) throw streamFailure('incomplete_stream', lastStatus)
+  } finally {
+    try { await reader.cancel() } catch { /* A broken connection is already explained. */ }
+    reader.releaseLock()
   }
-  if (pending.trim()) onEvent(JSON.parse(pending) as T)
 }
 
 /** Ошибка от сервера в читаемый вид.
@@ -156,10 +228,13 @@ function describeDetail(detail: unknown): string {
 
 export class ApiError extends Error {
   status: number
+  code?: string
 
-  constructor(status: number, message: string) {
+  /** Store an HTTP or transport failure for actionable recovery in the UI. */
+  constructor(status: number, message: string, code?: string) {
     super(message)
     this.status = status
+    this.code = code
   }
 }
 
@@ -432,7 +507,7 @@ export async function testDbConnection(key: string): Promise<void> {
 
 export interface DatasetStreamEvent {
   code?: string
-  type: 'status' | 'delta' | 'done' | 'error'
+  type: 'status' | 'delta' | 'done' | 'error' | 'heartbeat'
   text?: string
   message?: string
   conversationId?: string
@@ -519,45 +594,13 @@ export async function streamWorkspaceAnswer(
     { datasetSlugs, question, conversationId }, onEvent)
 }
 
-/** Decode the shared newline-delimited event protocol for dataset agents. */
+/** Use the shared decoder for question chat and report chat alike. */
 async function streamDatasetEvents(
   path: string,
   body: Record<string, unknown>,
   onEvent: (event: DatasetStreamEvent) => void,
 ): Promise<void> {
-  const response = await fetch(`${BASE}${path}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}),
-    },
-    body: JSON.stringify(body),
-  })
-  if (response.status === 401) {
-    setToken(null)
-    onUnauthorized?.()
-    throw new ApiError(401, 'требуется авторизация')
-  }
-  if (!response.ok || !response.body) {
-    let detail = `HTTP ${response.status}`
-    try { detail = describeDetail((await response.json() as { detail?: unknown }).detail) } catch { /* no JSON body */ }
-    throw new ApiError(response.status, detail)
-  }
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  let pending = ''
-  while (true) {
-    const { value, done } = await reader.read()
-    pending += decoder.decode(value, { stream: !done })
-    const lines = pending.split('\n')
-    pending = lines.pop() ?? ''
-    for (const line of lines) {
-      if (!line.trim()) continue
-      onEvent(JSON.parse(line) as DatasetStreamEvent)
-    }
-    if (done) break
-  }
-  if (pending.trim()) onEvent(JSON.parse(pending) as DatasetStreamEvent)
+  return streamEvents(path, body, onEvent)
 }
 
 export async function createDataset(input: DatasetCreateInput): Promise<DatasetSaveResult> {
@@ -994,7 +1037,7 @@ export async function chatReport(
 }
 
 export interface ReportStreamEvent {
-  type: 'status' | 'delta' | 'done' | 'error'
+  type: 'status' | 'delta' | 'done' | 'error' | 'heartbeat'
   text?: string
   message?: string
   conversationId?: string

@@ -88,6 +88,7 @@ export function DatasetQuestionPanel({ datasets, initialDatasetSlug, requestedCo
   const [streamedAnswer, setStreamedAnswer] = useState('')
   const [status, setStatus] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [canRestore, setCanRestore] = useState(false)
   const [overviewOpen, setOverviewOpen] = useState(false)
   const [selectedSlugs, setSelectedSlugs] = useState<string[]>(initialDatasetSlug ? [initialDatasetSlug] : [])
   const [mentionQuery, setMentionQuery] = useState<string | null>(null)
@@ -196,6 +197,30 @@ export function DatasetQuestionPanel({ datasets, initialDatasetSlug, requestedCo
     setOverviewOpen(false)
   }
 
+  /** Check saved answers after a broken stream without running the model again. */
+  async function restoreHistory(): Promise<void> {
+    if (!conversationId || asking || loading) return
+    const serial = ++requestSerial.current
+    setLoading(true)
+    try {
+      const saved = await fetchWorkspaceConversation(conversationId)
+      if (serial !== requestSerial.current) return
+      const found = saved.turns.length > turns.length
+      setTurns(saved.turns)
+      if (found) {
+        setError(null)
+        setCanRestore(false)
+        setQuestion('')
+      } else {
+        setError('Нового ответа в истории пока нет. Если расчёт ещё идёт, проверьте позже. Если сервер перезапустился, отправьте сохранённый вопрос повторно.')
+      }
+    } catch (failure) {
+      if (serial === requestSerial.current) setError(failure instanceof Error ? failure.message : 'Не удалось проверить историю. Попробуйте позже.')
+    } finally {
+      if (serial === requestSerial.current) setLoading(false)
+    }
+  }
+
   /** Submit a user turn and render each progress or text event immediately. */
   async function ask(): Promise<void> {
     const text = question.trim()
@@ -209,10 +234,12 @@ export function DatasetQuestionPanel({ datasets, initialDatasetSlug, requestedCo
     setQuestion('')
     setStreamedAnswer('')
     setStatus('Агент изучает вопрос…')
+    setCanRestore(false)
     setError(null)
     try {
       await streamWorkspaceAnswer(slugs, text, conversationId, (event) => {
         if (serial !== requestSerial.current) return
+        if (event.conversationId) activateConversation(event.conversationId)
         if (event.type === 'status') setStatus(event.text ?? '')
         if (event.type === 'delta') {
           setStatus('')
@@ -232,6 +259,7 @@ export function DatasetQuestionPanel({ datasets, initialDatasetSlug, requestedCo
     } catch (failure) {
       if (serial === requestSerial.current) {
         setError(failure instanceof Error ? failure.message : 'Не удалось получить ответ')
+        setCanRestore(failure instanceof ApiError && (failure.status === 0 || [502, 503, 504].includes(failure.status)))
         setQuestion(text)
         setPendingQuestion(null)
         setPendingSlugs([])
@@ -332,7 +360,11 @@ export function DatasetQuestionPanel({ datasets, initialDatasetSlug, requestedCo
       </div>
 
       <footer className="border-t border-line bg-surface px-4 py-4 sm:px-6">
-        {error && <Alert className="mb-3">{error}</Alert>}
+        {error && <Alert className="mb-3">
+          <p>{error}</p>
+          {canRestore && <Button className="mt-2" size="sm" variant="default" disabled={asking || loading}
+            onClick={() => { void restoreHistory() }}>Проверить историю</Button>}
+        </Alert>}
         <form onSubmit={(event) => { event.preventDefault(); void ask() }}>
           <label htmlFor="workspace-question" className="sr-only">Ваш вопрос к датасету</label>
           {selectedDatasets.length > 0 && <div className="mb-3 flex flex-wrap gap-2" aria-label="Прикреплённые датасеты">
