@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { ApiError, fetchSavedChats, saveNamedChat, type SavedChat } from '../lib/api'
-import { Alert, Button, Input } from './ui'
+import { ApiError, deleteSavedChat, fetchSavedChats, saveNamedChat, type SavedChat } from '../lib/api'
+import { Alert, Button, Input, useConfirm } from './ui'
 
 /** Show the user's named data consultations beside the workspace, like report navigation. */
 export function ChatSidebar({ onNavigate }: { onNavigate?: () => void }) {
   const location = useLocation()
   const navigate = useNavigate()
+  const { confirm, dialog } = useConfirm()
   const selectedId = new URLSearchParams(location.search).get('chat')
   const [chats, setChats] = useState<SavedChat[]>([])
   const [query, setQuery] = useState('')
@@ -57,6 +58,27 @@ export function ChatSidebar({ onNavigate }: { onNavigate?: () => void }) {
     }
   }
 
+  /** Ask before deleting an owned chat and select another saved chat if needed. */
+  function confirmDelete(chat: SavedChat): void {
+    confirm({
+      title: 'Удалить чат?',
+      description: `Чат «${chat.title}» и все его сообщения будут удалены.`,
+      confirmLabel: 'Удалить чат',
+      onConfirm: async () => {
+        await deleteSavedChat(chat.id, 'dataset', 'workspace')
+        const remaining = chats.filter((item) => item.id !== chat.id)
+        setChats(remaining)
+        window.dispatchEvent(new Event('dataset-chats-changed'))
+        if (selectedId === chat.id) {
+          window.localStorage.removeItem('active-dataset-chat')
+          navigate(remaining.length
+            ? `/workspace?chat=${encodeURIComponent(remaining[0].id)}` : '/workspace')
+          onNavigate?.()
+        }
+      },
+    })
+  }
+
   return <nav aria-label="Сохранённые чаты" className="min-w-0">
     <div className="border-b border-line bg-surface px-3 pb-4 pt-5 xl:sticky xl:top-0">
       <div className="mb-4 flex items-start justify-between gap-2 px-1">
@@ -77,16 +99,21 @@ export function ChatSidebar({ onNavigate }: { onNavigate?: () => void }) {
       {!loading && !error && visible.length === 0 &&
         <p className="px-2 text-sm text-fg-muted">{query ? 'Ничего не найдено' : 'Сохранённых чатов пока нет.'}</p>}
       <div className="flex flex-col gap-1">
-        {visible.map((chat) => <Link key={chat.id} to={`/workspace?chat=${encodeURIComponent(chat.id)}`}
-          onClick={onNavigate} title={chat.title} aria-current={selectedId === chat.id ? 'page' : undefined}
-          className={`flex min-h-12 min-w-0 flex-col justify-center rounded-control px-3 py-2 text-sm transition-colors ${
-            selectedId === chat.id ? 'bg-accent-soft font-semibold text-accent' : 'text-fg hover:bg-surface-sunken'}`}>
-          <span className="truncate">{chat.title}</span>
-          <time dateTime={chat.updatedAt} className="text-xs font-normal text-fg-muted">
-            {new Date(chat.updatedAt).toLocaleDateString('ru')}
-          </time>
-        </Link>)}
+        {visible.map((chat) => <div key={chat.id} className="flex min-w-0 items-center gap-1">
+          <Link to={`/workspace?chat=${encodeURIComponent(chat.id)}`}
+            onClick={onNavigate} title={chat.title} aria-current={selectedId === chat.id ? 'page' : undefined}
+            className={`flex min-h-12 min-w-0 flex-1 flex-col justify-center rounded-control px-3 py-2 text-sm transition-colors ${
+              selectedId === chat.id ? 'bg-accent-soft font-semibold text-accent' : 'text-fg hover:bg-surface-sunken'}`}>
+            <span className="truncate">{chat.title}</span>
+            <time dateTime={chat.updatedAt} className="text-xs font-normal text-fg-muted">
+              {new Date(chat.updatedAt).toLocaleDateString('ru')}
+            </time>
+          </Link>
+          <Button size="sm" variant="ghost" className="shrink-0 px-2" title={`Удалить чат «${chat.title}»`}
+            aria-label={`Удалить чат «${chat.title}»`} onClick={() => confirmDelete(chat)}>×</Button>
+        </div>)}
       </div>
     </div>
+    {dialog}
   </nav>
 }

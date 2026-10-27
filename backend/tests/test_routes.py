@@ -79,6 +79,7 @@ COVERED = {
     ('GET', '/api/chats'): 'test_agent_conversations.py',
     ('POST', '/api/chats'): 'test_agent_conversations.py',
     ('POST', '/api/chats/new'): 'test_agent_conversations.py',
+    ('DELETE', '/api/chats/{conversation_id}'): 'test_agent_conversations.py',
     ('POST', '/api/reports/recommendations'): 'test_interpret_chat.py',
     ('POST', '/api/reports/preview'): 'test_api_reports.py',
     ('POST', '/api/reports/builder'): 'test_api_reports.py',

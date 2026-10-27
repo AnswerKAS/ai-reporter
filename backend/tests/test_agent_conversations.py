@@ -203,6 +203,30 @@ def test_named_chat_creation_is_immediately_persistent(client, user_headers):
     assert restored == {'conversationId': created['id'], 'turns': []}
 
 
+def test_delete_dataset_chat_removes_messages_and_protects_other_users(
+        client, plain_user, user_headers, admin_headers):
+    """Deletion removes an owned chat and history but cannot affect another owner."""
+    owned = store.save_named(plain_user['id'], 'dataset', 'workspace', 'Удалить меня')
+    store.save_exchange(owned['id'], 'Вопрос', 'Ответ', {'answer': 'Ответ'})
+
+    foreign = client.post('/api/chats', headers=admin_headers, json={
+        'kind': 'dataset', 'target': 'workspace', 'title': 'Чужой чат',
+    }).json()['chat']
+    assert client.delete(f"/api/chats/{foreign['id']}", headers=user_headers,
+                         params={'kind': 'dataset', 'target': 'workspace'}).status_code == 404
+    assert client.delete(f"/api/chats/{owned['id']}", headers=user_headers,
+                         params={'kind': 'dataset', 'target': 'workspace'}).status_code == 204
+
+    listed = client.get('/api/chats?kind=dataset&target=workspace',
+                        headers=user_headers).json()['chats']
+    assert listed == []
+    assert store.messages(owned['id']) == []
+    assert client.get('/api/datasets/chat/history', headers=user_headers,
+                      params={'conversation_id': owned['id']}).status_code == 404
+    assert client.get('/api/chats?kind=dataset&target=workspace',
+                      headers=admin_headers).json()['chats'][0]['id'] == foreign['id']
+
+
 def test_new_report_chat_within_saved_report_uses_fresh_context(
         client, model, plain_user, user_headers, monkeypatch):
     """A new report chat can start beside an older chat for the same report."""

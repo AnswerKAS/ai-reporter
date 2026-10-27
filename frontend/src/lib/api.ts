@@ -54,6 +54,7 @@ export function setToken(token: string | null): void {
   else localStorage.removeItem(TOKEN_KEY)
 }
 
+/** Send an authenticated API request and accept an empty 204 response. */
 async function request<T>(
   path: string,
   options: RequestInit = {},
@@ -83,6 +84,7 @@ async function request<T>(
     }
     throw new ApiError(res.status, detail)
   }
+  if (res.status === 204) return undefined as T
   return (await res.json()) as T
 }
 
@@ -476,6 +478,13 @@ export async function saveNamedChat(kind: SavedChat['kind'], target: string,
     body: JSON.stringify({ kind, target, title, conversationId }),
   })
   return result.chat
+}
+
+/** Remove one owned chat and its history from the selected agent scope. */
+export async function deleteSavedChat(id: string, kind: SavedChat['kind'],
+                                      target: string): Promise<void> {
+  await request<void>(`/chats/${encodeURIComponent(id)}?kind=${encodeURIComponent(kind)}&target=${encodeURIComponent(target)}`,
+    { method: 'DELETE' })
 }
 
 /** Create an empty independent chat so a reload cannot revive the previous one. */

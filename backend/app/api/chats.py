@@ -1,6 +1,6 @@
 """Named chat library shared by the dataset and report agents."""
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 
 from ..agent import store
 from ..core.security import get_current_user
@@ -55,3 +55,15 @@ def new_chat(payload: dict, user: dict = Depends(get_current_user)) -> dict:
     kind, target = _scope(str(payload.get('kind') or ''), str(payload.get('target') or ''))
     item = store.conversation(user['id'], kind, target, create=True, fresh=True)
     return {'conversationId': item['id']}
+
+
+@router.delete('/{conversation_id}', status_code=204)
+def delete_chat(conversation_id: str, kind: str, target: str,
+                user: dict = Depends(get_current_user)) -> Response:
+    """Delete an owned chat and its messages without exposing other users' chats."""
+    kind, target = _scope(kind, target)
+    try:
+        store.delete_owned_chat(user['id'], kind, target, conversation_id)
+    except DatasetError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return Response(status_code=204)

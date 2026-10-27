@@ -87,6 +87,24 @@ def list_saved(user_id: str, kind: str, target: str) -> list[dict]:
     return [dict(row) for row in rows]
 
 
+def delete_owned_chat(user_id: str, kind: str, target: str,
+                      conversation_id: str) -> None:
+    """Delete one owned conversation and its messages in the same transaction."""
+    with db._conn() as conn:
+        item = conn.execute(
+            'SELECT id FROM agent_conversations WHERE id = %s AND user_id = %s '
+            'AND kind = %s AND target = %s',
+            (conversation_id, user_id, kind, target),
+        ).fetchone()
+        if item is None:
+            raise DatasetError('диалог не найден или нет доступа')
+        conn.execute('DELETE FROM agent_messages WHERE conversation_id = %s',
+                     (conversation_id,))
+        conn.execute('DELETE FROM agent_conversations WHERE id = %s AND user_id = %s '
+                     'AND kind = %s AND target = %s',
+                     (conversation_id, user_id, kind, target))
+
+
 def messages(conversation_id: str) -> list[dict]:
     """Load ordered messages and decoded tool results for an owned conversation."""
     with db._conn() as conn:

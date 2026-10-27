@@ -81,11 +81,18 @@ export function DatasetQuestionPanel({ datasets, initialDatasetSlug, requestedCo
     setError(null)
     mentionRange.current = null
     const remembered = requestedConversationId || window.localStorage.getItem(ACTIVE_DATASET_CHAT) || undefined
+    if (!remembered) {
+      activateConversation(null)
+      setSelectedSlugs(initialDatasetSlug ? [initialDatasetSlug] : [])
+      setLoading(false)
+      return () => { active = false }
+    }
     void fetchWorkspaceConversation(remembered)
       .catch(async (failure) => {
         if (!(failure instanceof ApiError) || failure.status !== 404) throw failure
         window.localStorage.removeItem(ACTIVE_DATASET_CHAT)
-        return fetchWorkspaceConversation()
+        activateConversation(null)
+        return { conversationId: null, turns: [] }
       })
       .then((saved) => {
         if (!active) return
