@@ -97,6 +97,7 @@ def _stream_answer(question: str, columns: list[str], rows: list[list],
 
     evidence = evidence or []
     visible_evidence = [{'datasetTitle': item['datasetTitle'],
+                         'title': item['title'],
                          'columns': item['columns'],
                          'rows': item['rows'][:max(3, 30 // max(1, len(evidence)))]}
                         for item in evidence]
@@ -157,6 +158,7 @@ def ask_datasets(datasets: list[dict], question: str, history: list[dict], *,
         'или {"final":{"answer":"...","calculations":["..."],'
         '"groupBy":["..."],"filters":["..."],"orderBy":null,"scope":"...",'
         '"columnLabels":{"slug":{"sql_column":"Русское название"}},'
+        '"tableTitles":{"slug":"Краткое название результата"},'
         '"hypotheses":[{"text":"предположение","howToCheck":"способ проверки"}]}}. '
         'Для sample_rows и execute_sql укажи args.datasetSlug из прикреплённого списка; '
         'для execute_sql также укажи args.sql = "SELECT ... FROM dataset ...". '
@@ -168,6 +170,10 @@ def ask_datasets(datasets: list[dict], question: str, history: list[dict], *,
         'При ошибке исправь SQL и вызови инструмент снова. '
         'В final.columnLabels дай русское название каждому столбцу последнего '
         'результата SQL по каждому датасету; промежуточные запросы подписывать не нужно. '
+        'В final.tableTitles дай отдельное короткое русское название таблицы последнего '
+        'результата для каждого датасета. Название должно объяснять, что именно '
+        'показано или посчитано (показатель, разрез или период), а не повторять '
+        'название датасета. Промежуточные результаты подписывать не нужно. '
         'Сопоставляй только сравнимые периоды, единицы и ключи. Если общего ключа '
         'нет, не выдумывай связь. Гипотезы отделяй от фактов и добавляй способ проверки. '
         'Отвечай только по фактическим результатам инструментов, без вымышленных чисел. '
@@ -228,11 +234,17 @@ def ask_datasets(datasets: list[dict], question: str, history: list[dict], *,
                               + ', '.join(missing)}
             final = action.get('final') or {}
             labels = final.get('columnLabels') if isinstance(final.get('columnLabels'), dict) else {}
+            titles = final.get('tableTitles') if isinstance(final.get('tableTitles'), dict) else {}
             latest_results = {item['datasetSlug']: item for item in results}
             evidence = []
             for dataset in datasets:
                 item = latest_results[dataset['slug']]
                 source = selected[item['datasetSlug']]
+                title = titles.get(item['datasetSlug'])
+                if not isinstance(title, str) or not title.strip() or not re.search(
+                        r'[А-Яа-яЁё]', title):
+                    raise DatasetError('Укажи в final.tableTitles короткое русское '
+                                       f'название результата для датасета {item["datasetSlug"]}.')
                 if len(datasets) > 1 and not isinstance(labels.get(item['datasetSlug']), dict):
                     raise DatasetError('Укажи final.columnLabels отдельно для каждого '
                                        f'датасета, включая {item["datasetSlug"]}.')
@@ -240,7 +252,7 @@ def ask_datasets(datasets: list[dict], question: str, history: list[dict], *,
                     labels.get(item['datasetSlug']), dict) else labels
                 display_columns = _russian_columns(item['columns'],
                                                    {'columnLabels': source_labels}, source)
-                evidence.append({**item, 'columns': display_columns,
+                evidence.append({**item, 'title': title.strip(), 'columns': display_columns,
                                  'rows': [[str(value) if value is not None else '' for value in row]
                                           for row in item['rows']]})
             primary = evidence[-1]
@@ -266,7 +278,8 @@ def ask_datasets(datasets: list[dict], question: str, history: list[dict], *,
                 'limit': MAX_VISIBLE_ROWS, 'shownRows': sum(len(item['rows']) for item in evidence),
                 'totalRows': None, 'hasMore': any(item['truncated'] for item in evidence),
             }
-            return ({'answer': answer, 'columns': primary['columns'], 'rows': primary['rows'],
+            return ({'answer': answer, 'title': primary['title'],
+                     'columns': primary['columns'], 'rows': primary['rows'],
                      'plan': {'queries': [{'datasetSlug': item['datasetSlug'], 'sql': item['sql']}
                                           for item in evidence]},
                      'truncated': explanation['hasMore'], 'evidence': evidence,

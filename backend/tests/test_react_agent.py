@@ -212,7 +212,8 @@ def test_dataset_agent_executes_window_query(dataset, sources, monkeypatch):
                    'calculations': ['Оконная сумма выручки по городу'],
                    'groupBy': ['city'], 'filters': [], 'orderBy': None,
                    'scope': 'Все строки датасета',
-                   'columnLabels': {'city': 'Город', 'total': 'Выручка'}}},
+                   'columnLabels': {'city': 'Город', 'total': 'Выручка'},
+                   'tableTitles': {'sales': 'Выручка по городам'}}},
     ])
     monkeypatch.setattr(interpret, '_openrouter_key', lambda: 'fake')
     monkeypatch.setattr(interpret, '_chat_models', lambda: ('fake-model', None))
@@ -224,6 +225,8 @@ def test_dataset_agent_executes_window_query(dataset, sources, monkeypatch):
 
     assert response['rows'] == [['Москва', '100']]
     assert response['columns'] == ['Город', 'Выручка']
+    assert response['title'] == 'Выручка по городам'
+    assert response['evidence'][0]['title'] == 'Выручка по городам'
     assert 'OVER (PARTITION BY city)' in response['sql']
     assert response['explanation']['calculations'] == ['Оконная сумма выручки по городу']
 
@@ -246,7 +249,9 @@ def test_dataset_agent_compares_attached_datasets_with_evidence(dataset, monkeyp
                    'hypotheses': [{'text': 'Маржа могла вырасти',
                                    'howToCheck': 'Сравнить одинаковые периоды'}],
                    'columnLabels': {'sales': {'month': 'Месяц', 'amount': 'Выручка'},
-                                    'costs': {'month': 'Месяц', 'amount': 'Расходы'}}}},
+                                    'costs': {'month': 'Месяц', 'amount': 'Расходы'}},
+                   'tableTitles': {'sales': 'Выручка по месяцам',
+                                   'costs': 'Расходы по месяцам'}}},
     ])
     observed = []
 
@@ -266,6 +271,8 @@ def test_dataset_agent_compares_attached_datasets_with_evidence(dataset, monkeyp
     assert observed == ['sales', 'costs']
     assert [item['datasetSlug'] for item in response['evidence']] == ['sales', 'costs']
     assert response['evidence'][0]['columns'] == ['Месяц', 'Выручка']
+    assert [item['title'] for item in response['evidence']] == [
+        'Выручка по месяцам', 'Расходы по месяцам']
     assert response['evidence'][1]['rows'] == [['2026-01', '80']]
     assert response['hypotheses'][0]['howToCheck'] == 'Сравнить одинаковые периоды'
 
@@ -276,7 +283,8 @@ def test_dataset_agent_uses_latest_result_instead_of_exploratory_queries(dataset
         {'tool': 'execute_sql', 'args': {'sql': 'SELECT count(*) AS cnt FROM dataset'}},
         {'tool': 'execute_sql', 'args': {'sql': 'SELECT city, sum(revenue) AS total FROM dataset GROUP BY city'}},
         {'final': {'answer': 'Москва: 100',
-                   'columnLabels': {'city': 'Город', 'total': 'Выручка'}}},
+                   'columnLabels': {'city': 'Город', 'total': 'Выручка'},
+                   'tableTitles': {'sales': 'Выручка по городам'}}},
     ])
     monkeypatch.setattr(interpret, '_openrouter_key', lambda: 'fake')
     monkeypatch.setattr(interpret, '_chat_models', lambda: ('fake-model', None))
@@ -294,6 +302,34 @@ def test_dataset_agent_uses_latest_result_instead_of_exploratory_queries(dataset
     assert 'GROUP BY city' in response['sql']
 
 
+def test_dataset_agent_repairs_missing_table_title(dataset, monkeypatch):
+    """A missing result title returns to the model before any table is shown."""
+    actions = iter([
+        {'tool': 'execute_sql', 'args': {'sql': 'SELECT count(*) AS total FROM dataset'}},
+        {'final': {'answer': 'Одна запись',
+                   'columnLabels': {'total': 'Количество'}}},
+        {'final': {'answer': 'Одна запись',
+                   'columnLabels': {'total': 'Количество'},
+                   'tableTitles': {'sales': 'Количество записей'}}},
+    ])
+    prompts = []
+
+    def fake_invoke(prompt, *_args):
+        """Capture the repair observation delivered to the model."""
+        prompts.append(prompt)
+        return next(actions)
+
+    monkeypatch.setattr(interpret, '_openrouter_key', lambda: 'fake')
+    monkeypatch.setattr(interpret, '_chat_models', lambda: ('fake-model', None))
+    monkeypatch.setattr(runner, '_invoke', fake_invoke)
+    monkeypatch.setattr(runner, 'execute_readonly_sql', lambda *_: (['total'], [[1]], False))
+
+    response = runner.ask_datasets([dataset], 'Сколько строк?', [], reveal_sql=True)
+
+    assert 'final.tableTitles' in prompts[2]
+    assert response['title'] == 'Количество записей'
+
+
 def test_dataset_agent_accepts_nested_russian_column_labels(dataset):
     """A model's structured Russian label maps to the matching SQL column."""
     assert runner._russian_columns(
@@ -309,7 +345,8 @@ def test_dataset_agent_rejects_query_for_unattached_dataset(dataset, monkeypatch
             'sql': 'SELECT count(*) FROM dataset'}},
         {'tool': 'execute_sql', 'args': {'datasetSlug': 'sales',
             'sql': 'SELECT count(*) AS total FROM dataset'}},
-        {'final': {'answer': 'Одна строка', 'columnLabels': {'total': 'Количество'}}},
+        {'final': {'answer': 'Одна строка', 'columnLabels': {'total': 'Количество'},
+                   'tableTitles': {'sales': 'Количество записей'}}},
     ])
     prompts = []
 

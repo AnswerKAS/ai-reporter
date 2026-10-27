@@ -9,10 +9,11 @@ import { Alert, Button, Table, Td, Textarea, Th, Tr } from './ui'
 
 const ACTIVE_DATASET_CHAT = 'active-dataset-chat'
 
-/** Render a bounded evidence table without mixing rows from different sources. */
-function EvidenceTable({ columns, rows }: { columns: string[]; rows: string[][] }) {
+/** Render a titled, bounded evidence table without mixing source rows. */
+function EvidenceTable({ title, columns, rows }: { title: string; columns: string[]; rows: string[][] }) {
   return <div className="max-h-64 overflow-auto rounded-control border border-line bg-surface">
     <Table>
+      <caption className="px-3 py-2 text-left text-sm font-semibold">{title}</caption>
       <thead><Tr>{columns.map((column, position) => <Th key={`${column}-${position}`}>{column}</Th>)}</Tr></thead>
       <tbody>{rows.map((row, rowIndex) => (
         <Tr key={rowIndex}>{row.map((cell, cellIndex) => <Td key={cellIndex}>{cell}</Td>)}</Tr>
@@ -240,13 +241,13 @@ export function DatasetQuestionPanel({ datasets, initialDatasetSlug, requestedCo
                 <AgentMarkdown content={turn.answer} />
                 {turn.evidence && turn.evidence.length > 1 ? <div className="space-y-4">
                   {turn.evidence.map((item, evidenceIndex) => <div key={`${item.datasetSlug}-${evidenceIndex}`} className="space-y-2">
-                    <p className="text-sm font-semibold">@{item.datasetTitle}</p>
-                    {item.columns.length > 0 && <EvidenceTable columns={item.columns} rows={item.rows} />}
+                    <p className="text-xs text-fg-muted">Источник: @{item.datasetTitle}</p>
+                    {item.columns.length > 0 && <EvidenceTable title={item.title || item.datasetTitle} columns={item.columns} rows={item.rows} />}
                     {item.truncated && <p className="text-xs text-fg-muted">Показана часть строк этого результата.</p>}
                     <details className="text-xs text-fg-muted"><summary className="cursor-pointer">SQL источника</summary>
                       <pre className="mt-2 max-w-full overflow-x-auto font-mono">{item.sql}</pre></details>
                   </div>)}
-                </div> : turn.columns.length > 0 && <EvidenceTable columns={turn.columns} rows={turn.rows} />}
+                </div> : turn.columns.length > 0 && <EvidenceTable title={turn.title || turn.evidence?.[0]?.title || 'Результат запроса'} columns={turn.columns} rows={turn.rows} />}
                 {!!turn.hypotheses?.length && <div className="rounded-control border border-line bg-surface px-3 py-3 text-sm">
                   <p className="font-semibold">Гипотезы для проверки</p>
                   <ul className="mt-2 list-disc space-y-2 pl-5">{turn.hypotheses.map((item, hypothesisIndex) =>

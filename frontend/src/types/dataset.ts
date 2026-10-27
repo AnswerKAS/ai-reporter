@@ -108,6 +108,8 @@ export interface DatasetQuestionTurn {
   datasetTitles?: string[]
   question: string
   answer: string
+  /** Название результата, предложенное моделью; отсутствует у старых сообщений. */
+  title?: string
   columns: string[]
   rows: string[][]
   plan: Record<string, unknown>
@@ -118,6 +120,7 @@ export interface DatasetQuestionTurn {
   evidence?: Array<{
     datasetSlug: string
     datasetTitle: string
+    title?: string
     columns: string[]
     rows: string[][]
     sql: string
