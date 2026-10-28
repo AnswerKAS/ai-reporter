@@ -36,12 +36,13 @@ export function ReportListPage() {
   const tag = params.get('tag') ?? ''
   const status = params.get('status') ?? ''
   const favorite = params.get('favorite') === '1'
+  const archived = params.get('archived') === '1'
   const sort = params.get('sort') === 'title' ? 'title' : 'updated'
-  const scoped = useReportFacets(search)
-  const choices = scoped ?? facets
+  const scoped = useReportFacets(search, archived)
+  const choices = archived ? scoped : scoped ?? facets
   const { reports, total, loading, error } = useReportPage({
     q: search, group: group || undefined, author: author || undefined,
-    tag: tag || undefined, status: status || undefined, favorite,
+    tag: tag || undefined, status: status || undefined, favorite, archived,
     sort, limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE,
   })
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE))
@@ -85,13 +86,28 @@ export function ReportListPage() {
   return (
     <Page>
       <PageHeader
-        title="Библиотека отчётов"
+        title={archived ? 'Архив отчётов' : 'Библиотека отчётов'}
         subtitle="Найдите нужный отчёт по словам названия, описания или темы."
         actions={<>
           <Link to="/workspace" className="inline-flex min-h-10 items-center rounded-control border border-line bg-surface px-4 text-sm font-medium text-fg hover:bg-accent-soft">Задать вопрос</Link>
           <Link to="/workspace?mode=report" className="inline-flex min-h-10 items-center rounded-control bg-accent px-4 text-sm font-semibold text-accent-fg hover:bg-accent-hover">Новый отчёт</Link>
         </>}
       />
+
+      <div className="mb-4">
+        <Segmented
+          ariaLabel="Раздел отчётов"
+          value={archived ? 'archived' : 'active'}
+          onChange={(value) => {
+            const next = new URLSearchParams(params)
+            if (value === 'archived') next.set('archived', '1')
+            else next.delete('archived')
+            for (const key of ['page', 'group', 'author', 'tag', 'status', 'favorite']) next.delete(key)
+            setParams(next, { replace: true })
+          }}
+          options={[{ value: 'active', label: 'Активные' }, { value: 'archived', label: 'Архив' }]}
+        />
+      </div>
 
       <section aria-label="Поиск и фильтры отчётов" className="mb-5 rounded-card border border-line bg-surface p-4 shadow-card">
         <Input
@@ -186,7 +202,7 @@ export function ReportListPage() {
             {reports.map((report) => <ReportRow
               key={report.slug}
               report={report}
-              favorite={isFavorite(report.slug)}
+              favorite={report.archivedAt ? Boolean(report.favorite) : isFavorite(report.slug)}
               isAdmin={isAdmin}
               onRename={() => setEditing(report)}
               onDelete={() => askDelete(report)}

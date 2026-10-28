@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { Dataset, DatasetSource, DbConnection } from '../../types/dataset'
-import { ApiError, createDataset, deleteDataset, fetchDatasets, fetchDbConnections } from '../../lib/api'
+import { ApiError, createDataset, fetchDatasets, fetchDbConnections } from '../../lib/api'
 import { suggestUniqueSlug } from '../../lib/slug'
+import { DatasetDeleteDialog } from '../DatasetDeleteDialog'
 import { DatasetModal } from '../DatasetModal'
 import {
   Alert,
@@ -15,7 +16,6 @@ import {
   PanelRow,
   Select,
   Textarea,
-  useConfirm,
 } from '../ui'
 import type { BadgeTone } from '../ui/Badge'
 
@@ -47,8 +47,9 @@ export function DatasetsPanel({ onCount }: { onCount?: (count: number) => void }
   const [shownTab, setShownTab] = useState<'preview' | 'fields'>('preview')
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
-  const { confirm, dialog } = useConfirm()
+  const [pendingDelete, setPendingDelete] = useState<Dataset | null>(null)
 
+  /** Reload dataset rows and their count after administration actions. */
   const load = async () => {
     try {
       const list = await fetchDatasets()
@@ -131,22 +132,17 @@ export function DatasetsPanel({ onCount }: { onCount?: (count: number) => void }
           isAdmin
           onClose={() => setShown(null)}
           onChanged={() => void load()}
-          onDelete={() =>
-            confirm({
-              title: 'Удалить датасет?',
-              description: `Датасет «${shown.title}» (${shown.slug}) будет удалён. Отчёты, которые его используют, перестанут собираться.`,
-              onConfirm: async () => {
-                await deleteDataset(shown.slug)
-                setShown(null)
-                setNotice(`Датасет «${shown.title}» удалён.`)
-                await load()
-              },
-            })
-          }
+          onDelete={() => setPendingDelete(shown)}
         />
       )}
 
-      {dialog}
+      {pendingDelete && <DatasetDeleteDialog dataset={pendingDelete}
+        onClose={() => setPendingDelete(null)}
+        onDeleted={async () => {
+          setShown(null)
+          setNotice(`Датасет «${pendingDelete.title}» удалён. Связанные отчёты перенесены в архив.`)
+          await load()
+        }} /> }
 
       {open && (
         <DatasetCreateModal

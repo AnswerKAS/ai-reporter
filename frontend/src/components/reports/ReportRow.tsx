@@ -75,7 +75,7 @@ export function ReportRow({
           )
         }
       >
-        <StatusDot status={report.status} />
+        <StatusDot status={report.archivedAt ? undefined : report.status} />
         <span className="min-w-0 flex-1">
           <span className={cn('block min-w-0 break-words', variant === 'catalog' ? 'font-medium' : 'line-clamp-2')}>
             {report.title}

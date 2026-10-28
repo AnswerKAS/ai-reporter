@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import type { Dataset, DatasetSource, DatasetStatus } from '../types/dataset'
-import { ApiError, deleteDataset, fetchDatasets } from '../lib/api'
+import { ApiError, fetchDatasets } from '../lib/api'
+import { DatasetDeleteDialog } from '../components/DatasetDeleteDialog'
 import { DatasetModal } from '../components/DatasetModal'
 import { useAuth } from '../lib/auth'
 import {
@@ -9,7 +10,6 @@ import {
   Badge,
   Button,
   Chips,
-  ConfirmDialog,
   EmptyState,
   Input,
   Page,
@@ -69,6 +69,7 @@ function parseFilter<T extends string>(raw: string | null, allowed: readonly T[]
   return allowed.filter((value) => asked.includes(value))
 }
 
+/** Browse datasets and confirm deletion with its impact on reports. */
 export function DatasetsPage() {
   const { isAdmin } = useAuth()
   const navigate = useNavigate()
@@ -324,17 +325,12 @@ export function DatasetsPage() {
       )}
 
       {pendingDelete && (
-        <ConfirmDialog
-          title="Удалить датасет?"
-          description={`Датасет «${pendingDelete.title}» (${pendingDelete.slug}) будет удалён. Отчёты, которые его используют, перестанут собираться.`}
+        <DatasetDeleteDialog dataset={pendingDelete}
           onClose={() => setPendingDelete(null)}
-          onConfirm={async () => {
-            const slug = pendingDelete.slug
-            await deleteDataset(slug)
-            if (selected === slug) setSelected(null)
+          onDeleted={() => {
+            if (selected === pendingDelete.slug) setSelected(null)
             loadList()
-          }}
-        />
+          }} />
       )}
     </Page>
   )

@@ -31,6 +31,7 @@ export interface RecentReport {
   title: string
 }
 
+/** Read the bounded browser history, ignoring malformed storage. */
 function readRecent(): RecentReport[] {
   try {
     const raw = JSON.parse(localStorage.getItem(RECENT_KEY) ?? '[]') as unknown
@@ -202,10 +203,10 @@ export function ReportsProvider({ children }: { children: ReactNode }) {
 
   const toggleFavorite = useCallback(
     async (report: ReportMeta) => {
-      const on = !favorites.some((r) => r.slug === report.slug)
+      const on = !(report.archivedAt ? report.favorite : favorites.some((r) => r.slug === report.slug))
       // список меняем сразу: звёздочка не должна ждать ответа сервера
       setFavorites((prev) =>
-        on
+        on && !report.archivedAt
           ? [{ ...report, favorite: true }, ...prev.filter((r) => r.slug !== report.slug)]
           : prev.filter((r) => r.slug !== report.slug),
       )
@@ -268,18 +269,18 @@ export function useReports(): ReportsContextValue {
  * найденного лежит в каждой, иначе счётчик у группы врёт, а сама группа
  * раскрывается пустой.
  */
-export function useReportFacets(q: string): ReportFacets | null {
+export function useReportFacets(q: string, archived = false): ReportFacets | null {
   const { facets, version } = useReports()
   const [scoped, setScoped] = useState<ReportFacets | null>(null)
   const needle = q.trim()
 
   useEffect(() => {
-    if (!needle) {
+    if (!needle && !archived) {
       setScoped(null)
       return
     }
     let alive = true
-    fetchReportFacets(needle)
+    fetchReportFacets(needle, undefined, archived)
       .then((next) => {
         if (alive) setScoped(next)
       })
@@ -289,9 +290,9 @@ export function useReportFacets(q: string): ReportFacets | null {
     return () => {
       alive = false
     }
-  }, [needle, version])
+  }, [needle, version, archived])
 
-  return needle ? scoped : facets
+  return needle || archived ? scoped : facets
 }
 
 
@@ -321,7 +322,7 @@ export function useReportPage(query: ReportQuery): ReportPage {
   const { version } = useReports()
   const key = JSON.stringify([
     query.q?.trim() ?? '', query.group ?? '', query.author ?? '', query.tag ?? '',
-    query.status ?? '', Boolean(query.favorite), query.sort ?? 'updated',
+    query.status ?? '', Boolean(query.archived), Boolean(query.favorite), query.sort ?? 'updated',
     query.limit ?? 30, query.offset ?? 0,
   ])
   const [page, setPage] = useState<ReportPage>({
@@ -362,9 +363,9 @@ export function useReportSearch(query: ReportQuery): ReportSearch {
     () =>
       JSON.stringify([
         query.q?.trim() ?? '', query.group ?? '', query.author ?? '', query.tag ?? '',
-        query.status ?? '', Boolean(query.favorite), query.sort ?? 'title', limit,
+        query.status ?? '', Boolean(query.archived), Boolean(query.favorite), query.sort ?? 'title', limit,
       ]),
-    [query.q, query.group, query.author, query.tag, query.status, query.favorite, query.sort, limit],
+    [query.q, query.group, query.author, query.tag, query.status, query.archived, query.favorite, query.sort, limit],
   )
 
   const [reports, setReports] = useState<ReportMeta[]>([])

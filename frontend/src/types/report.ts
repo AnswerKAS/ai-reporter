@@ -114,6 +114,8 @@ export interface Report {
   title: string
   description?: string
   status?: string
+  archivedAt?: string | null
+  archiveReason?: string | null
   /** Владелец определения отчёта; читатель может менять только свои отчёты. */
   createdBy?: string | null
   createdAt: string
@@ -131,6 +133,8 @@ export interface ReportMeta {
   title: string
   description?: string
   status?: string
+  archivedAt?: string | null
+  archiveReason?: string | null
   error?: string
   filterValues?: Record<string, string>
   updatedAt: string
@@ -174,6 +178,7 @@ export interface ReportQuery {
   tag?: string
   status?: string
   favorite?: boolean
+  archived?: boolean
   sort?: 'title' | 'updated'
   limit?: number
   offset?: number

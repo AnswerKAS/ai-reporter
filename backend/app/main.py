@@ -33,10 +33,13 @@ from .services.worker import worker
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Инициализирует каталог и миграции перед запуском фоновых задач."""
     db.init_db()
     db.migrate_from_sqlite()
     ensure_default_admin()
     dataset_registry.ensure_default_datasets()
+    from .reports.archive import backfill_missing_datasets
+    backfill_missing_datasets()
     await worker.start()
     yield
     await worker.stop()

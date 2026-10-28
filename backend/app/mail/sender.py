@@ -137,6 +137,8 @@ def report_spec(slug: str) -> dict:
     report = db.get_report(slug)
     if report is None:
         raise MailError(f'отчёт {slug} удалён')
+    if report.get('archived_at'):
+        raise MailError('Отчёт в архиве: ' + (report.get('archive_reason') or slug))
     definition = db.get_definition(slug)
     if definition is None:
         raise MailError(f'у отчёта {slug} нет определения')

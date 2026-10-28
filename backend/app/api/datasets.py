@@ -597,8 +597,21 @@ async def upload_csv(slug: str, file: UploadFile, user: dict = Depends(require_a
     return {'dataset': _meta(updated, reveal_query=True), 'rows': rows}
 
 
+@router.get('/{slug}/deletion-impact')
+def dataset_deletion_impact(slug: str, user: dict = Depends(require_admin)) -> dict:
+    """Предупреждает администратора о количестве и названиях архивируемых отчётов."""
+    from ..reports.archive import dependent_reports
+
+    _get_or_404(slug)
+    with ds_registry._conn() as conn:
+        reports = dependent_reports(conn, slug)
+    return {'total': len(reports),
+            'reports': [{'slug': r['slug'], 'title': r['title']} for r in reports[:20]]}
+
+
 @router.delete('/{slug}')
 def delete_dataset(slug: str, user: dict = Depends(require_admin)) -> dict:
+    """Удаляет датасет и сразу переносит зависимые отчёты в архив."""
     _get_or_404(slug)
     ds_registry.delete(slug)
     return {'ok': True}

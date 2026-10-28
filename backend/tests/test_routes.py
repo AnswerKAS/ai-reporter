@@ -11,6 +11,8 @@ from app.main import app
 
 # (метод, путь) → файл с тестами этого эндпоинта
 COVERED = {
+    ('GET', '/api/datasets/{slug}/deletion-impact'): 'test_report_archive.py',
+    ('POST', '/api/reports/{slug}/restore'): 'test_report_archive.py',
     ('GET', '/api/health'): 'test_smoke.py',
 
     ('POST', '/api/auth/login'): 'test_api_auth.py',

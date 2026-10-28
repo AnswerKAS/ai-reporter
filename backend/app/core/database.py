@@ -409,6 +409,9 @@ def init_db() -> None:
         # трогают вовсе — «Маржа» не находится по «марж». Регистр складывает
         # Python, а SQL сравнивает уже свёрнутое.
         conn.execute('ALTER TABLE reports ADD COLUMN IF NOT EXISTS search_text TEXT')
+        conn.execute('ALTER TABLE reports ADD COLUMN IF NOT EXISTS archived_at TEXT')
+        conn.execute('ALTER TABLE reports ADD COLUMN IF NOT EXISTS archive_reason TEXT')
+        conn.execute('CREATE INDEX IF NOT EXISTS reports_archive_idx ON reports (archived_at)')
         _backfill_search_text(conn)
         # источник датасета: имя таблицы ИЛИ SQL-запрос (у старых записей NULL)
         conn.execute('ALTER TABLE datasets ADD COLUMN IF NOT EXISTS query TEXT')
@@ -624,6 +627,7 @@ def create_report(
 
 
 def set_definition(slug: str, definition: dict) -> None:
+    """Сохраняет определение без автоматического восстановления из архива."""
     with _conn() as conn:
         conn.execute(
             'UPDATE reports SET definition = %s, updated_at = %s WHERE slug = %s',
@@ -698,9 +702,10 @@ def _catalog_filters(
     tag: str | None = None,
     status: str | None = None,
     favorite: bool = False,
+    archived: bool = False,
 ) -> tuple[list[str], list]:
     """Условия каталога и их параметры — общие у выдачи и у фасетов."""
-    where: list[str] = []
+    where: list[str] = ['r.archived_at IS NOT NULL' if archived else 'r.archived_at IS NULL']
     params: list = []
 
     access, args = _access_sql(user)
@@ -836,13 +841,13 @@ def search_reports(user: dict, **filters) -> tuple[list[dict], int]:
     return reports, total
 
 
-def report_facets(user: dict, *, q: str | None = None) -> dict:
+def report_facets(user: dict, *, q: str | None = None, archived: bool = False) -> dict:
     """Разрезы каталога со счётчиками: сколько отчётов даст нажатие варианта.
 
     Счётчики считаются по тем же условиям, что и выдача, включая поиск, —
     иначе число у варианта не совпадает с тем, что человек увидит после клика.
     """
-    where, params = _catalog_filters(user, q=q)
+    where, params = _catalog_filters(user, q=q, archived=archived)
     clause = _clause(where)
     args = tuple(params)
     inner = f'SELECT r.slug FROM reports r{clause}'

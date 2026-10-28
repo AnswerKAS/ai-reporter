@@ -230,6 +230,14 @@ export function ReportTree({ className, onNavigate }: { className?: string; onNa
         />
       )}
 
+      <NavLink
+        to="/reports?archived=1"
+        onClick={onNavigate}
+        className="mt-4 flex min-h-10 items-center justify-between rounded-control border-t border-line px-3 pt-3 text-sm text-fg-muted hover:text-accent"
+      >
+        <span>Архив отчётов</span><span aria-hidden="true">→</span>
+      </NavLink>
+
       {editing && <ReportEditDialog report={editing} onClose={() => setEditing(null)} />}
       {dialog}
       </div>

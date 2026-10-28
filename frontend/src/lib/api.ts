@@ -306,7 +306,7 @@ export async function fetchReports(): Promise<ReportMeta[]> {
   return json.reports
 }
 
-/** Параметры каталога в строку запроса: пустые и выключенные не идут. */
+/** Serialize every catalog filter so archived and active pages use distinct requests. */
 function catalogParams(query: ReportQuery): string {
   const params = new URLSearchParams()
   if (query.q?.trim()) params.set('q', query.q.trim())
@@ -316,6 +316,7 @@ function catalogParams(query: ReportQuery): string {
     if (value) params.set(key, value)
   }
   if (query.favorite) params.set('favorite', 'true')
+  if (query.archived) params.set('archived', 'true')
   if (query.sort) params.set('sort', query.sort)
   if (query.limit !== undefined) params.set('limit', String(query.limit))
   if (query.offset) params.set('offset', String(query.offset))
@@ -335,9 +336,27 @@ export async function searchReports(
   return { reports: json.reports, total: json.total ?? json.reports.length }
 }
 
-export async function fetchReportFacets(q?: string, signal?: AbortSignal): Promise<ReportFacets> {
-  const suffix = q?.trim() ? `?q=${encodeURIComponent(q.trim())}` : ''
-  return request<ReportFacets>(`/reports/facets${suffix}`, { signal })
+/** Fetch facets for the same active or archived catalog as the visible rows. */
+export async function fetchReportFacets(q?: string, signal?: AbortSignal, archived = false): Promise<ReportFacets> {
+  const params = new URLSearchParams()
+  if (q?.trim()) params.set('q', q.trim())
+  if (archived) params.set('archived', 'true')
+  return request<ReportFacets>(`/reports/facets?${params}`, { signal })
+}
+
+/** Restore an archived report after the server validates its sources and queries. */
+export async function restoreReport(slug: string): Promise<void> {
+  await request(`/reports/${slug}/restore`, { method: 'POST' })
+}
+
+export interface DatasetDeletionImpact {
+  total: number
+  reports: { slug: string; title: string }[]
+}
+
+/** Read the affected report count and a bounded list of names before deletion. */
+export async function fetchDatasetDeletionImpact(slug: string, signal?: AbortSignal): Promise<DatasetDeletionImpact> {
+  return request(`/datasets/${slug}/deletion-impact`, { signal })
 }
 
 /** Закрепление отчёта — личное: чужое не видно и не мешает. */

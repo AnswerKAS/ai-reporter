@@ -37,6 +37,7 @@ _INTERNAL_FIELDS = ('definition',)
 
 
 def _report_meta(report: dict) -> ReportMeta:
+    """Отдаёт метаданные отчёта без тяжёлого определения."""
     data = {k: v for k, v in report.items() if k not in _INTERNAL_FIELDS}
     return ReportMeta.model_validate(data).model_dump(by_alias=True)
 
@@ -51,11 +52,14 @@ def _meta_for(report: dict, user: dict) -> ReportMeta:
 
 
 def _check_access(user: dict, slug: str, action: str = 'view') -> None:
+    """Проверяет права и запрещает применение фильтров к архивному отчёту."""
     report = db.get_report(slug)
     if report is None:
         raise HTTPException(404, 'отчёт не найден')
     if not report_access.can(user, report, action):
         raise HTTPException(403, 'нет доступа к отчёту')
+    if action == 'filters' and report.get('archived_at'):
+        raise HTTPException(409, 'Отчёт в архиве. Исправьте источники и восстановите отчёт.')
 
 
 async def _db(fn, *args, **kwargs):
@@ -76,6 +80,7 @@ def list_reports(
     tag: str | None = None,
     status: str | None = None,
     favorite: bool = False,
+    archived: bool = False,
     sort: str = 'updated',
     limit: int | None = None,
     offset: int = 0,
@@ -93,20 +98,20 @@ def list_reports(
     """
     reports, total = db.search_reports(
         user, q=q, slugs=slug, group=group, author=author, tag=tag, status=status,
-        favorite=favorite, sort=sort, limit=limit, offset=offset,
+        favorite=favorite, archived=archived, sort=sort, limit=limit, offset=offset,
     )
     return {'reports': [_report_meta(r) for r in reports], 'total': total,
             'limit': limit, 'offset': offset}
 
 
 @router.get('/reports/facets')
-def report_facets(q: str | None = None, user: dict = Depends(get_current_user)) -> dict:
+def report_facets(q: str | None = None, archived: bool = False, user: dict = Depends(get_current_user)) -> dict:
     """Разрезы каталога со счётчиками: группы доступа, авторы, темы, статусы.
 
     Счётчики считаются по тем же условиям, что выдача, включая поиск, — иначе
     число у варианта не равно тому, что человек увидит после нажатия.
     """
-    return db.report_facets(user, q=q)
+    return db.report_facets(user, q=q, archived=archived)
 
 
 @router.post('/reports/parse')
@@ -331,6 +336,26 @@ def create_builder_report(payload: dict, user: dict = Depends(get_current_user))
     return {'report': _meta_for(db.get_report(slug), user)}
 
 
+@router.post('/reports/{slug}/restore')
+def restore_report(slug: str, user: dict = Depends(get_current_user)) -> dict:
+    """Восстанавливает отчёт только после успешного исполнения его определения."""
+    _check_access(user, slug, 'definition')
+    report = db.get_report(slug)
+    if not report.get('archived_at'):
+        return {'report': _meta_for(report, user)}
+    definition = db.get_definition(slug)
+    if definition is None:
+        raise HTTPException(409, 'У отчёта нет определения для восстановления.')
+    try:
+        executor.execute(definition)
+    except DatasetError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    with db._conn() as conn:
+        conn.execute("UPDATE reports SET archived_at = NULL, archive_reason = NULL, status = 'ready', error = '', "
+                     'updated_at = %s WHERE slug = %s', (db.utcnow(), slug))
+    return {'report': _meta_for(db.get_report(slug), user)}
+
+
 @router.get('/reports/{slug}/definition')
 def read_definition(slug: str, user: dict = Depends(get_current_user)) -> dict:
     """Определение отчёта — чтобы конструктор открыл его на правку."""
@@ -351,6 +376,7 @@ def read_definition(slug: str, user: dict = Depends(get_current_user)) -> dict:
 @router.put('/reports/{slug}/definition')
 def update_definition(slug: str, definition: ReportDefinition,
                       user: dict = Depends(get_current_user)) -> dict:
+    """Проверяет новое определение и сохраняет его, сохраняя архивное состояние."""
     _check_access(user, slug, 'definition')
     report = db.get_report(slug)
     if report is None:
@@ -369,6 +395,8 @@ def update_definition(slug: str, definition: ReportDefinition,
 
 async def _render(report: dict, slug: str) -> dict:
     """Выполняет определение отчёта и складывает результат в ответ API."""
+    if report.get('archived_at'):
+        return {**_report_meta(report), 'sections': [], 'filters': []}
     definition = await _db(db.get_definition, slug)
     if definition is None:
         raise HTTPException(409, 'у отчёта нет определения')
@@ -471,10 +499,13 @@ def _drilldown_args(payload: dict) -> dict:
 
 
 async def _drilldown_context(slug: str, user: dict) -> tuple[dict, dict]:
+    """Проверяет доступ и активное состояние до чтения сырых данных."""
     _check_access(user, slug)
     report = await _db(db.get_report, slug)
     if report is None:
         raise HTTPException(404, 'отчёт не найден')
+    if report.get('archived_at'):
+        raise HTTPException(409, 'Отчёт в архиве. Сначала восстановите отчёт.')
     definition = await _db(db.get_definition, slug)
     if definition is None:
         raise HTTPException(409, 'у отчёта нет определения')

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useParams, Navigate, Link, useNavigate } from 'react-router-dom'
 import type { Report } from '../types/report'
 import type { DrillPoint } from '../lib/api'
-import { ApiError, applyFilters, deleteReport, fetchReport } from '../lib/api'
+import { ApiError, applyFilters, deleteReport, fetchReport, restoreReport } from '../lib/api'
 import { SectionsGrid } from '../components/SectionsGrid'
 import { DrilldownDialog } from '../components/DrilldownDialog'
 import { ScheduleDialog } from '../components/ScheduleDialog'
@@ -10,6 +10,7 @@ import { ReportFilters } from '../components/ReportFilters'
 import { useAuth } from '../lib/auth'
 import { useReports } from '../lib/reports'
 import {
+  Alert,
   Badge,
   Button,
   ConfirmDialog,
@@ -22,6 +23,7 @@ import {
 
 const LIVE_INTERVAL_MS = 15000
 
+/** Navigate from a report back to the catalog. */
 function Crumbs() {
   return (
     <nav className="mb-3.5 text-sm">
@@ -32,6 +34,7 @@ function Crumbs() {
   )
 }
 
+/** Open the report definition in the editor. */
 function ReportEdit({ report }: { report: Report }) {
   // отчёт правится там же, где собирался: состав секций, поля и формулы
   // живут в конструкторе, а не в отдельной форме
@@ -46,6 +49,7 @@ function ReportEdit({ report }: { report: Report }) {
 }
 
 
+/** Explain a loading or unavailable report state. */
 function StatusScreen({ title, description, busy }: { title: string; description: string; busy?: boolean }) {
   return (
     <Page>
@@ -59,6 +63,7 @@ function StatusScreen({ title, description, busy }: { title: string; description
   )
 }
 
+/** Display live reports or the reason and recovery actions for archived reports. */
 export function ReportViewPage() {
   const { slug } = useParams<{ slug: string }>()
   const navigate = useNavigate()
@@ -87,7 +92,8 @@ export function ReportViewPage() {
           setStatus('ready')
           // «Недавние» в меню слева ведут отсюда: каталог не знает, куда
           // человек ходил, и знать не должен — это его браузер
-          markVisited(data)
+          if (!data.archivedAt) markVisited(data)
+          else removeRecent(data.slug)
           return
         }
         setStatus('error')
@@ -106,17 +112,25 @@ export function ReportViewPage() {
     return () => {
       alive = false
     }
-  }, [slug, markVisited])
+  }, [slug, markVisited, removeRecent])
 
   useEffect(() => {
-    if (!slug || !report) return
+    if (!slug || !report || report.archivedAt) return
     const id = setInterval(async () => {
-      const fresh = await fetchReport(slug)
-      if (fresh?.sections) setReport(fresh)
+      try {
+        const fresh = await fetchReport(slug)
+        if (fresh?.sections) {
+          setReport(fresh)
+          if (fresh.archivedAt) { removeRecent(fresh.slug); void reloadReports() }
+        }
+      } catch {
+        // A later refresh retries transient source failures.
+      }
     }, LIVE_INTERVAL_MS)
     return () => clearInterval(id)
-  }, [slug, report])
+  }, [slug, report, removeRecent, reloadReports])
 
+  /** Apply one reader filter and replace the live report result. */
   const onFilterChange = async (key: string, value: string) => {
     if (!slug || !report) return
     const values = { ...(report.filterValues ?? {}), [key]: value }
@@ -155,6 +169,35 @@ export function ReportViewPage() {
       return <StatusScreen title="Нет доступа" description="Этот отчёт не назначен вашему аккаунту." />
     }
     return <Navigate to="/reports" replace />
+  }
+
+  if (report.archivedAt) {
+    const canEdit = isAdmin || Boolean(user && report.createdBy === user.id)
+    return (
+      <Page>
+        <Link to="/reports?archived=1" className="text-sm text-accent hover:underline">← Архив отчётов</Link>
+        <PageHeader title={report.title} subtitle="Отчёт в архиве" />
+        <EmptyState title="Источник отчёта удалён" description={report.archiveReason ?? 'Исправьте источники и восстановите отчёт.'}
+          action={canEdit ? <div className="flex flex-wrap gap-2">
+            <ReportEdit report={report} />
+            <Button disabled={refreshing} onClick={async () => {
+              setRefreshing(true)
+              setFailure(null)
+              try {
+                await restoreReport(report.slug)
+                const fresh = await fetchReport(report.slug)
+                if (!fresh) throw new Error('Не удалось открыть восстановленный отчёт')
+                setReport(fresh)
+                markVisited(fresh)
+                await reloadReports()
+              } catch (err) {
+                setFailure(err instanceof Error ? err.message : 'Не удалось восстановить отчёт')
+              } finally { setRefreshing(false) }
+            }}>{refreshing ? 'Проверяем…' : 'Восстановить отчёт'}</Button>
+          </div> : undefined} />
+        {failure && <Alert>{failure}</Alert>}
+      </Page>
+    )
   }
 
   return (

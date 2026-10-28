@@ -108,6 +108,10 @@ class Report(CamelModel):
 
 
 class ReportMeta(CamelModel):
+    """Метаданные каталога с независимым от исполнения архивным состоянием."""
+
+    archived_at: str | None = None
+    archive_reason: str | None = None
     id: str
     slug: str
     title: str

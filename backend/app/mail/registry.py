@@ -204,7 +204,8 @@ def due_schedules(now: datetime) -> list[dict]:
     with _conn() as conn:
         rows = conn.execute(
             'SELECT * FROM report_schedules WHERE enabled = TRUE AND next_run_at IS NOT NULL '
-            'AND next_run_at <= %s ORDER BY next_run_at',
+            'AND next_run_at <= %s AND report_slug NOT IN '
+            '(SELECT slug FROM reports WHERE archived_at IS NOT NULL) ORDER BY next_run_at',
             (now.replace(microsecond=0).isoformat(),),
         ).fetchall()
     return [_schedule(r) for r in rows]

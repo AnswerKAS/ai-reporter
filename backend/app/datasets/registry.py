@@ -177,8 +177,14 @@ def update(slug: str, *, title: str | None = None, description: str | None = Non
 
 
 def delete(slug: str) -> None:
-    """Delete the dataset and keep explicit catalog cleanup across restarts."""
+    """Архивирует зависимые отчёты и удаляет датасет одной транзакцией."""
+    from ..reports.archive import archive_reports, dependent_reports
+
     with _conn() as conn:
+        dataset = conn.execute('SELECT title FROM datasets WHERE slug = %s', (slug,)).fetchone()
+        reports = dependent_reports(conn, slug)
+        title = dataset['title'] if dataset else slug
+        archive_reports(conn, reports, f'Удалён датасет «{title}» ({slug}).')
         conn.execute('DELETE FROM datasets WHERE slug = %s', (slug,))
         _meta_set(conn, 'default_datasets_initialized', '1')
     storage.delete_owner('csv', slug)
