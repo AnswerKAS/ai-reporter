@@ -18,7 +18,7 @@ export function usageWarning(usage: SemanticUsage, slug: string): string {
   const reports = usage[slug] ?? []
   if (reports.length === 0) return 'Ни один отчёт на него не ссылается.'
   const names = reports.map((r) => `«${r.title}»`).join(', ')
-  return `Перестанут собираться отчёты: ${names}.`
+  return `В архив перейдут отчёты: ${names}.`
 }
 
 /** Строки, разложенные по датасетам в порядке самих датасетов.

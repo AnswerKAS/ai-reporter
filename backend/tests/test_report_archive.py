@@ -233,3 +233,128 @@ def test_archived_schedules_are_skipped_and_resume_after_restore(report, dataset
     with db._conn() as conn:
         conn.execute('UPDATE reports SET archived_at = NULL WHERE slug = %s', (report['slug'],))
     assert [item['id'] for item in mail.due_schedules(datetime(2026, 10, 28))] == [schedule['id']]
+
+
+def test_backfill_archives_report_with_deleted_dictionary_metrics(metabase):
+    """Потерянная метрика архивирует отчёт даже после первой миграции датасетов."""
+    from app.reports.archive import backfill_missing_datasets
+    db._meta_set(metabase, 'report_archive_backfilled', '1')
+    create_report('missing-manager-stats', {'sections': [{'type': 'kpi', 'metrics': [
+        'manager_stats_revenue_sum', 'manager_stats_tasks_done_sum']} ]})
+    backfill_missing_datasets()
+    report = db.get_report('missing-manager-stats')
+    assert report['archived_at']
+    assert 'manager_stats_revenue_sum' in report['archive_reason']
+    assert 'manager_stats_tasks_done_sum' in report['archive_reason']
+
+
+def test_deleting_dictionary_metric_archives_dependent_reports(client, admin_headers, report):
+    """Удаление словарного показателя сразу убирает зависимый отчёт из каталога."""
+    create_report('unrelated', {'sections': []})
+    response = client.delete('/api/metrics/revenue', headers=admin_headers)
+    assert response.status_code == 200
+    archived = db.get_report(report['slug'])
+    assert archived['archived_at'] and 'revenue' in archived['archive_reason']
+    assert not db.get_report('unrelated')['archived_at']
+    assert client.get('/api/reports', headers=admin_headers).json()['total'] == 1
+
+
+def test_deleting_formula_operand_archives_dependent_report(model):
+    """Словарный операнд используется даже когда в секции выбрана только формула."""
+    from app.semantic import registry as semantic
+    create_report('formula', {'sections': [{'type': 'kpi', 'metrics': ['ratio']}],
+                             'computed': [{'key': 'ratio', 'left': 'revenue', 'right': 'revenue'}]})
+    semantic.delete_metric('revenue')
+    assert db.get_report('formula')['archived_at']
+
+
+def test_deleting_filter_dimension_archives_report(client, admin_headers, report):
+    """Удаление разреза фильтра архивирует отчёт без группировки по этому разрезу."""
+    create_report('filtered', {'sections': [{'type': 'kpi', 'metrics': ['revenue']}],
+                              'filters': [{'dimension': 'day', 'kind': 'daterange'}]})
+    response = client.delete('/api/dimensions/day', headers=admin_headers)
+    assert response.status_code == 200
+    assert db.get_report('filtered')['archived_at']
+    assert not db.get_report(report['slug'])['archived_at']
+
+
+def test_opening_report_with_missing_metrics_archives_before_execution(client, admin_headers, metabase, monkeypatch):
+    """Старый отчёт с удалёнными метриками открывает причину архива без SQL."""
+    from app.reports import executor
+    create_report('missing-manager-stats', {'sections': [{'type': 'kpi', 'metrics': [
+        'manager_stats_revenue_sum', 'manager_stats_tasks_done_sum']}]})
+
+    def unexpected_execution(*args, **kwargs):
+        """Источник не должен исполняться при потерянных ссылках словаря."""
+        raise AssertionError('broken report executed')
+
+    monkeypatch.setattr(executor, 'execute', unexpected_execution)
+    response = client.get('/api/reports/missing-manager-stats', headers=admin_headers)
+    assert response.status_code == 200
+    report = response.json()['report']
+    assert report['archivedAt'] and report['sections'] == []
+    assert 'manager_stats_revenue_sum' in report['archiveReason']
+    assert 'manager_stats_tasks_done_sum' in report['archiveReason']
+    assert client.get('/api/reports', headers=admin_headers).json()['total'] == 0
+
+
+def test_missing_fields_check_accepts_report_local_fields_and_formulas(dataset):
+    """Поля и формулы отчёта не требуют записей общего словаря."""
+    from app.reports.archive import backfill_missing_datasets
+    create_report('local', {
+        'sections': [{'type': 'table', 'metrics': ['ratio'], 'by': ['local-city']}],
+        'fields': [{'key': 'local-revenue', 'datasetSlug': 'sales', 'role': 'metric'},
+                   {'key': 'local-city', 'datasetSlug': 'sales', 'role': 'dimension'}],
+        'computed': [{'key': 'ratio', 'left': 'local-revenue', 'right': 'local-revenue'},
+                     {'key': 'unused-formula', 'left': 'missing', 'right': 'missing'}],
+        'filters': [{'dimension': 'local-city'}],
+    })
+    backfill_missing_datasets()
+    assert db.get_report('local')['archived_at'] is None
+
+
+def test_missing_fields_check_distinguishes_metric_and_dimension_keys(model):
+    """Разрез с таким же ключом не заменяет отсутствующий показатель и наоборот."""
+    from app.reports.archive import DependencyIndex
+    with db._conn() as conn:
+        index = DependencyIndex(conn)
+    reason = index.missing_reason({'sections': [{'metrics': ['city'], 'by': ['revenue']}]}, {'sales'})
+    assert 'Отсутствуют показатели: city' in reason
+    assert 'Отсутствуют разрезы: revenue' in reason
+
+
+def test_sql_section_ignores_unused_semantic_keys(dataset):
+    """SQL-блок не требует метрики из оставшихся полей визуальной секции."""
+    from app.reports.archive import DependencyIndex
+    with db._conn() as conn:
+        index = DependencyIndex(conn)
+    assert index.missing_reason({'sections': [{'sql': 'select 1', 'datasetSlug': 'sales',
+                                               'metrics': ['unused-metric'], 'by': ['unused-dimension']}]},
+                                {'sales'}) is None
+
+
+def test_transient_query_failure_does_not_archive_report(client, admin_headers, report, monkeypatch):
+    """Временная ошибка источника не превращает исправное определение в архивное."""
+    from app.reports import executor
+    from app.datasets.base import DatasetError
+
+    def fail_query(*args, **kwargs):
+        """Имитирует временную ошибку выполнения существующего источника."""
+        raise DatasetError('Источник временно недоступен')
+
+    monkeypatch.setattr(executor, 'execute', fail_query)
+    response = client.get('/api/reports/sales-report', headers=admin_headers)
+    assert response.status_code == 502
+    assert db.get_report(report['slug'])['archived_at'] is None
+
+
+def test_restore_rejects_missing_filter_dimension(client, admin_headers, model):
+    """Фильтр нельзя потерять молча при восстановлении отчёта из архива."""
+    from app.semantic import registry as semantic
+    create_report('filtered', {'sections': [{'type': 'kpi', 'metrics': ['revenue']}],
+                              'filters': [{'dimension': 'day', 'kind': 'daterange'}]})
+    semantic.delete_dimension('day')
+    response = client.post('/api/reports/filtered/restore', headers=admin_headers)
+    assert response.status_code == 422
+    assert 'day' in response.json()['detail']
+    assert db.get_report('filtered')['archived_at']

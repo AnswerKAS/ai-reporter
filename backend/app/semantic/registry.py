@@ -71,7 +71,13 @@ def update_metric(slug: str, **fields) -> dict | None:
 
 
 def delete_metric(slug: str) -> None:
+    """Удаляет показатель и архивирует использующие его отчёты одной транзакцией."""
+    from ..reports.archive import archive_reports_using_field
+
     with _conn() as conn:
+        row = conn.execute('SELECT title FROM metrics WHERE slug = %s', (slug,)).fetchone()
+        if row:
+            archive_reports_using_field(conn, slug, 'metric', row['title'])
         conn.execute('DELETE FROM metrics WHERE slug = %s', (slug,))
 
 
@@ -114,7 +120,13 @@ def update_dimension(slug: str, **fields) -> dict | None:
 
 
 def delete_dimension(slug: str) -> None:
+    """Удаляет разрез и архивирует зависимые отчёты, включая фильтры."""
+    from ..reports.archive import archive_reports_using_field
+
     with _conn() as conn:
+        row = conn.execute('SELECT title FROM dimensions WHERE slug = %s', (slug,)).fetchone()
+        if row:
+            archive_reports_using_field(conn, slug, 'dimension', row['title'])
         conn.execute('DELETE FROM dimensions WHERE slug = %s', (slug,))
 
 

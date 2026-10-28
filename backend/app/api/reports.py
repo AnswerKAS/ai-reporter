@@ -346,7 +346,9 @@ def restore_report(slug: str, user: dict = Depends(get_current_user)) -> dict:
     definition = db.get_definition(slug)
     if definition is None:
         raise HTTPException(409, 'У отчёта нет определения для восстановления.')
+    from ..reports.archive import require_valid_dependencies
     try:
+        require_valid_dependencies(definition)
         executor.execute(definition)
     except DatasetError as exc:
         raise HTTPException(422, str(exc)) from exc
@@ -400,6 +402,10 @@ async def _render(report: dict, slug: str) -> dict:
     definition = await _db(db.get_definition, slug)
     if definition is None:
         raise HTTPException(409, 'у отчёта нет определения')
+    from ..reports.archive import archive_missing_dependencies
+    if await _db(archive_missing_dependencies, slug, definition):
+        archived = await _db(db.get_report, slug)
+        return {**_report_meta(archived), 'sections': [], 'filters': []}
     try:
         # execute() делает блокирующие запросы к БД: в event loop его звать
         # нельзя — иначе он держит цикл и остальные запросы ждут пул

@@ -93,7 +93,7 @@ export function ReportViewPage() {
           // «Недавние» в меню слева ведут отсюда: каталог не знает, куда
           // человек ходил, и знать не должен — это его браузер
           if (!data.archivedAt) markVisited(data)
-          else removeRecent(data.slug)
+          else { removeRecent(data.slug); void reloadReports() }
           return
         }
         setStatus('error')
@@ -112,7 +112,7 @@ export function ReportViewPage() {
     return () => {
       alive = false
     }
-  }, [slug, markVisited, removeRecent])
+  }, [slug, markVisited, removeRecent, reloadReports])
 
   useEffect(() => {
     if (!slug || !report || report.archivedAt) return
@@ -177,7 +177,7 @@ export function ReportViewPage() {
       <Page>
         <Link to="/reports?archived=1" className="text-sm text-accent hover:underline">← Архив отчётов</Link>
         <PageHeader title={report.title} subtitle="Отчёт в архиве" />
-        <EmptyState title="Источник отчёта удалён" description={report.archiveReason ?? 'Исправьте источники и восстановите отчёт.'}
+        <EmptyState title="Отчёт требует исправления" description={report.archiveReason ?? 'Исправьте источники и восстановите отчёт.'}
           action={canEdit ? <div className="flex flex-wrap gap-2">
             <ReportEdit report={report} />
             <Button disabled={refreshing} onClick={async () => {

@@ -32,6 +32,7 @@ import { DimensionModal } from './DimensionModal'
 import { MetricModal } from './MetricModal'
 import { UsageBadge } from './UsageBadge'
 import { DIM_TYPES, FORMATS, usageWarning } from './dictionary'
+import { useReports } from '../../lib/reports'
 
 type Filter = 'all' | 'error'
 /** Открытое окно: `new` — заведение, иначе правка этого элемента. */
@@ -77,6 +78,7 @@ export function DictionaryPanel({
   busy: boolean
   run: (action: () => Promise<unknown>, done?: string) => Promise<void>
 }) {
+  const { reload: reloadReports } = useReports()
   const [query, setQuery] = useState('')
   const [dataset, setDataset] = useState('')
   const [filter, setFilter] = useState<Filter>('all')
@@ -298,7 +300,10 @@ export function DictionaryPanel({
                               confirm({
                                 title: 'Удалить показатель?',
                                 description: `«${m.title}» исчезнет из словаря. ${usageWarning(usage, m.slug)}`,
-                                onConfirm: () => run(() => deleteMetric(m.slug), 'Показатель удалён'),
+                                onConfirm: () => run(async () => {
+                                  await deleteMetric(m.slug)
+                                  await reloadReports()
+                                }, 'Показатель удалён; связанные отчёты перенесены в архив'),
                               })
                             }
                           >
@@ -343,7 +348,10 @@ export function DictionaryPanel({
                                   title: 'Удалить разрез?',
                                   description: `«${d.title}» исчезнет из словаря. ${usageWarning(usage, d.slug)}`,
                                   onConfirm: () =>
-                                    run(() => deleteDimension(d.slug), 'Разрез удалён'),
+                                    run(async () => {
+                                      await deleteDimension(d.slug)
+                                      await reloadReports()
+                                    }, 'Разрез удалён; связанные отчёты перенесены в архив'),
                                 })
                               }
                             >
