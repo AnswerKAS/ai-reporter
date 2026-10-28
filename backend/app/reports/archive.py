@@ -64,22 +64,24 @@ class DependencyIndex:
 
     def datasets(self, definition: dict) -> set[str]:
         """Находит использованные поля, формулы, фильтры, SQL и мосты связей."""
-        own = {f['key']: f.get('datasetSlug', f.get('dataset_slug'))
-               for f in definition.get('fields', [])}
+        own = {role: {f['key']: f.get('datasetSlug', f.get('dataset_slug'))
+                      for f in definition.get('fields', []) if f.get('role', 'metric') == role}
+               for role in ('metric', 'dimension')}
         computed = {f['key']: f for f in definition.get('computed', [])}
         result = set()
 
-        def holders(key: str, seen: frozenset = frozenset()) -> list[str]:
-            """Разворачивает формулу, защищаясь от циклов старых определений."""
+        def holders(key: str, role: str = 'metric', seen: frozenset = frozenset()) -> list[str]:
+            """Сохраняет роль и приоритет словаря построителя, защищаясь от циклов."""
             if key in seen:
                 return []
-            if key in computed:
+            if role == 'metric' and key in computed:
                 field = computed[key]
-                return holders(field['left'], seen | {key}) + holders(field['right'], seen | {key})
-            slug = own.get(key) or self.metrics.get(key) or self.dimensions.get(key)
+                return holders(field['left'], role, seen | {key}) + holders(field['right'], role, seen | {key})
+            catalog = self.metrics if role == 'metric' else self.dimensions
+            slug = catalog.get(key) or own[role].get(key)
             return [slug] if slug else []
 
-        filters = [slug for f in definition.get('filters', []) for slug in holders(f['dimension'])]
+        filters = [slug for f in definition.get('filters', []) for slug in holders(f['dimension'], 'dimension')]
         result.update(filters)
         for section in definition.get('sections', []):
             if section.get('sql'):
@@ -88,8 +90,9 @@ class DependencyIndex:
                     result.add(slug)
                 result.update(section.get('joinDatasetSlugs', section.get('join_dataset_slugs', [])))
                 continue
-            keys = [*section.get('metrics', []), *section.get('by', [])]
-            order = list(dict.fromkeys(slug for key in keys for slug in holders(key)))
+            keys = [(key, 'metric') for key in section.get('metrics', [])]
+            keys += [(key, 'dimension') for key in section.get('by', [])]
+            order = list(dict.fromkeys(slug for key, role in keys for slug in holders(key, role)))
             result.update(order)
             if order:
                 try:

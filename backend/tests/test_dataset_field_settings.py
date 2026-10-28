@@ -5,14 +5,14 @@ from app.query import builder, interpret
 
 
 def test_admin_can_save_settings_and_employee_cannot(client, dataset, admin_headers,
-                                                     user_headers):
+                                                     dataset_user_headers):
     """Only an administrator can save schema field settings."""
     path = '/api/datasets/sales/fields'
     payload = {'fields': {'revenue': {
         'title': 'Оборот', 'role': 'metric', 'agg': 'avg', 'format': 'money',
     }}}
 
-    assert client.put(path, json=payload, headers=user_headers).status_code == 403
+    assert client.put(path, json=payload, headers=dataset_user_headers).status_code == 403
     assert client.put(path, json=payload).status_code == 401
     response = client.put(path, json=payload, headers=admin_headers)
 
@@ -20,7 +20,7 @@ def test_admin_can_save_settings_and_employee_cannot(client, dataset, admin_head
     assert response.json()['dataset']['fieldSettings']['revenue'] == {
         'title': 'Оборот', 'role': 'metric', 'agg': 'avg', 'format': 'money',
     }
-    visible = client.get('/api/datasets', headers=user_headers).json()['datasets'][0]
+    visible = client.get('/api/datasets', headers=dataset_user_headers).json()['datasets'][0]
     assert visible['fieldSettings']['revenue']['title'] == 'Оборот'
 
 

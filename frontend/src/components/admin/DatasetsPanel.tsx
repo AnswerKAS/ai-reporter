@@ -4,6 +4,7 @@ import type { Dataset, DatasetSource, DbConnection } from '../../types/dataset'
 import { ApiError, createDataset, fetchDatasets, fetchDbConnections } from '../../lib/api'
 import { suggestUniqueSlug } from '../../lib/slug'
 import { DatasetDeleteDialog } from '../DatasetDeleteDialog'
+import { DatasetAccessDialog } from './DatasetAccessDialog'
 import { DatasetModal } from '../DatasetModal'
 import {
   Alert,
@@ -43,6 +44,7 @@ const STATUS_TONES: Record<Dataset['status'], BadgeTone> = {
 export function DatasetsPanel({ onCount }: { onCount?: (count: number) => void }) {
   const [datasets, setDatasets] = useState<Dataset[] | null>(null)
   const [open, setOpen] = useState(false)
+  const [accessDataset, setAccessDataset] = useState<Dataset | null>(null)
   const [shown, setShown] = useState<Dataset | null>(null)
   const [shownTab, setShownTab] = useState<'preview' | 'fields'>('preview')
   const [error, setError] = useState<string | null>(null)
@@ -109,6 +111,7 @@ export function DatasetsPanel({ onCount }: { onCount?: (count: number) => void }
                   {` · полей: ${d.fields.length}`}
                 </span>
               </button>
+              <Button size="sm" onClick={() => setAccessDataset(d)}>Доступ</Button>
               <Button size="sm" className="ml-3" onClick={() => { setShownTab('fields'); setShown(d) }}>
                 Переименовать поля
               </Button>
@@ -123,6 +126,10 @@ export function DatasetsPanel({ onCount }: { onCount?: (count: number) => void }
           </li>
         ))}
       </ul>
+
+      {accessDataset && <DatasetAccessDialog key={accessDataset.slug} dataset={accessDataset}
+        onClose={() => setAccessDataset(null)}
+        onSaved={() => setNotice(`Доступ к датасету «${accessDataset.title}» сохранён.`)} />}
 
       {shown && (
         <DatasetModal

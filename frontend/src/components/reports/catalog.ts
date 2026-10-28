@@ -75,7 +75,7 @@ export function catalogHref(query: ReportQuery): string {
 export const DIMENSIONS: Record<ReportDimension, { title: string; empty: string; by: string }> = {
   group: { title: 'Группа доступа', empty: 'Без группы', by: 'По группе доступа' },
   author: { title: 'Автор', empty: 'Без автора', by: 'По автору' },
-  tag: { title: 'Тема', empty: 'Без темы', by: 'По теме' },
+  tag: { title: 'Метка', empty: 'Без метки', by: 'По метке' },
 }
 
 export function facetItems(facets: ReportFacets | null, dimension: ReportDimension): FacetItem[] {

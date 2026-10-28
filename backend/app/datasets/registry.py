@@ -185,6 +185,7 @@ def delete(slug: str) -> None:
         reports = dependent_reports(conn, slug)
         title = dataset['title'] if dataset else slug
         archive_reports(conn, reports, f'Удалён датасет «{title}» ({slug}).')
+        conn.execute('DELETE FROM dataset_access WHERE dataset_slug = %s', (slug,))
         conn.execute('DELETE FROM datasets WHERE slug = %s', (slug,))
         _meta_set(conn, 'default_datasets_initialized', '1')
     storage.delete_owner('csv', slug)

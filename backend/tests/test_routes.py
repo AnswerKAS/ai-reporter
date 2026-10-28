@@ -11,6 +11,11 @@ from app.main import app
 
 # (метод, путь) → файл с тестами этого эндпоинта
 COVERED = {
+    ('GET', '/api/admin/datasets/{slug}/access'): 'test_dataset_access.py',
+    ('PUT', '/api/admin/datasets/{slug}/access'): 'test_dataset_access.py',
+    ('GET', '/api/admin/tags'): 'test_tag_catalog.py',
+    ('GET', '/api/admin/tags/usage'): 'test_tag_catalog.py',
+    ('GET', '/api/report-tags'): 'test_tag_catalog.py',
     ('GET', '/api/datasets/{slug}/deletion-impact'): 'test_report_archive.py',
     ('POST', '/api/reports/{slug}/restore'): 'test_report_archive.py',
     ('GET', '/api/health'): 'test_smoke.py',

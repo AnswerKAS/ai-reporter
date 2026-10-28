@@ -77,8 +77,8 @@ export function WorkspacePage() {
       </PageHeader>
       {error && <Alert className="mb-4">{error}</Alert>}
       {loading && <p className="text-sm text-fg-muted">Загружаю датасеты…</p>}
-      {!loading && datasets.length === 0 && <EmptyState title="Датасетов пока нет"
-        description={isAdmin ? 'Добавьте датасет в админке.' : 'Попросите администратора подготовить датасет.'} />}
+      {!loading && datasets.length === 0 && <EmptyState title={isAdmin ? 'Датасетов пока нет' : 'Нет доступных датасетов'}
+        description={isAdmin ? 'Добавьте датасет в админке.' : 'Попросите администратора выдать вам или вашей группе доступ к датасетам.'} />}
       {!loading && datasets.length > 0 && <>
         <div className={mode === 'question' ? '' : 'hidden'}>
           <DatasetQuestionPanel datasets={datasets} initialDatasetSlug={selectedSlug}

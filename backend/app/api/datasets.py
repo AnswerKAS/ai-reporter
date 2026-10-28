@@ -1,4 +1,4 @@
-"""Роутер датасетов: просмотр (все пользователи), CRUD и CSV (админ)."""
+"""Роутер датасетов: просмотр по назначениям, управление и CSV только администратору."""
 
 import re
 import queue
@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from ..agent.errors import error_event
 from ..agent.streaming import STREAM_HEADERS, event_stream
+from ..core import dataset_access
 from ..core.security import get_current_user, require_admin
 from ..core.config import connection as db_connection, connections as db_connections
 from ..datasets import registry as ds_registry
@@ -40,6 +41,7 @@ PREVIEW_LIMIT = 50
 
 
 def _is_admin(user: dict) -> bool:
+    """Определяет доступ администратора к управлению и скрытым метаданным."""
     return user.get('role') == 'admin'
 
 
@@ -56,6 +58,7 @@ def _servers() -> dict[str, dict]:
 def _meta(d: dict, *, reveal_query: bool = False,
           servers: dict[str, dict] | None = None,
           connection_catalog: dict[str, dict] | None = None) -> dict:
+    """Скрывает строку подключения и выдаёт SQL-источник только администратору."""
     data = dict(d)
     if d.get('connection_key'):
         server_id = d['connection_key']
@@ -74,7 +77,7 @@ def _meta(d: dict, *, reveal_query: bool = False,
     query = (data.get('query') or '').strip()
     data['is_query'] = bool(query)
     # в запросе бывают зашиты имена схем и служебные значения, а датасеты
-    # видны всем авторизованным — текст отдаём только админу
+    # доступны по назначениям — текст источника отдаём только админу
     data['query'] = query if (query and reveal_query) else None
     if data.get('error'):
         data['error'] = sanitize_error(str(data['error']))
@@ -146,9 +149,12 @@ def _get_or_404(slug: str) -> dict:
 
 @router.get('')
 def list_datasets(user: dict = Depends(get_current_user)) -> dict:
+    """Возвращает только лично или через группы назначенные датасеты."""
     admin = _is_admin(user)
-    datasets = ds_registry.list_all()
-    servers = ds_servers.index([d for d in datasets if not d.get('connection_key')])
+    allowed = dataset_access.allowed_slugs(user)
+    all_datasets = ds_registry.list_all()
+    datasets = [d for d in all_datasets if allowed is None or d['slug'] in allowed]
+    servers = ds_servers.index([d for d in all_datasets if not d.get('connection_key')])
     catalog = db_connections()
     return {'datasets': [_meta(d, reveal_query=admin, servers=servers,
                                connection_catalog=catalog) for d in datasets]}
@@ -193,10 +199,10 @@ def workspace_chat_history(conversation_id: str | None = None,
         raise HTTPException(404, str(exc)) from exc
     if item is None:
         return {'conversationId': None, 'turns': []}
-    return {'conversationId': item['id'], 'turns': [
+    return {'conversationId': item['id'], 'turns': dataset_access.visible_turns(user, [
         turn['payload'] for turn in agent_store.messages(item['id'])
         if turn['role'] == 'assistant' and turn['payload'].get('question')
-    ]}
+    ])}
 
 
 @router.post('/chat/stream')
@@ -210,6 +216,7 @@ def stream_workspace_chat(payload: dict,
             not isinstance(slug, str) or not slug.strip() for slug in raw_slugs):
         raise HTTPException(422, 'прикрепите хотя бы один датасет через @')
     slugs = list(dict.fromkeys(slug.strip() for slug in raw_slugs))
+    dataset_access.require_datasets(user, slugs)
     datasets = [_get_or_404(slug) for slug in slugs]
     question = payload.get('question')
     if (not isinstance(question, str) or not question.strip()
@@ -221,7 +228,7 @@ def stream_workspace_chat(payload: dict,
             create=True, fresh=not payload.get('conversationId'))
     except DatasetError as exc:
         raise HTTPException(404, str(exc)) from exc
-    history = agent_store.dataset_history(conversation['id'])
+    history = dataset_access.visible_turns(user, agent_store.dataset_history(conversation['id']))
     events: queue.Queue[dict | None] = queue.Queue()
 
     def worker() -> None:
@@ -258,6 +265,8 @@ def stream_workspace_chat(payload: dict,
 
 @router.get('/{slug}')
 def get_dataset(slug: str, user: dict = Depends(get_current_user)) -> dict:
+    """Читает схему и превью только после проверки назначения датасета."""
+    dataset_access.require_datasets(user, [slug])
     dataset = _get_or_404(slug)
     admin = _is_admin(user)
     notes = sqlsource.query_notes(dataset['query']) if dataset.get('query') and admin else []
@@ -278,6 +287,7 @@ def get_dataset(slug: str, user: dict = Depends(get_current_user)) -> dict:
 @router.post('/{slug}/ask')
 def ask_dataset(slug: str, payload: dict, user: dict = Depends(get_current_user)) -> dict:
     """Answer a legacy synchronous dataset question and trace model-backed work."""
+    dataset_access.require_datasets(user, [slug])
     dataset = _get_or_404(slug)
     question = payload.get('question')
     history = payload.get('history') or []
@@ -300,6 +310,7 @@ def ask_dataset(slug: str, payload: dict, user: dict = Depends(get_current_user)
 def get_dataset_conversation(slug: str,
                              user: dict = Depends(get_current_user)) -> dict:
     """Load the current user's saved question history for one dataset."""
+    dataset_access.require_datasets(user, [slug])
     _get_or_404(slug)
     item = agent_store.conversation(user['id'], 'dataset', slug)
     if item is None:
@@ -315,6 +326,7 @@ def get_dataset_conversation(slug: str,
 def stream_dataset_answer(slug: str, payload: dict,
                           user: dict = Depends(get_current_user)) -> StreamingResponse:
     """Stream agent progress and its answer while saving the completed turn."""
+    dataset_access.require_datasets(user, [slug])
     dataset = _get_or_404(slug)
     question = payload.get('question')
     if (not isinstance(question, str) or not question.strip()
@@ -325,7 +337,7 @@ def stream_dataset_answer(slug: str, payload: dict,
             user['id'], 'dataset', slug, payload.get('conversationId'), create=True)
     except DatasetError as exc:
         raise HTTPException(404, str(exc)) from exc
-    history = agent_store.dataset_history(item['id'])
+    history = dataset_access.visible_turns(user, agent_store.dataset_history(item['id']), slug)
     events: queue.Queue[dict | None] = queue.Queue()
 
     def worker() -> None:

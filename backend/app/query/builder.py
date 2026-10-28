@@ -145,11 +145,18 @@ class Catalog:
     датасеты — до двух десятков обращений к пулу на один отчёт.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, allowed_datasets: set[str] | None = None) -> None:
+        """Собирает только разрешённые источники и словарь для пользовательского запроса."""
         self.metrics = {m['slug']: m for m in semantic.list_metrics()}
         self.dimensions = {d['slug']: d for d in semantic.list_dimensions()}
         self.links = semantic.list_links()
         self.datasets = {d['slug']: d for d in dataset_registry.list_all()}
+        if allowed_datasets is not None:
+            self.datasets = {k: d for k, d in self.datasets.items() if k in allowed_datasets}
+            self.metrics = {k: m for k, m in self.metrics.items() if m['dataset_slug'] in self.datasets}
+            self.dimensions = {k: d for k, d in self.dimensions.items() if d['dataset_slug'] in self.datasets}
+            self.links = [link for link in self.links if link['left_slug'] in self.datasets
+                          and link['right_slug'] in self.datasets]
         self._adapters: dict[str, object] = {}
         # уникальность по ключу связи стоит полного скана таблицы, а на
         # сборку отчёта ответ один — держим его здесь, а не в каждой секции

@@ -10,6 +10,7 @@ import json
 import os
 import shutil
 import sqlite3
+import sys
 import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -91,7 +92,8 @@ def _get_pool():
 @contextmanager
 def _conn():
     """Соединение из пула; при недоступности пула — прямое подключение
-    с тремя попытками (сеть до PG бывает флакует: SSL unexpected eof)."""
+    с тремя попытками (сеть до PG бывает флакует: SSL unexpected eof).
+    Ошибка вызывающего передаётся контексту пула, чтобы транзакция откатилась."""
     global _pool_failed
     pool = None
     if not _pool_failed:
@@ -116,7 +118,7 @@ def _conn():
         try:
             yield conn
         finally:
-            cm.__exit__(None, None, None)
+            cm.__exit__(*sys.exc_info())
         return
     last_exc: Exception | None = None
     conn = None
@@ -341,6 +343,16 @@ def init_db() -> None:
             )
             '''
         )
+        conn.execute('CREATE TABLE IF NOT EXISTS dataset_access ('
+                     'dataset_slug TEXT NOT NULL REFERENCES datasets(slug) ON DELETE CASCADE, '
+                     'user_id TEXT REFERENCES users(id) ON DELETE CASCADE, '
+                     'group_id TEXT REFERENCES groups(id) ON DELETE CASCADE, '
+                     'CHECK ((user_id IS NOT NULL AND group_id IS NULL) OR '
+                     '(user_id IS NULL AND group_id IS NOT NULL)))')
+        conn.execute('CREATE UNIQUE INDEX IF NOT EXISTS dataset_access_user_idx '
+                     'ON dataset_access (dataset_slug, user_id)')
+        conn.execute('CREATE UNIQUE INDEX IF NOT EXISTS dataset_access_group_idx '
+                     'ON dataset_access (dataset_slug, group_id)')
         # --- рассылка отчётов ---
         conn.execute(
             '''
@@ -1047,10 +1059,12 @@ def list_users() -> list[dict]:
 
 
 def delete_user(user_id: str) -> None:
+    """Удаляет пользователя, его назначения и сессии."""
     with _conn() as conn:
         conn.execute('DELETE FROM users WHERE id = %s', (user_id,))
         conn.execute('DELETE FROM group_members WHERE user_id = %s', (user_id,))
         conn.execute('DELETE FROM report_access WHERE user_id = %s', (user_id,))
+        conn.execute('DELETE FROM dataset_access WHERE user_id = %s', (user_id,))
         conn.execute('DELETE FROM user_access_tags WHERE user_id = %s', (user_id,))
         conn.execute('DELETE FROM sessions WHERE user_id = %s', (user_id,))
 
@@ -1086,10 +1100,12 @@ def list_groups() -> list[dict]:
 
 
 def delete_group(group_id: str) -> None:
+    """Удаляет группу, состав и назначения ресурсов."""
     with _conn() as conn:
         conn.execute('DELETE FROM groups WHERE id = %s', (group_id,))
         conn.execute('DELETE FROM group_members WHERE group_id = %s', (group_id,))
         conn.execute('DELETE FROM report_access WHERE group_id = %s', (group_id,))
+        conn.execute('DELETE FROM dataset_access WHERE group_id = %s', (group_id,))
         conn.execute('DELETE FROM group_access_tags WHERE group_id = %s', (group_id,))
 
 

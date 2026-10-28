@@ -1100,3 +1100,62 @@ export async function parsePhrase(
     }),
   })
 }
+
+export interface DatasetAccess {
+  userIds: string[]
+  groupIds: string[]
+}
+
+/** Read explicit personal and group grants for the dataset administration dialog. */
+export async function adminDatasetAccess(slug: string, signal?: AbortSignal): Promise<DatasetAccess> {
+  return request(`/admin/datasets/${encodeURIComponent(slug)}/access`, { signal })
+}
+
+/** Replace grants atomically; empty arrays leave access to administrators only. */
+export async function adminSetDatasetAccess(slug: string, grants: DatasetAccess): Promise<DatasetAccess> {
+  return request(`/admin/datasets/${encodeURIComponent(slug)}/access`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(grants),
+  })
+}
+
+export interface TagCatalogItem {
+  tag: string
+  reportCount: number
+  userCount: number
+  groupCount: number
+}
+
+export interface TagUsage {
+  reports: { slug: string; title: string; archivedAt: string | null }[]
+  users: { id: string; username: string }[]
+  groups: { id: string; name: string }[]
+}
+
+export interface AccessTagDetails {
+  tags: string[]
+  inheritedTags: string[]
+  effectiveTags: string[]
+  inheritedFrom: { groupId: string; groupName: string; tags: string[] }[]
+}
+
+/** List tags known to the caller without revealing inaccessible report labels. */
+export async function fetchAvailableReportTags(signal?: AbortSignal): Promise<string[]> {
+  const result = await request<{ tags: string[] }>('/report-tags', { signal })
+  return result.tags
+}
+
+/** Summarize all report, personal and group tag assignments for administrators. */
+export async function adminTagCatalog(signal?: AbortSignal): Promise<TagCatalogItem[]> {
+  const result = await request<{ tags: TagCatalogItem[] }>('/admin/tags', { signal })
+  return result.tags
+}
+
+/** Show bounded examples of where a selected tag is used. */
+export async function adminTagUsage(tag: string, signal?: AbortSignal): Promise<TagUsage> {
+  return request(`/admin/tags/usage?${new URLSearchParams({ tag })}`, { signal })
+}
+
+/** Separate direct permissions from those inherited through groups. */
+export async function adminAccessTagDetails(kind: 'user' | 'group', id: string, signal?: AbortSignal): Promise<AccessTagDetails> {
+  return request(`/admin/access-tags/${kind}/${encodeURIComponent(id)}?effective=true`, { signal })
+}

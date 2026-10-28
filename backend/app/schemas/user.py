@@ -65,3 +65,10 @@ class AccessPatch(CamelModel):
 
 class AccessTagsPatch(CamelModel):
     tags: list[str]
+
+
+class DatasetAccessPatch(CamelModel):
+    """Полный набор личных и групповых назначений одного датасета."""
+
+    user_ids: list[str]
+    group_ids: list[str]

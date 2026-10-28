@@ -1,6 +1,6 @@
 """Роутер семантического слоя: метрики, разрезы, связи датасетов.
 
-Просмотр — любой авторизованный (конструктор отчётов должен видеть словарь),
+Просмотр — только словарь назначенных пользователю датасетов,
 изменение — только админ: выражения метрик это граница доверия системы.
 """
 
@@ -8,7 +8,7 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from ..core import database as db
+from ..core import database as db, dataset_access
 from ..core.security import get_current_user, require_admin
 from ..datasets import registry as ds_registry
 from ..datasets.base import DatasetError, sanitize_error
@@ -63,7 +63,10 @@ def _link(row: dict) -> dict:
 
 @router.get('/metrics')
 def list_metrics(user: dict = Depends(get_current_user)) -> dict:
-    return {'metrics': [_metric(m) for m in semantic.list_metrics()]}
+    """Возвращает словарь показателей только назначенных источников."""
+    allowed = dataset_access.allowed_slugs(user)
+    return {'metrics': [_metric(m) for m in semantic.list_metrics()
+                        if allowed is None or m['dataset_slug'] in allowed]}
 
 
 @router.post('/metrics', status_code=201)
@@ -135,7 +138,10 @@ def delete_metric(slug: str, user: dict = Depends(require_admin)) -> dict:
 
 @router.get('/dimensions')
 def list_dimensions(user: dict = Depends(get_current_user)) -> dict:
-    return {'dimensions': [_dimension(d) for d in semantic.list_dimensions()]}
+    """Возвращает разрезы только назначенных источников."""
+    allowed = dataset_access.allowed_slugs(user)
+    return {'dimensions': [_dimension(d) for d in semantic.list_dimensions()
+                           if allowed is None or d['dataset_slug'] in allowed]}
 
 
 @router.post('/dimensions', status_code=201)
@@ -177,7 +183,10 @@ def delete_dimension(slug: str, user: dict = Depends(require_admin)) -> dict:
 
 @router.get('/dataset-links')
 def list_links(user: dict = Depends(get_current_user)) -> dict:
-    return {'links': [_link(link) for link in semantic.list_links()]}
+    """Возвращает связи, у которых доступны оба конца."""
+    allowed = dataset_access.allowed_slugs(user)
+    return {'links': [_link(link) for link in semantic.list_links()
+                      if allowed is None or {link['left_slug'], link['right_slug']} <= allowed]}
 
 
 @router.post('/dataset-links', status_code=201)

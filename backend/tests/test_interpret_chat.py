@@ -428,7 +428,7 @@ def test_метод_без_токена_401(client):
     assert client.post('/api/reports/chat', json={'messages': []}).status_code == 401
 
 
-def test_report_chat_returns_verified_definition(client, model, user_headers, monkeypatch):
+def test_report_chat_returns_verified_definition(client, model, dataset_user_headers, monkeypatch):
     """The report endpoint returns a layout after the visual preview tool."""
     definition = {'sections': [{'type': 'table', 'metrics': ['revenue'], 'by': ['city']}],
                   'filters': [{'dimension': 'city', 'kind': 'select'}]}
@@ -443,7 +443,7 @@ def test_report_chat_returns_verified_definition(client, model, user_headers, mo
 
     body = client.post('/api/reports/chat',
                        json={'messages': [{'role': 'user', 'text': 'выручка по городам'}]},
-                       headers=user_headers).json()
+                       headers=dataset_user_headers).json()
 
     assert body['reply'] == 'Собрал выручку по городам.'
     assert body['title'] == 'Продажи по городам'
@@ -470,13 +470,14 @@ def test_report_chat_requires_configured_model(client, model, user_headers,
     assert 'Модель для конструктора не настроена' in response.json()['detail']
 
 
-def test_рекомендации_доступны_без_реплики_и_модели(client, model, user_headers,
+def test_recommendations_are_available_without_model(client, model, dataset_user_headers,
                                                   monkeypatch):
+    """Проверяет поведение с явно назначенным датасетом сотрудника."""
     monkeypatch.setattr(interpret, '_openrouter_key', lambda: None)
 
     assert client.post('/api/reports/recommendations', json={}).status_code == 401
     response = client.post('/api/reports/recommendations', json={},
-                           headers=user_headers)
+                           headers=dataset_user_headers)
 
     assert response.status_code == 200
     assert response.json()['recommendations'][0]['definition']['sections']

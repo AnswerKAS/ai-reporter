@@ -224,29 +224,29 @@ def test_создание_отчёта_с_занятым_slug_409(client, report
     assert response.status_code == 409
 
 
-def test_employee_creates_owned_report(client, model, user_headers, plain_user):
+def test_employee_creates_owned_report(client, model, dataset_user_headers, plain_user):
     """An employee can save a report and becomes its owner."""
-    response = client.post('/api/reports/builder', headers=user_headers, json={
+    response = client.post('/api/reports/builder', headers=dataset_user_headers, json={
         'title': 'Новый', 'definition': definition()})
 
     assert response.status_code == 201, response.text
     slug = response.json()['report']['slug']
     assert db.get_report(slug)['created_by'] == plain_user['id']
-    assert client.get(f'/api/reports/{slug}', headers=user_headers).status_code == 200
+    assert client.get(f'/api/reports/{slug}', headers=dataset_user_headers).status_code == 200
 
 
-def test_employee_edits_own_definition(client, model, user_headers):
+def test_employee_edits_own_definition(client, model, dataset_user_headers):
     """The owner can change a definition while report readers cannot."""
-    created = client.post('/api/reports/builder', headers=user_headers, json={
+    created = client.post('/api/reports/builder', headers=dataset_user_headers, json={
         'title': 'Личный отчёт', 'definition': definition()})
     slug = created.json()['report']['slug']
 
-    changed = client.put(f'/api/reports/{slug}/definition', headers=user_headers,
+    changed = client.put(f'/api/reports/{slug}/definition', headers=dataset_user_headers,
                          json=definition(sections=[dict(KPI_SECTION)]))
 
     assert changed.status_code == 200, changed.text
     assert client.get(f'/api/reports/{slug}/definition',
-                      headers=user_headers).json()['definition']['sections'][0]['type'] == 'kpi'
+                      headers=dataset_user_headers).json()['definition']['sections'][0]['type'] == 'kpi'
 
 
 # --- GET/PUT /api/reports/{slug}/definition -----------------------------------
@@ -323,8 +323,9 @@ def test_предпросмотр_с_битой_секцией_422(client, model
     assert response.status_code == 422
 
 
-def test_предпросмотр_доступен_обычному_пользователю(client, model, user_headers):
-    assert client.post('/api/reports/preview', headers=user_headers,
+def test_preview_is_available_to_assigned_employee(client, model, dataset_user_headers):
+    """Проверяет поведение с явно назначенным датасетом сотрудника."""
+    assert client.post('/api/reports/preview', headers=dataset_user_headers,
                        json=definition()).status_code == 200
 
 
@@ -494,7 +495,9 @@ def test_changing_filter_control_removes_old_saved_value(client, report, admin_h
     assert db.get_report('sales-report')['filter_values'] == {}
 
 
-def test_фильтры_сохраняются_между_чтениями(client, report, admin_headers):
+def test_declared_filters_persist_between_reads(client, report, admin_headers):
+    """Значение объявленного фильтра сохраняется и возвращается при следующем чтении."""
+    db.set_definition('sales-report', definition(filters=[{'dimension': 'city', 'kind': 'select'}]))
     client.post('/api/reports/sales-report/filters', headers=admin_headers,
                 json={'values': {'city': 'Тверь'}})
 

@@ -146,7 +146,7 @@ export function AdminPage() {
             { value: 'users', label: 'Пользователи', count: users.length },
             { value: 'groups', label: 'Группы', count: groups.length },
             { value: 'access', label: 'Доступ к отчётам', count: accessReady ? grants : undefined },
-            { value: 'access-tags', label: 'Метки доступа' },
+            { value: 'access-tags', label: 'Метки' },
             { value: 'datasets', label: 'Датасеты', count: datasetCount },
             { value: 'model', label: 'Словарь и связи' },
             { value: 'connections', label: 'Подключения' },

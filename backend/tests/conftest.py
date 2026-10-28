@@ -158,3 +158,22 @@ def report(model):
     return db.create_report(id=uuid.uuid4().hex, slug='sales-report',
                             title='Продажи', description='Отчёт о продажах',
                             definition=dict(TABLE_DEFINITION))
+
+
+@pytest.fixture
+def assign_dataset(plain_user):
+    """Явно назначает источники тестовому сотруднику, не меняя закрытый режим API."""
+    from app.core import dataset_access
+
+    def grant(slug: str) -> None:
+        """Назначает один существующий датасет пользователю фикстуры."""
+        dataset_access.set_grants(slug, [plain_user['id']], [])
+
+    return grant
+
+
+@pytest.fixture
+def dataset_user_headers(dataset, user_headers, assign_dataset):
+    """Сеанс обычного сотрудника с явным назначением тестового датасета sales."""
+    assign_dataset('sales')
+    return user_headers

@@ -87,7 +87,7 @@ export function ReportListPage() {
     <Page>
       <PageHeader
         title={archived ? 'Архив отчётов' : 'Библиотека отчётов'}
-        subtitle="Найдите нужный отчёт по словам названия, описания или темы."
+        subtitle="Найдите нужный отчёт по словам названия, описания или метки."
         actions={<>
           <Link to="/workspace" className="inline-flex min-h-10 items-center rounded-control border border-line bg-surface px-4 text-sm font-medium text-fg hover:bg-accent-soft">Задать вопрос</Link>
           <Link to="/workspace?mode=report" className="inline-flex min-h-10 items-center rounded-control bg-accent px-4 text-sm font-semibold text-accent-fg hover:bg-accent-hover">Новый отчёт</Link>
@@ -114,7 +114,7 @@ export function ReportListPage() {
           type="search"
           value={query}
           onChange={(event) => update('q', event.target.value)}
-          placeholder="Название, описание, тема или slug — слова в любом порядке"
+          placeholder="Название, описание, метка или slug — слова в любом порядке"
           aria-label="Поиск по отчётам"
           className="w-full"
         />
@@ -157,9 +157,9 @@ export function ReportListPage() {
             </Select>
           </label>
           <label className="flex flex-col gap-1 text-xs text-fg-muted">
-            Тема
+            Метка
             <Select value={tag} onChange={(event) => update('tag', event.target.value)}>
-              <option value="">Все темы</option>
+              <option value="">Все метки</option>
               {facetItems(choices, 'tag').map((item) => <option key={item.id} value={item.id}>{facetLabel(item, 'tag')} ({item.count})</option>)}
             </Select>
           </label>

@@ -17,7 +17,7 @@ from ..agent.errors import error_event
 from ..agent.streaming import STREAM_HEADERS, event_stream
 from ..core import database as db
 from ..core.security import get_current_user
-from ..core import report_access
+from ..core import report_access, dataset_access
 from ..schemas.report import FiltersPatch, ReportMeta, ReportUpdate
 from ..datasets.base import DatasetError, sanitize_error
 from ..query import builder as query_builder
@@ -104,6 +104,13 @@ def list_reports(
             'limit': limit, 'offset': offset}
 
 
+@router.get('/report-tags')
+def available_report_tags(user: dict = Depends(get_current_user)) -> dict:
+    """Подсказывает метки доступных отчётов и собственных разрешений."""
+    from ..core.tag_catalog import catalog
+    return {'tags': [item['tag'] for item in catalog(user)]}
+
+
 @router.get('/reports/facets')
 def report_facets(q: str | None = None, archived: bool = False, user: dict = Depends(get_current_user)) -> dict:
     """Разрезы каталога со счётчиками: группы доступа, авторы, темы, статусы.
@@ -133,7 +140,8 @@ def parse_phrase(payload: dict, user: dict = Depends(get_current_user)) -> dict:
     # датасеты, выбранные автором на шаге «Данные»: словарь сужается до них,
     # иначе модель выбирает из полутора сотен показателей всей установки
     datasets = payload.get('datasets') or []
-    catalog = query_builder.Catalog()
+    dataset_access.require_payload(user, payload)
+    catalog = query_builder.Catalog(allowed_datasets=dataset_access.allowed_slugs(user))
     try:
         return interpret.parse(text, catalog, fields, computed, datasets)
     except DatasetError as exc:
@@ -172,8 +180,10 @@ def chat_report(payload: dict, user: dict = Depends(get_current_user)) -> dict:
     except DatasetError as exc:
         raise HTTPException(404, str(exc)) from exc
     stored = agent_store.messages(conversation['id'])
+    dataset_access.require_report_history(user, stored)
     context = [{'role': item['role'], 'text': item['text']} for item in stored] + [latest]
-    catalog = query_builder.Catalog()
+    dataset_access.require_payload(user, payload)
+    catalog = query_builder.Catalog(allowed_datasets=dataset_access.allowed_slugs(user))
     try:
         from ..agent.runner import chat_report as agent_chat_report
         with agent_trace('report-builder', user_id=user['id'],
@@ -209,12 +219,14 @@ def stream_report_chat(payload: dict, user: dict = Depends(get_current_user)) ->
     except DatasetError as exc:
         raise HTTPException(404, str(exc)) from exc
     stored = agent_store.messages(conversation['id'])
+    dataset_access.require_report_history(user, stored)
     context = [{'role': item['role'], 'text': item['text']} for item in stored] + [latest]
+    dataset_access.require_payload(user, payload)
     events: queue.Queue[dict | None] = queue.Queue()
 
     def worker() -> None:
         """Run report construction away from the response generator."""
-        catalog = query_builder.Catalog()
+        catalog = query_builder.Catalog(allowed_datasets=dataset_access.allowed_slugs(user))
         try:
             from ..agent.runner import chat_report as agent_chat_report
             with agent_trace('report-builder', user_id=user['id'],
@@ -257,6 +269,7 @@ def report_chat_history(target: str = 'new', conversation_id: str | None = None,
     if item is None:
         return {'conversationId': None, 'messages': []}
     stored = agent_store.messages(item['id'])
+    dataset_access.require_report_history(user, stored)
     last_proposal = next((message['payload'] for message in reversed(stored)
                           if message['role'] == 'assistant' and
                           message['payload'].get('definition')), None)
@@ -269,7 +282,8 @@ def report_chat_history(target: str = 'new', conversation_id: str | None = None,
 @router.post('/reports/recommendations')
 def report_recommendations(payload: dict, user: dict = Depends(get_current_user)) -> dict:
     """Варианты по схеме датасетов и словарю, без модели и запросов к источникам."""
-    catalog = query_builder.Catalog()
+    dataset_access.require_payload(user, payload)
+    catalog = query_builder.Catalog(allowed_datasets=dataset_access.allowed_slugs(user))
     try:
         return interpret.recommend(catalog, payload.get('fields') or [],
                                    payload.get('computed') or [],
@@ -292,8 +306,9 @@ def preview_definition(definition: ReportDefinition, user: dict = Depends(get_cu
     extra = getattr(definition, 'model_extra', None) or {}
     values = {str(k): str(v) for k, v in (extra.get('filterValues') or {}).items()
               if v not in (None, '')}
+    dataset_access.require_definition(user, definition)
     try:
-        return {'report': executor.execute(definition, values)}
+        return {'report': executor.execute(definition, values, allowed_datasets=dataset_access.allowed_slugs(user))}
     except DatasetError as exc:
         raise HTTPException(422, str(exc))
 
@@ -312,7 +327,8 @@ def create_builder_report(payload: dict, user: dict = Depends(get_current_user))
         raise HTTPException(422, 'в отчёте нет ни одной секции')
     # определение обязано выполняться: пустой или битый отчёт сохранять незачем
     try:
-        executor.execute(definition)
+        dataset_access.require_definition(user, definition)
+        executor.execute(definition, allowed_datasets=dataset_access.allowed_slugs(user))
     except DatasetError as exc:
         raise HTTPException(422, str(exc))
 
@@ -349,7 +365,8 @@ def restore_report(slug: str, user: dict = Depends(get_current_user)) -> dict:
     from ..reports.archive import require_valid_dependencies
     try:
         require_valid_dependencies(definition)
-        executor.execute(definition)
+        dataset_access.require_definition(user, definition)
+        executor.execute(definition, allowed_datasets=dataset_access.allowed_slugs(user))
     except DatasetError as exc:
         raise HTTPException(422, str(exc)) from exc
     with db._conn() as conn:
@@ -384,7 +401,8 @@ def update_definition(slug: str, definition: ReportDefinition,
     if report is None:
         raise HTTPException(404, 'отчёт не найден')
     try:
-        executor.execute(definition)
+        dataset_access.require_definition(user, definition)
+        executor.execute(definition, allowed_datasets=dataset_access.allowed_slugs(user))
     except DatasetError as exc:
         raise HTTPException(422, str(exc))
     db.set_definition(slug, definition.model_dump(by_alias=True))
@@ -395,7 +413,7 @@ def update_definition(slug: str, definition: ReportDefinition,
     return {'report': _report_meta(db.get_report(slug))}
 
 
-async def _render(report: dict, slug: str) -> dict:
+async def _render(report: dict, slug: str, user: dict) -> dict:
     """Выполняет определение отчёта и складывает результат в ответ API."""
     if report.get('archived_at'):
         return {**_report_meta(report), 'sections': [], 'filters': []}
@@ -410,7 +428,7 @@ async def _render(report: dict, slug: str) -> dict:
         # execute() делает блокирующие запросы к БД: в event loop его звать
         # нельзя — иначе он держит цикл и остальные запросы ждут пул
         spec = await run_in_threadpool(
-            executor.execute, definition, report.get('filter_values') or {},
+            executor.execute, definition, ReportDefinition.model_validate(definition).compatible_filter_values(report.get('filter_values') or {}),
             meta={'id': report['id'], 'slug': slug, 'title': report['title'],
                   'description': report.get('description')},
         )
@@ -423,7 +441,8 @@ async def _render(report: dict, slug: str) -> dict:
     payload['filters'] = spec.get('filters') or []
     payload['dataOrigin'] = spec.get('dataOrigin')
     # включена ли детализация — знает определение, а рисует страница отчёта
-    payload['drilldown'] = bool(definition.get('drilldown'))
+    payload['drilldown'] = bool(definition.get('drilldown')) and await _db(
+        dataset_access.can_use_definition, user, definition)
     return payload
 
 
@@ -434,7 +453,7 @@ async def get_report(slug: str, user: dict = Depends(get_current_user)) -> dict:
     report = await _db(db.get_report, slug)
     if report is None:
         raise HTTPException(404, 'отчёт не найден')
-    return {'report': await _render(report, slug)}
+    return {'report': await _render(report, slug, user)}
 
 
 @router.patch('/reports/{slug}')
@@ -515,6 +534,9 @@ async def _drilldown_context(slug: str, user: dict) -> tuple[dict, dict]:
     definition = await _db(db.get_definition, slug)
     if definition is None:
         raise HTTPException(409, 'у отчёта нет определения')
+    await _db(dataset_access.require_definition, user, definition)
+    report['filter_values'] = ReportDefinition.model_validate(definition).compatible_filter_values(
+        report.get('filter_values') or {})
     return report, definition
 
 
@@ -567,6 +589,10 @@ async def set_report_filters(
     report = await _db(db.get_report, slug)
     if report is None:
         raise HTTPException(404, 'отчёт не найден')
-    await _db(db.set_filters, slug, patch.values)
+    definition = await _db(db.get_definition, slug)
+    compatible = ReportDefinition.model_validate(definition).compatible_filter_values(patch.values)
+    if compatible != patch.values:
+        raise HTTPException(422, 'Используйте только фильтры, заданные в отчёте.')
+    await _db(db.set_filters, slug, compatible)
     report = await _db(db.get_report, slug)
-    return {'report': await _render(report, slug)}
+    return {'report': await _render(report, slug, user)}

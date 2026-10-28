@@ -342,8 +342,8 @@ def build_filters(definition: ReportDefinition, filter_values: dict,
 
 
 def execute(definition: dict | ReportDefinition, filter_values: dict | None = None,
-            *, meta: dict | None = None) -> dict:
-    """Определение отчёта → ReportSpec (тот же контракт, что рендерит фронт)."""
+            *, meta: dict | None = None, allowed_datasets: set[str] | None = None) -> dict:
+    """Исполняет определение, ограничивая источники пользовательского предпросмотра."""
     spec_def = (definition if isinstance(definition, ReportDefinition)
                 else ReportDefinition.model_validate(definition))
     values = filter_values or {}
@@ -352,7 +352,7 @@ def execute(definition: dict | ReportDefinition, filter_values: dict | None = No
 
     # словарь метрик читается один раз на весь отчёт, а не на каждую секцию;
     # соединения с источниками тоже живут ровно одну сборку
-    catalog = builder.Catalog()
+    catalog = builder.Catalog(allowed_datasets=allowed_datasets)
     try:
         computed = [f.model_dump() for f in spec_def.computed]
         fields = [f.model_dump() for f in spec_def.fields]

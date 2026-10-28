@@ -1,21 +1,12 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { ReportMeta } from '../../types/report'
-import { updateReport } from '../../lib/api'
+import { fetchAvailableReportTags, updateReport } from '../../lib/api'
 import { useReports } from '../../lib/reports'
-import { Alert, Button, Field, Input, Modal } from '../ui'
+import { useAuth } from '../../lib/auth'
+import { TagPicker } from '../TagPicker'
+import { Alert, Badge, Button, Field, Input, Modal } from '../ui'
 
-/** Темы вводятся строкой через запятую: их две-три, и отдельный редактор
-    меток ради этого не нужен. Пустые и повторы отбрасываются. */
-function parseTags(text: string): string[] {
-  const out: string[] = []
-  for (const part of text.split(',')) {
-    const tag = part.trim()
-    if (tag && !out.includes(tag)) out.push(tag)
-  }
-  return out
-}
-
-/** Правка отчёта: название, описание и темы — всё, чем он находится в каталоге. */
+/** Правка отчёта: название, описание и метки — всё, чем он находится в каталоге. */
 export function ReportEditDialog({
   report,
   onClose,
@@ -23,13 +14,23 @@ export function ReportEditDialog({
   report: ReportMeta
   onClose: () => void
 }) {
-  const { reload, facets } = useReports()
+  const { reload } = useReports()
+  const { user, isAdmin } = useAuth()
+  const canEditTags = isAdmin || user?.id === report.createdBy
+  const [availableTags, setAvailableTags] = useState<string[]>([])
   const [title, setTitle] = useState(report.title)
   const [description, setDescription] = useState(report.description ?? '')
-  const [tags, setTags] = useState((report.tags ?? []).join(', '))
+  const [tags, setTags] = useState<string[]>(report.tags ?? [])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  useEffect(() => {
+    const controller = new AbortController()
+    fetchAvailableReportTags(controller.signal).then(setAvailableTags).catch(() => {})
+    return () => controller.abort()
+  }, [])
+
+  /** Save metadata and include label changes only for the author or an administrator. */
   const save = async () => {
     setBusy(true)
     setError(null)
@@ -37,7 +38,7 @@ export function ReportEditDialog({
       await updateReport(report.slug, {
         title: title.trim(),
         description: description.trim() || undefined,
-        tags: parseTags(tags),
+        ...(canEditTags ? { tags } : {}),
       })
       await reload()
       onClose()
@@ -49,7 +50,7 @@ export function ReportEditDialog({
 
   return (
     <Modal
-      title="Отчёт"
+      title="Название и метки отчёта"
       onClose={onClose}
       footer={
         <>
@@ -69,23 +70,11 @@ export function ReportEditDialog({
         <Field label="Описание">
           <Input value={description} onChange={(e) => setDescription(e.target.value)} />
         </Field>
-        <Field label="Темы" hint="Через запятую. По темам отчёты группируются в меню.">
-          <Input
-            list="report-tag-suggestions"
-            value={tags}
-            onChange={(e) => setTags(e.target.value)}
-            placeholder="продажи, юг"
-          />
-        </Field>
-        {/* подсказка из уже заведённых тем: одна и та же тема, набранная
-            двумя способами, разваливает разрез на две группы */}
-        <datalist id="report-tag-suggestions">
-          {(facets?.tags ?? [])
-            .filter((tag) => tag.name)
-            .map((tag) => (
-              <option key={tag.id} value={tag.id} />
-            ))}
-        </datalist>
+        {canEditTags ? <>
+          <TagPicker values={tags} options={availableTags} disabled={busy}
+            onToggle={(tag) => setTags((previous) => previous.includes(tag) ? previous.filter((item) => item !== tag) : [...previous, tag])} />
+          <p className="text-xs text-fg-muted">Метки группируют отчёты и открывают просмотр пользователям и группам с такими разрешёнными метками. Разрешения назначает администратор во вкладке «Метки».</p>
+        </> : <div className="text-sm text-fg-muted"><p>Метки меняют автор и администратор.</p><div className="mt-1 flex flex-wrap gap-1">{tags.map((tag) => <Badge key={tag}>{tag}</Badge>)}</div></div>}
         <p className="font-mono text-xs text-fg-muted">{report.slug}</p>
         {error && <Alert>{error}</Alert>}
       </div>

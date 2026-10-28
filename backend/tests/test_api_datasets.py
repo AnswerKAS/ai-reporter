@@ -28,8 +28,9 @@ def test_изменения_обычному_пользователю_403(client
 
 # --- GET /api/datasets -------------------------------------------------------
 
-def test_список_датасетов_виден_обычному_пользователю(client, dataset, user_headers):
-    body = client.get('/api/datasets', headers=user_headers).json()
+def test_assigned_datasets_are_visible_to_employee(client, dataset, dataset_user_headers):
+    """Проверяет поведение с явно назначенным датасетом сотрудника."""
+    body = client.get('/api/datasets', headers=dataset_user_headers).json()
 
     assert [d['slug'] for d in body['datasets']] == ['sales']
     assert body['datasets'][0]['fields'][0]['name'] == 'id'
@@ -41,14 +42,16 @@ def test_список_датасетов_не_отдаёт_dsn(client, dataset, 
     assert 'dsn' not in body['datasets'][0]
 
 
-def test_текст_запроса_виден_админу_но_не_пользователю(client, metabase, sources,
+def test_dataset_query_is_hidden_from_assigned_employee(assign_dataset, client, metabase, sources,
                                                        admin_headers, user_headers):
+    """Сохраняет скрытие служебных метаданных у назначенного датасета."""
     from app.datasets import registry as ds
 
     sources.add('q', FakeSource(query='SELECT 1 AS a'))
     ds.create(slug='q', title='Запрос', description=None, source='clickhouse',
               dsn='clickhouse://h:1/d', table_name='', query='SELECT 1 AS a',
               schema=[], status='ok', error=None)
+    assign_dataset('q')
 
     for_admin = client.get('/api/datasets', headers=admin_headers).json()['datasets'][0]
     for_user = client.get('/api/datasets', headers=user_headers).json()['datasets'][0]
@@ -57,18 +60,19 @@ def test_текст_запроса_виден_админу_но_не_польз�
     assert for_user['query'] is None and for_user['isQuery'] is True
 
 
-def test_сервер_датасета_в_выдаче(client, dataset, user_headers):
-    body = client.get('/api/datasets', headers=user_headers).json()
+def test_assigned_dataset_server_identity(client, dataset, dataset_user_headers):
+    """Проверяет поведение с явно назначенным датасетом сотрудника."""
+    body = client.get('/api/datasets', headers=dataset_user_headers).json()
 
     assert body['datasets'][0]['serverId'] == 'clickhouse-1'
     assert body['datasets'][0]['serverTitle'] == 'ClickHouse · сервер 1'
 
 
-def test_адрес_сервера_виден_админу_но_не_пользователю(client, dataset,
-                                                       admin_headers, user_headers):
+def test_dataset_server_address_is_hidden_from_employee(client, dataset,
+                                                       admin_headers, dataset_user_headers):
     """Хост — такой же секрет, как DSN: пользователю достаётся номер."""
     for_admin = client.get('/api/datasets', headers=admin_headers).json()['datasets'][0]
-    for_user = client.get('/api/datasets', headers=user_headers).json()['datasets'][0]
+    for_user = client.get('/api/datasets', headers=dataset_user_headers).json()['datasets'][0]
 
     assert for_admin['serverTitle'] == 'ClickHouse · host:8443/db'
     assert for_user['serverTitle'] == 'ClickHouse · сервер 1'
@@ -77,11 +81,13 @@ def test_адрес_сервера_виден_админу_но_не_польз�
     assert for_admin['serverId'] == for_user['serverId']
 
 
-def test_у_csv_датасета_сервера_нет(client, metabase, sources, user_headers):
+def test_csv_dataset_has_no_server(assign_dataset, client, metabase, sources, user_headers):
+    """Сохраняет скрытие служебных метаданных у назначенного датасета."""
     from app.datasets import registry as ds
 
     ds.create(slug='file', title='Файл', description=None, source='csv',
               dsn='', table_name='', schema=[], status='new', error=None)
+    assign_dataset('file')
 
     body = client.get('/api/datasets', headers=user_headers).json()
     row = next(d for d in body['datasets'] if d['slug'] == 'file')
@@ -89,8 +95,8 @@ def test_у_csv_датасета_сервера_нет(client, metabase, sources
     assert row['serverId'] is None and row['serverTitle'] is None
 
 
-def test_датасеты_одной_базы_с_разными_логинами_на_одном_сервере(
-        client, dataset, sources, user_headers):
+def test_dataset_server_normalizes_different_credentials(assign_dataset,
+        client, dataset, sources, dataset_user_headers):
     """Сервер определяется адресом, а не тем, кем к нему подключились."""
     from app.datasets import registry as ds
 
@@ -98,8 +104,9 @@ def test_датасеты_одной_базы_с_разными_логинами
     ds.create(slug='sales2', title='Продажи 2', description=None, source='clickhouse',
               dsn='clickhouse://other:pass@host:8443/db', table_name='sales_orders',
               schema=[], status='ok', error=None)
+    assign_dataset('sales2')
 
-    rows = client.get('/api/datasets', headers=user_headers).json()['datasets']
+    rows = client.get('/api/datasets', headers=dataset_user_headers).json()['datasets']
     ids = {d['slug']: d['serverId'] for d in rows}
 
     assert ids['sales'] == ids['sales2']

@@ -202,8 +202,8 @@ export function DatasetsPage() {
         <SkeletonCards count={4} />
       ) : total === 0 ? (
         <EmptyState
-          title="Датасетов пока нет"
-          description={isAdmin ? 'Первый источник данных заводится в админке.' : 'Источники данных заводит администратор.'}
+          title={isAdmin ? 'Датасетов пока нет' : 'Нет доступных датасетов'}
+          description={isAdmin ? 'Первый источник данных заводится в админке.' : 'Попросите администратора назначить датасеты вам или вашей группе во вкладке «Датасеты».'}
           action={
             isAdmin ? (
               <Button variant="primary" onClick={() => navigate('/admin?tab=datasets')}>

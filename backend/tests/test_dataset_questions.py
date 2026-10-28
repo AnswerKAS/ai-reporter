@@ -6,7 +6,7 @@ from app.datasets import answer
 from app.datasets.base import DatasetError
 
 
-def test_question_uses_selected_dataset(client, dataset, sources, user_headers,
+def test_question_uses_selected_dataset(client, dataset, sources, dataset_user_headers,
                                         monkeypatch):
     """The answer uses only the selected dataset and explains its calculation."""
     monkeypatch.setattr(answer, 'propose', lambda *_: {
@@ -14,7 +14,7 @@ def test_question_uses_selected_dataset(client, dataset, sources, user_headers,
         'groupBy': [], 'filters': [{'field': 'city', 'op': 'eq', 'value': 'Москва'}],
         'limit': 10,
     })
-    response = client.post('/api/datasets/sales/ask', headers=user_headers,
+    response = client.post('/api/datasets/sales/ask', headers=dataset_user_headers,
                            json={'question': 'Какая выручка в Москве?', 'history': []})
     assert response.status_code == 200, response.text
     body = response.json()
@@ -75,7 +75,7 @@ def test_create_dataset_and_switch_connection_key(client, admin_headers, monkeyp
     assert changed.json()['dataset']['connectionKey'] == 'two'
 
 
-def test_followup_passes_question_history(client, dataset, user_headers, monkeypatch):
+def test_followup_passes_question_history(client, dataset, dataset_user_headers, monkeypatch):
     """A followup question passes prior turns to plan generation."""
     seen = []
     def propose(_, question, history):
@@ -84,7 +84,7 @@ def test_followup_passes_question_history(client, dataset, user_headers, monkeyp
         return {'select': [{'field': '*', 'agg': 'count'}], 'limit': 1}
     monkeypatch.setattr(answer, 'propose', propose)
     history = [{'question': 'Сколько строк?', 'plan': {'select': [{'field': '*', 'agg': 'count'}]}}]
-    response = client.post('/api/datasets/sales/ask', headers=user_headers,
+    response = client.post('/api/datasets/sales/ask', headers=dataset_user_headers,
                            json={'question': 'А за вчера?', 'history': history})
     assert response.status_code == 200
     assert seen == [('А за вчера?', history)]
@@ -92,7 +92,7 @@ def test_followup_passes_question_history(client, dataset, user_headers, monkeyp
 
 
 def test_grouped_explanation_and_truncated_result(client, dataset, sources,
-                                                   user_headers, admin_headers, monkeypatch):
+                                                   dataset_user_headers, admin_headers, monkeypatch):
     """A grouped answer explains sorting, truncation, and role specific SQL visibility."""
     sources.specs['sales'].result = (['c0', 'c1'], [
         ['Москва', 100], ['Тверь', 80], ['Казань', 60],
@@ -103,7 +103,7 @@ def test_grouped_explanation_and_truncated_result(client, dataset, sources,
         'orderBy': {'field': 'revenue', 'direction': 'desc'}, 'limit': 2,
     })
 
-    employee = client.post('/api/datasets/sales/ask', headers=user_headers,
+    employee = client.post('/api/datasets/sales/ask', headers=dataset_user_headers,
                            json={'question': 'Продажи по городам'}).json()
     assert employee['rows'] == [['Москва', '100'], ['Тверь', '80']]
     assert employee['truncated'] is True
@@ -122,7 +122,7 @@ def test_grouped_explanation_and_truncated_result(client, dataset, sources,
     assert admin['explanation'] == employee['explanation']
 
 
-def test_empty_answer_has_explanation(client, dataset, sources, user_headers,
+def test_empty_answer_has_explanation(client, dataset, sources, dataset_user_headers,
                                       monkeypatch):
     """An empty result still carries the calculation and completeness details."""
     sources.specs['sales'].result = (['c0'], [])
@@ -130,7 +130,7 @@ def test_empty_answer_has_explanation(client, dataset, sources, user_headers,
         'select': [{'field': 'revenue', 'agg': 'sum'}], 'limit': 5,
     })
 
-    body = client.post('/api/datasets/sales/ask', headers=user_headers,
+    body = client.post('/api/datasets/sales/ask', headers=dataset_user_headers,
                        json={'question': 'Выручка за вчера'}).json()
     assert body['answer'] == 'По этому вопросу данных не найдено.'
     assert body['explanation']['shownRows'] == 0

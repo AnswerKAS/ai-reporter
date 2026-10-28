@@ -111,17 +111,17 @@ def test_restore_requires_valid_sources_and_explicit_action(client, admin_header
     assert client.post('/api/reports/missing/restore', headers=admin_headers).status_code == 404
 
 
-def test_owner_can_repair_definition_and_explicitly_restore(client, user_headers, plain_user, report):
+def test_owner_can_repair_definition_and_explicitly_restore(client, dataset_user_headers, plain_user, report):
     """Автор сохраняет исправленное определение в архиве и восстанавливает его отдельно."""
     create_report('own', db.get_definition(report['slug']), created_by=plain_user['id'])
     from app.reports.archive import archive_reports
     with db._conn() as conn:
         archive_reports(conn, [{'slug': 'own'}], 'Удалён прежний источник')
-    result = client.put('/api/reports/own/definition', headers=user_headers,
+    result = client.put('/api/reports/own/definition', headers=dataset_user_headers,
                         json=db.get_definition(report['slug']))
     assert result.status_code == 200
     assert result.json()['report']['archivedAt']
-    assert client.post('/api/reports/own/restore', headers=user_headers).status_code == 200
+    assert client.post('/api/reports/own/restore', headers=dataset_user_headers).status_code == 200
 
 
 def test_backfill_archives_missing_sources_once_without_unarchiving(report):

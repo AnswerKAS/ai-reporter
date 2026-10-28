@@ -53,7 +53,7 @@ export function ReportRow({
         navigate(`/workspace/${report.slug}`)
       },
     }] : []),
-    ...(canEdit ? [{ label: 'Переименовать', onSelect: onRename }] : []),
+    ...(canEdit ? [{ label: 'Переименовать', onSelect: onRename }, { label: 'Изменить метки', onSelect: onRename }] : []),
     { label: favorite ? 'Открепить' : 'Закрепить', onSelect: onToggleFavorite },
     ...(isAdmin ? [{ label: 'Удалить', onSelect: onDelete, danger: true }] : []),
   ]

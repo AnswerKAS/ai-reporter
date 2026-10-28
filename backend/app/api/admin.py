@@ -10,6 +10,7 @@ from ..core.security import hash_password, require_admin
 from ..schemas.user import (
     AccessPatch,
     AccessTagsPatch,
+    DatasetAccessPatch,
     GroupPatch,
     MemberPatch,
     PasswordPatch,
@@ -167,13 +168,17 @@ def admin_revoke_access(patch: AccessPatch) -> dict:
 
 
 @router.get('/access-tags/{kind}/{identifier}')
-def admin_get_access_tags(kind: str, identifier: str) -> dict:
+def admin_get_access_tags(kind: str, identifier: str, effective: bool = False) -> dict:
+    """Читает прямые разрешения и по запросу объясняет наследование из групп."""
     if kind not in ('user', 'group'):
         raise HTTPException(422, 'kind: user или group')
     if kind == 'user' and db.get_user(identifier) is None:
         raise HTTPException(404, 'пользователь не найден')
     if kind == 'group' and not any(g['id'] == identifier for g in db.list_groups()):
         raise HTTPException(404, 'группа не найдена')
+    if effective:
+        from ..core.tag_catalog import effective_tags
+        return effective_tags(kind, identifier)
     return {'tags': db.get_access_tags(kind, identifier)}
 
 
@@ -185,3 +190,35 @@ def admin_set_access_tags(kind: str, identifier: str, patch: AccessTagsPatch) ->
         raise HTTPException(422, 'метки: до 100 непустых значений длиной до 80 символов')
     db.set_access_tags(kind, identifier, tags)
     return {'tags': db.get_access_tags(kind, identifier)}
+
+
+@router.get('/datasets/{slug}/access')
+def admin_dataset_access(slug: str) -> dict:
+    """Возвращает явные назначения датасета для административного редактора."""
+    from ..core import dataset_access
+    from ..datasets import registry
+    if registry.get(slug) is None:
+        raise HTTPException(404, 'датасет не найден')
+    return dataset_access.grants(slug)
+
+
+@router.put('/datasets/{slug}/access')
+def admin_set_dataset_access(slug: str, patch: DatasetAccessPatch) -> dict:
+    """Атомарно заменяет личные и групповые назначения существующих субъектов."""
+    from ..core import dataset_access
+    admin_dataset_access(slug)
+    return dataset_access.set_grants(slug, patch.user_ids, patch.group_ids)
+
+
+@router.get('/tags')
+def admin_tag_catalog(user: dict = Depends(require_admin)) -> dict:
+    """Показывает весь каталог меток и количество назначений каждого вида."""
+    from ..core.tag_catalog import catalog
+    return {'tags': catalog(user)}
+
+
+@router.get('/tags/usage')
+def admin_tag_usage(tag: str) -> dict:
+    """Показывает администратору, где используется выбранная метка."""
+    from ..core.tag_catalog import usage
+    return usage(tag)
