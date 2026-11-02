@@ -90,6 +90,7 @@ export function DatasetQuestionPanel({ datasets, initialDatasetSlug, requestedCo
   const [error, setError] = useState<string | null>(null)
   const [canRestore, setCanRestore] = useState(false)
   const [overviewOpen, setOverviewOpen] = useState(false)
+  const [overviewDatasetSlug, setOverviewDatasetSlug] = useState<string | null>(null)
   const [selectedSlugs, setSelectedSlugs] = useState<string[]>(initialDatasetSlug ? [initialDatasetSlug] : [])
   const [mentionQuery, setMentionQuery] = useState<string | null>(null)
   const [mentionIndex, setMentionIndex] = useState(0)
@@ -98,6 +99,7 @@ export function DatasetQuestionPanel({ datasets, initialDatasetSlug, requestedCo
   const mentionRange = useRef<{ start: number; end: number } | null>(null)
   const requestSerial = useRef(0)
   const selectedDatasets = datasets.filter((item) => selectedSlugs.includes(item.slug))
+  const overviewDataset = selectedDatasets.find((item) => item.slug === overviewDatasetSlug)
   const mentionMatches = useMemo(() => searchDatasetMentions(
     datasets, mentionQuery, selectedSlugs), [datasets, mentionQuery, selectedSlugs])
 
@@ -127,6 +129,7 @@ export function DatasetQuestionPanel({ datasets, initialDatasetSlug, requestedCo
     setAsking(false)
     setMentionQuery(null)
     setOverviewOpen(false)
+    setOverviewDatasetSlug(null)
     setError(null)
     mentionRange.current = null
     const remembered = requestedConversationId || window.localStorage.getItem(ACTIVE_DATASET_CHAT) || undefined
@@ -195,6 +198,7 @@ export function DatasetQuestionPanel({ datasets, initialDatasetSlug, requestedCo
     setSelectedSlugs(next)
     if (selectedSlugs[0] === slug) onDatasetChange(next[0] || '')
     setOverviewOpen(false)
+    if (overviewDatasetSlug === slug) setOverviewDatasetSlug(null)
   }
 
   /** Check saved answers after a broken stream without running the model again. */
@@ -369,7 +373,9 @@ export function DatasetQuestionPanel({ datasets, initialDatasetSlug, requestedCo
           <label htmlFor="workspace-question" className="sr-only">Ваш вопрос к датасету</label>
           {selectedDatasets.length > 0 && <div className="mb-3 flex flex-wrap gap-2" aria-label="Прикреплённые датасеты">
             {selectedDatasets.map((item) => <span key={item.slug} className="inline-flex items-center gap-2 rounded-full border border-accent bg-accent-soft px-3 py-1 text-xs font-medium">
-              @{item.title}
+              <button type="button" aria-label={`Показать содержимое датасета «${item.title}»`}
+                className="cursor-pointer text-left hover:underline focus-visible:underline"
+                onClick={() => setOverviewDatasetSlug(item.slug)}>@{item.title}</button>
               <button type="button" aria-label={`Открепить ${item.title}`} className="cursor-pointer text-accent"
                 disabled={asking} onClick={() => detachDataset(item.slug)}>×</button>
             </span>)}
@@ -410,6 +416,8 @@ export function DatasetQuestionPanel({ datasets, initialDatasetSlug, requestedCo
           <p className="mt-2 text-xs text-fg-muted">@ — прикрепить датасет; слова названия разделяйте _ · Enter — отправить · Shift+Enter — новая строка. Поля агент выберет сам.</p>
         </form>
       </footer>
+      {overviewDataset && <DatasetOverview key={overviewDataset.slug} dataset={overviewDataset}
+        mode="dialog" onClose={() => setOverviewDatasetSlug(null)} />}
     </section>
   )
 }

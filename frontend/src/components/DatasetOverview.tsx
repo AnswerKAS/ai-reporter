@@ -13,8 +13,12 @@ function fieldTitle(dataset: Dataset, field: DatasetField): string {
   return dataset.fieldSettings?.[field.name]?.title || field.comment || field.name
 }
 
-/** Показывает схему и пример строк по запросу сотрудника. */
-export function DatasetOverview({ dataset }: { dataset: Dataset }) {
+/** Показывает схему и пример строк в карточке либо сразу в подробном окне. */
+export function DatasetOverview({ dataset, mode = 'card', onClose }: {
+  dataset: Dataset
+  mode?: 'card' | 'dialog'
+  onClose?: () => void
+}) {
   const [detail, setDetail] = useState<DatasetDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -36,6 +40,37 @@ export function DatasetOverview({ dataset }: { dataset: Dataset }) {
   const preview = detail?.preview
   const shownColumns = preview?.columns.slice(0, VISIBLE_FIELDS) ?? []
   const shownRows = preview?.rows.slice(0, VISIBLE_ROWS) ?? []
+  const details = <Modal title={`Данные · ${dataset.title}`} size="xl" align="top"
+    onClose={onClose ?? (() => setOpen(false))}>
+    <div className="space-y-5">
+      {dataset.description && <p className="text-sm text-fg-muted">{dataset.description}</p>}
+      <section>
+        <h3 className="mb-2 text-sm font-semibold">Поля · {fields.length}</h3>
+        <div className="overflow-x-auto rounded-control border border-line">
+          <Table><thead><Tr><Th>Поле</Th><Th>Название и смысл</Th><Th>Тип</Th><Th>Роль</Th></Tr></thead>
+            <tbody>{fields.map((field) => {
+              const setting = (detail?.dataset ?? dataset).fieldSettings?.[field.name]
+              return <Tr key={field.name}>
+                <Td><code>{field.name}</code></Td>
+                <Td>{fieldTitle(detail?.dataset ?? dataset, field)}</Td>
+                <Td>{field.type}</Td>
+                <Td>{setting ? ROLE_LABELS[setting.role] : '—'}</Td>
+              </Tr>
+            })}</tbody>
+          </Table>
+        </div>
+      </section>
+      <section>
+        <h3 className="mb-2 text-sm font-semibold">Пример строк</h3>
+        {loading ? <Skeleton className="h-32" /> : error ? <Alert>{error}</Alert> :
+          preview && preview.columns.length > 0 ? <DatasetPreviewTable preview={preview}
+            columnLabels={Object.fromEntries(fields.map((field) => [field.name, fieldTitle(detail?.dataset ?? dataset, field)]))} /> :
+            <p className="text-sm text-fg-muted">Пример строк пока недоступен.</p>}
+      </section>
+    </div>
+  </Modal>
+
+  if (mode === 'dialog') return details
 
   return (
     <Card className="min-w-0 p-5 sm:p-7">
@@ -93,33 +128,7 @@ export function DatasetOverview({ dataset }: { dataset: Dataset }) {
         )}
       </div>
 
-      {open && <Modal title={`Данные · ${dataset.title}`} size="xl" align="top" onClose={() => setOpen(false)}>
-        <div className="space-y-5">
-          <section>
-            <h3 className="mb-2 text-sm font-semibold">Поля · {fields.length}</h3>
-            <div className="overflow-x-auto rounded-control border border-line">
-              <Table><thead><Tr><Th>Поле</Th><Th>Название и смысл</Th><Th>Тип</Th><Th>Роль</Th></Tr></thead>
-                <tbody>{fields.map((field) => {
-                  const setting = (detail?.dataset ?? dataset).fieldSettings?.[field.name]
-                  return <Tr key={field.name}>
-                    <Td><code>{field.name}</code></Td>
-                    <Td>{fieldTitle(detail?.dataset ?? dataset, field)}</Td>
-                    <Td>{field.type}</Td>
-                    <Td>{setting ? ROLE_LABELS[setting.role] : '—'}</Td>
-                  </Tr>
-                })}</tbody>
-              </Table>
-            </div>
-          </section>
-          <section>
-            <h3 className="mb-2 text-sm font-semibold">Пример строк</h3>
-            {loading ? <Skeleton className="h-32" /> : error ? <Alert>{error}</Alert> :
-              preview && preview.columns.length > 0 ? <DatasetPreviewTable preview={preview}
-                columnLabels={Object.fromEntries(fields.map((field) => [field.name, fieldTitle(detail?.dataset ?? dataset, field)]))} /> :
-                <p className="text-sm text-fg-muted">Пример строк пока недоступен.</p>}
-          </section>
-        </div>
-      </Modal>}
+      {open && details}
     </Card>
   )
 }

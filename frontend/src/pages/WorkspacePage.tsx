@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import type { Dataset } from '../types/dataset'
 import { ApiError, fetchDatasets } from '../lib/api'
+import { watchDatasetAccess } from '../lib/dataset-access-refresh'
 import { useAuth } from '../lib/auth'
 import { DatasetQuestionPanel } from '../components/DatasetQuestionPanel'
 import { BuilderPage } from './BuilderPage'
@@ -25,12 +26,27 @@ export function WorkspacePage() {
 
   useEffect(() => {
     let active = true
-    void fetchDatasets().then((items) => {
-      if (active) setDatasets(items)
-    }).catch((failure) => {
-      if (active) setError(failure instanceof ApiError ? failure.message : 'Не удалось загрузить датасеты')
-    }).finally(() => { if (active) setLoading(false) })
-    return () => { active = false }
+    let request = 0
+    /** Read current grants again after the user returns to an already open chat. */
+    async function reloadDatasets(): Promise<void> {
+      const current = ++request
+      try {
+        const items = await fetchDatasets()
+        if (active && current === request) {
+          setDatasets(items)
+          setError(null)
+        }
+      } catch (failure) {
+        if (active && current === request) {
+          setError(failure instanceof ApiError ? failure.message : 'Не удалось загрузить датасеты')
+        }
+      } finally {
+        if (active && current === request) setLoading(false)
+      }
+    }
+    void reloadDatasets()
+    const stopWatching = watchDatasetAccess(() => { void reloadDatasets() })
+    return () => { active = false; stopWatching() }
   }, [])
 
   /** Switch the workspace mode while preserving the attached dataset. */
