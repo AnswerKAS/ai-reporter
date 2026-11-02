@@ -112,3 +112,19 @@ pct exec 112 -- systemctl is-active awg-quick@awr tinyproxy ai-reporter-vpn-kill
 pct exec 100 -- runuser -u postgres -- psql -d reporter_demo -Atc \
   "select count(*) from pg_tables where schemaname='demo50'"
 ```
+
+Если консультант по данным сообщает о недоступности модели, сначала проверьте
+`tinyproxy` в LXC 112: запросы backend к OpenRouter идут через
+`192.168.100.112:8888`. В этом контейнере для `tinyproxy.service` установлен
+drop-in `/etc/systemd/system/tinyproxy.service.d/restart.conf` с
+`Restart=on-failure`, `RestartSec=5s` и ожиданием `network-online.target`.
+Drop-in `/etc/systemd/system/awg-quick@awr.service.d/tinyproxy.conf` содержит
+`Wants=tinyproxy.service`, чтобы прокси запускался вместе с VPN. После
+изменения конфигурации выполните `systemctl daemon-reload` в LXC 112.
+
+```sh
+pct exec 112 -- systemctl status awg-quick@awr tinyproxy --no-pager
+pct exec 112 -- ss -ltnp
+pct exec 111 -- docker exec ai-reporter-backend-1 python -c \
+  'import httpx; print(httpx.get("https://openrouter.ai/api/v1/models", timeout=10).status_code)'
+```

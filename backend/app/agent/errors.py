@@ -43,10 +43,12 @@ def failure_code(error: Exception | str, *, stage: str = 'model') -> str:
     if any(value in text for value in ('connection refused', 'could not connect', 'не удалось подключ',
                                        'resolve host', 'server closed the connection')):
         return 'source_unavailable'
+    if stage == 'tool' and 'connection error' in text:
+        return 'source_unavailable'
     if any(value in text + name for value in ('timeout', 'timed out', 'не ответила за')):
         return 'source_timeout' if stage == 'tool' else 'model_timeout'
     if any(value in text + name for value in ('ratelimit', 'rate limit', 'too many requests',
-                                             'apiconnection', 'authenticationerror', 'apistatus',
+                                             'apiconnection', 'connection error', 'authenticationerror', 'apistatus',
                                              'слишком много описаний', 'error code: 400', 'error code: 401',
                                              'error code: 402', 'error code: 429', 'error code: 5')):
         return 'model_unavailable'

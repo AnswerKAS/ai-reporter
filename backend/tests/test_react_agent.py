@@ -25,6 +25,26 @@ def test_agent_model_call_uses_chat_timeout(monkeypatch):
     assert observed == [interpret.CHAT_TIMEOUT]
 
 
+def test_dataset_agent_reports_provider_connection_failure(dataset, monkeypatch):
+    """A failed proxy connection in both model calls is reported as model unavailability."""
+    from app.agent.errors import AgentFailure
+
+    def fail_connection(*_args):
+        """Match the connection error text retained by the LangGraph state."""
+        raise ConnectionError('Connection error.')
+
+    monkeypatch.setattr(interpret, '_openrouter_key', lambda: 'fake')
+    monkeypatch.setattr(interpret, '_chat_models', lambda: ('primary', 'fallback'))
+    monkeypatch.setattr(runner, '_invoke', fail_connection)
+
+    with pytest.raises(AgentFailure) as failure:
+        runner.ask_dataset(dataset, 'Сколько строк?', [], reveal_sql=False)
+
+    assert failure.value.code == 'model_unavailable'
+    assert [attempt['code'] for attempt in failure.value.attempts] == [
+        'model_unavailable', 'model_unavailable']
+
+
 def test_agent_extracts_action_from_explanation_and_fenced_json():
     """Extra prose and example JSON do not hide the model's actual action."""
     raw = ('Пример: {"tool":"unknown"}\n'
