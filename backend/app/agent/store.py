@@ -77,7 +77,7 @@ def save_named(user_id: str, kind: str, target: str, title: str,
 
 
 def list_saved(user_id: str, kind: str, target: str) -> list[dict]:
-    """List explicitly saved chats in one owner and target scope."""
+    """List named and automatically saved chats in one owner and target scope."""
     with db._conn() as conn:
         rows = conn.execute('SELECT id, kind, target, title, saved_at, updated_at '
                             'FROM agent_conversations WHERE user_id = %s AND kind = %s '
@@ -118,20 +118,39 @@ def messages(conversation_id: str) -> list[dict]:
 
 
 def save_exchange(conversation_id: str, question: str, answer: str,
-                  result: dict) -> None:
-    """Commit the user turn and checked agent result as one database transaction."""
+                  result: dict) -> str:
+    """Commit a turn, autosave workspace chats, and return the answer id for completion."""
     with db._conn() as conn:
         for role, text, payload in (
             ('user', question, {}),
             ('assistant', answer, result),
         ):
+            message_id = uuid.uuid4().hex
             conn.execute(
                 'INSERT INTO agent_messages '
                 '(id, conversation_id, role, text, payload, created_at) '
                 'VALUES (%s, %s, %s, %s, %s, %s)',
-                (uuid.uuid4().hex, conversation_id, role, text,
+                (message_id, conversation_id, role, text,
                  json.dumps(payload, ensure_ascii=False, default=str), _now()),
             )
+        conn.execute('UPDATE agent_conversations SET updated_at = %s WHERE id = %s',
+                     (_now(), conversation_id))
+        conn.execute('UPDATE agent_conversations SET title = CASE WHEN saved_at IS NULL '
+                     'THEN %s ELSE title END, saved_at = COALESCE(saved_at, %s) '
+                     'WHERE id = %s AND kind = %s AND target = %s',
+                     (' '.join(question.split())[:120], _now(), conversation_id,
+                      'dataset', 'workspace'))
+    return message_id
+
+
+def complete_exchange(conversation_id: str, answer_id: str, answer: str,
+                      result: dict) -> None:
+    """Replace a reserved answer atomically without duplicating its saved question."""
+    with db._conn() as conn:
+        conn.execute('UPDATE agent_messages SET text = %s, payload = %s '
+                     'WHERE id = %s AND conversation_id = %s AND role = %s',
+                     (answer, json.dumps(result, ensure_ascii=False, default=str),
+                      answer_id, conversation_id, 'assistant'))
         conn.execute('UPDATE agent_conversations SET updated_at = %s WHERE id = %s',
                      (_now(), conversation_id))
 
@@ -142,7 +161,8 @@ def dataset_history(conversation_id: str) -> list[dict]:
     turns: list[dict] = []
     for index in range(0, len(stored) - 1, 2):
         user, assistant = stored[index:index + 2]
-        if user['role'] == 'user' and assistant['role'] == 'assistant':
+        if (user['role'] == 'user' and assistant['role'] == 'assistant'
+                and not assistant['payload'].get('incomplete')):
             turns.append({'question': user['text'], 'answer': assistant['text'],
                           'sql': assistant['payload'].get('sql'),
                           'plan': assistant['payload'].get('plan'),

@@ -102,6 +102,8 @@ export interface DatasetAnswerExplanation {
 }
 
 export interface DatasetQuestionTurn {
+  /** Вопрос сохранён, но готовый ответ агента ещё не получен. */
+  incomplete?: boolean
   /** Источник итоговой таблицы; у старых ответов используется первый результат. */
   primaryDatasetSlug?: string
   datasetSlug?: string

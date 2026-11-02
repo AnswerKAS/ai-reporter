@@ -209,7 +209,8 @@ export function DatasetQuestionPanel({ datasets, initialDatasetSlug, requestedCo
     try {
       const saved = await fetchWorkspaceConversation(conversationId)
       if (serial !== requestSerial.current) return
-      const found = saved.turns.length > turns.length
+      const found = saved.turns.some((turn, index) =>
+        !turn.incomplete && (!turns[index] || turns[index].incomplete))
       setTurns(saved.turns)
       if (found) {
         setError(null)
@@ -240,12 +241,17 @@ export function DatasetQuestionPanel({ datasets, initialDatasetSlug, requestedCo
     setStatus('Агент изучает вопрос…')
     setCanRestore(false)
     setError(null)
+    let confirmed = false
     try {
       await streamWorkspaceAnswer(slugs, text, conversationId, (event) => {
         if (serial !== requestSerial.current) return
         if (event.conversationId) {
           setConversationId(event.conversationId)
           window.localStorage.setItem(ACTIVE_DATASET_CHAT, event.conversationId)
+          if (!confirmed) {
+            confirmed = true
+            window.dispatchEvent(new Event('dataset-chats-changed'))
+          }
         }
         if (event.type === 'status') setStatus(event.text ?? '')
         if (event.type === 'delta') {
@@ -254,6 +260,7 @@ export function DatasetQuestionPanel({ datasets, initialDatasetSlug, requestedCo
         }
         if (event.type === 'error') throw new Error(event.message || 'Агент не смог ответить')
         if (event.type === 'done' && event.result) {
+          window.dispatchEvent(new Event('dataset-chats-changed'))
           activateConversation(event.conversationId ?? null)
           setTurns((previous) => [...previous, { ...event.result!, question: text,
             datasetSlugs: slugs, datasetTitles: titles }])
@@ -328,7 +335,7 @@ export function DatasetQuestionPanel({ datasets, initialDatasetSlug, requestedCo
                   <ul className="mt-2 list-disc space-y-2 pl-5">{turn.hypotheses.map((item, hypothesisIndex) =>
                     <li key={hypothesisIndex}>{item.text}{item.howToCheck && <span className="block text-fg-muted">Как проверить: {item.howToCheck}</span>}</li>)}</ul>
                 </div>}
-                <details className="text-sm">
+                {!turn.incomplete && <details className="text-sm">
                   <summary className="cursor-pointer font-medium text-accent">Как посчитано</summary>
                   <div className="mt-2 space-y-1 text-fg-muted">
                     <p>Источник: {turn.explanation.source}</p>
@@ -339,7 +346,7 @@ export function DatasetQuestionPanel({ datasets, initialDatasetSlug, requestedCo
                     <p>{turn.explanation.scope}</p>
                     <p>Показано строк: {turn.explanation.shownRows}{turn.explanation.hasMore ? ' · есть ещё строки' : ''}</p>
                   </div>
-                </details>
+                </details>}
                 <div className="flex flex-wrap items-center gap-2">
                   {turn.sql && <details className="min-w-0 max-w-full rounded-control border border-line px-3 py-2 text-xs">
                     <summary className="cursor-pointer">Показать SQL</summary>

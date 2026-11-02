@@ -12,6 +12,69 @@ from app.api import datasets as dataset_api
 from app.api import reports as report_api
 
 
+@pytest.mark.parametrize('agent_fails', [False, True])
+def test_first_workspace_question_is_saved_before_agent_reply(
+        client, dataset, dataset_user_headers, admin_headers, monkeypatch, agent_fails):
+    """The first accepted question is listed and recoverable even before an agent fails."""
+    observed = []
+
+    def fake_answer(attached, question, history, *, reveal_sql, on_event):
+        """Inspect persisted history before returning or failing the first answer."""
+        chats = client.get('/api/chats?kind=dataset&target=workspace',
+                           headers=dataset_user_headers).json()['chats']
+        observed.append(chats)
+        if chats:
+            restored = client.get('/api/datasets/chat/history', headers=dataset_user_headers,
+                                  params={'conversation_id': chats[0]['id']}).json()
+            observed.append(restored['turns'])
+        if agent_fails:
+            raise DatasetError('Источник временно недоступен')
+        return {'answer': 'Готово', 'columns': [], 'rows': [], 'plan': {},
+                'truncated': False, 'explanation': {}}
+
+    monkeypatch.setattr(dataset_api, 'agent_ask_datasets', fake_answer)
+    response = client.post('/api/datasets/chat/stream', headers=dataset_user_headers,
+                           json={'question': 'Первый вопрос', 'datasetSlugs': ['sales']})
+    events = [json.loads(line) for line in response.text.splitlines()]
+    identifier = events[0]['conversationId']
+    assert observed[0], 'Первый вопрос должен сразу сохранять чат в истории'
+    assert observed[0][0]['id'] == identifier
+    assert observed[0][0]['title'] == 'Первый вопрос'
+    assert observed[1][0]['question'] == 'Первый вопрос'
+    restored = client.get('/api/datasets/chat/history', headers=dataset_user_headers,
+                          params={'conversation_id': identifier}).json()
+    assert len(restored['turns']) == 1
+    assert restored['turns'][0]['question'] == 'Первый вопрос'
+    if not agent_fails:
+        assert restored['turns'][0]['answer'] == 'Готово'
+    assert client.get('/api/chats?kind=dataset&target=workspace',
+                      headers=admin_headers).json()['chats'] == []
+    renamed = client.post('/api/chats', headers=dataset_user_headers, json={
+        'kind': 'dataset', 'target': 'workspace', 'conversationId': identifier,
+        'title': 'Мой анализ'}).json()['chat']
+    assert renamed['title'] == 'Мой анализ'
+
+    def next_answer(attached, question, history, *, reveal_sql, on_event):
+        """Verify only completed turns enter the next agent call."""
+        assert len(history) == (0 if agent_fails else 1)
+        return {'answer': 'Второй ответ', 'columns': [], 'rows': [], 'plan': {},
+                'truncated': False, 'explanation': {}}
+
+    monkeypatch.setattr(dataset_api, 'agent_ask_datasets', next_answer)
+    followup = client.post('/api/datasets/chat/stream', headers=dataset_user_headers,
+                           json={'question': 'Второй вопрос', 'datasetSlugs': ['sales'],
+                                 'conversationId': identifier})
+    assert json.loads(followup.text.splitlines()[-1])['type'] == 'done'
+    chats = client.get('/api/chats?kind=dataset&target=workspace',
+                       headers=dataset_user_headers).json()['chats']
+    assert len(chats) == 1
+    assert chats[0]['title'] == 'Мой анализ'
+    turns = client.get('/api/datasets/chat/history', headers=dataset_user_headers,
+                       params={'conversation_id': identifier}).json()['turns']
+    assert [turn['question'] for turn in turns] == ['Первый вопрос', 'Второй вопрос']
+    assert turns[-1]['answer'] == 'Второй ответ'
+
+
 def test_workspace_chat_keeps_history_across_datasets(assign_dataset, client, dataset, sources,
                                                       dataset_user_headers, admin_headers,
                                                       monkeypatch):
@@ -175,7 +238,7 @@ def test_new_workspace_chat_does_not_reuse_saved_context(client, dataset,
     assert current['conversationId'] != prior['id']
     assert observed == [[]]
     assert [item['title'] for item in client.get('/api/chats?kind=dataset&target=workspace',
-                                                 headers=dataset_user_headers).json()['chats']] == ['Старый чат']
+                                                 headers=dataset_user_headers).json()['chats']] == ['Новый вопрос', 'Старый чат']
 
 
 def test_empty_new_chat_survives_reload_and_can_be_saved(client, user_headers):

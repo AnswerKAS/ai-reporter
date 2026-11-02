@@ -229,6 +229,17 @@ def stream_workspace_chat(payload: dict,
     except DatasetError as exc:
         raise HTTPException(404, str(exc)) from exc
     history = dataset_access.visible_turns(user, agent_store.dataset_history(conversation['id']))
+    titles = [dataset.get('title') or dataset['slug'] for dataset in datasets]
+    pending = {'question': question.strip(), 'datasetSlug': slugs[0],
+               'datasetTitle': titles[0], 'datasetSlugs': slugs, 'datasetTitles': titles,
+               'answer': 'Ответ ещё не получен. Проверьте историю позже или отправьте вопрос повторно.',
+               'incomplete': True, 'columns': [], 'rows': [], 'plan': {},
+               'truncated': False, 'explanation': {'source': ', '.join(titles),
+               'calculations': [], 'groupBy': [], 'filters': [], 'orderBy': None,
+               'scope': 'Расчёт не завершён', 'limit': 0, 'shownRows': 0,
+               'totalRows': None, 'hasMore': False}}
+    answer_id = agent_store.save_exchange(conversation['id'], question.strip(),
+                                          pending['answer'], pending)
     events: queue.Queue[dict | None] = queue.Queue()
 
     def worker() -> None:
@@ -239,12 +250,11 @@ def stream_workspace_chat(payload: dict,
                              input_data={'datasets': slugs, 'question': question.strip()}) as trace:
                 answer = agent_ask_datasets(datasets, question.strip(), history,
                                             reveal_sql=_is_admin(user), on_event=events.put)
-                titles = [dataset.get('title') or dataset['slug'] for dataset in datasets]
                 result = {'question': question.strip(), 'datasetSlug': slugs[0],
                           'datasetTitle': titles[0], 'datasetSlugs': slugs,
                           'datasetTitles': titles, **answer}
-                agent_store.save_exchange(conversation['id'], question.strip(),
-                                          result['answer'], result)
+                agent_store.complete_exchange(conversation['id'], answer_id,
+                                              result['answer'], result)
                 record_output(trace, {'answer': result.get('answer'),
                                       'rows': len(result.get('rows') or [])})
             events.put({'type': 'done', 'conversationId': conversation['id'],
