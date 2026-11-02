@@ -2,6 +2,7 @@
 
 import importlib.util
 import io
+from http.client import IncompleteRead, RemoteDisconnected
 from pathlib import Path
 import subprocess
 import sys
@@ -14,6 +15,34 @@ _SPEC = importlib.util.spec_from_file_location('proxmox_deploy', _MODULE_PATH)
 deploy = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = deploy
 _SPEC.loader.exec_module(deploy)
+
+
+@pytest.mark.parametrize('failure', [ConnectionResetError('reset'),
+                                    RemoteDisconnected('restarting'), IncompleteRead(b'')])
+def test_health_check_retries_connection_interruptions(monkeypatch, failure):
+    """A transient reset during container startup must not roll back a healthy release."""
+    attempts = []
+
+    class Response(io.BytesIO):
+        """Return the healthy application's JSON after its initial connection reset."""
+
+        status = 200
+
+    def fake_urlopen(_request, timeout):
+        """Fail the first health request and succeed on the retry."""
+        attempts.append(timeout)
+        if len(attempts) == 1:
+            raise failure
+        return Response(b'{"status":"ok"}')
+
+    def skip_sleep(_seconds):
+        """Keep the health retry regression test immediate."""
+        return None
+
+    monkeypatch.setattr(deploy, 'urlopen', fake_urlopen)
+    monkeypatch.setattr(deploy.time, 'sleep', skip_sleep)
+    assert deploy.healthy(timeout=1) is True
+    assert len(attempts) == 2
 
 
 def test_ci_gate_accepts_only_successful_push_for_exact_main_sha(monkeypatch):

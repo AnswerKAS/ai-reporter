@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import fcntl
 import json
+from http.client import HTTPException
 import os
 from pathlib import Path
 import re
@@ -95,14 +96,14 @@ def snapshot_source(source: Path, backup: Path) -> None:
 
 
 def healthy(timeout: int = 90) -> bool:
-    """Wait until the frontend proxy reports a healthy backend."""
+    """Retry startup transport failures until the proxy is healthy or time expires."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
             with urlopen(HEALTH_URL, timeout=3) as response:
                 if response.status == 200 and json.load(response).get('status') == 'ok':
                     return True
-        except (HTTPError, URLError, TimeoutError, ValueError):
+        except (HTTPError, URLError, TimeoutError, ConnectionError, HTTPException, ValueError):
             pass
         time.sleep(2)
     return False
