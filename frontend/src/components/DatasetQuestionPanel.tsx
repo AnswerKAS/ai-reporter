@@ -228,7 +228,7 @@ export function DatasetQuestionPanel({ datasets, initialDatasetSlug, requestedCo
   /** Submit a user turn and render each progress or text event immediately. */
   async function ask(): Promise<void> {
     const text = question.trim()
-    if (!text || !conversationId || !selectedDatasets.length || asking || loading) return
+    if (!text || !selectedDatasets.length || asking || loading) return
     const serial = ++requestSerial.current
     const slugs = [...selectedSlugs]
     const titles = slugs.map((slug) => datasets.find((item) => item.slug === slug)?.title || slug)
@@ -243,7 +243,10 @@ export function DatasetQuestionPanel({ datasets, initialDatasetSlug, requestedCo
     try {
       await streamWorkspaceAnswer(slugs, text, conversationId, (event) => {
         if (serial !== requestSerial.current) return
-        if (event.conversationId) activateConversation(event.conversationId)
+        if (event.conversationId) {
+          setConversationId(event.conversationId)
+          window.localStorage.setItem(ACTIVE_DATASET_CHAT, event.conversationId)
+        }
         if (event.type === 'status') setStatus(event.text ?? '')
         if (event.type === 'delta') {
           setStatus('')
@@ -299,7 +302,7 @@ export function DatasetQuestionPanel({ datasets, initialDatasetSlug, requestedCo
         {overviewOpen && <div className="mb-5 space-y-3">{selectedDatasets.map((item) =>
           <DatasetOverview key={item.slug} dataset={item} />)}</div>}
         {loading && <p className="text-sm text-fg-muted">Загружаю историю диалога…</p>}
-        {!loading && !conversationId && <p className="text-sm text-fg-muted">Нажмите + в меню чатов, чтобы начать сохранённый диалог.</p>}
+
         {!loading && turns.length === 0 && !pendingQuestion && (
           <div className="mx-auto flex h-full max-w-lg flex-col items-center justify-center text-center">
             <span className="mb-3 text-3xl" aria-hidden="true">✦</span>
@@ -390,7 +393,7 @@ export function DatasetQuestionPanel({ datasets, initialDatasetSlug, requestedCo
           <div className="flex items-end gap-2">
             <button type="button" title="Прикрепить датасет" aria-label="Прикрепить датасет"
               className="mb-1 cursor-pointer rounded-card border border-line px-3 py-2 text-sm text-accent hover:bg-accent-soft"
-              disabled={asking || loading || !conversationId}
+              disabled={asking || loading}
               onClick={() => { const next = `${question}${question && !/\s$/.test(question) ? ' ' : ''}@`; setQuestion(next); mentionRange.current = { start: next.length - 1, end: next.length }; setMentionQuery(''); input.current?.focus(); requestAnimationFrame(() => input.current?.setSelectionRange(next.length, next.length)) }}>@</button>
             <Textarea ref={input} id="workspace-question" rows={2} value={question}
               onChange={(event) => { setQuestion(event.target.value); updateMention(event.target.value, event.target.selectionStart) }}
@@ -407,9 +410,9 @@ export function DatasetQuestionPanel({ datasets, initialDatasetSlug, requestedCo
                   void ask()
                 }
               }}
-              placeholder="Напишите вопрос и прикрепите @датасет…" disabled={asking || loading || !conversationId}
+              placeholder="Напишите вопрос и прикрепите @датасет…" disabled={asking || loading}
               className="min-h-16 flex-1 resize-none" />
-            <Button type="submit" variant="primary" disabled={asking || loading || !conversationId || !selectedDatasets.length || !question.trim()}>
+            <Button type="submit" variant="primary" disabled={asking || loading || !selectedDatasets.length || !question.trim()}>
               {asking ? 'Отвечаю…' : 'Отправить ↑'}
             </Button>
           </div>
