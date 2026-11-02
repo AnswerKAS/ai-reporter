@@ -5,6 +5,7 @@ import type { ComputedField, ReportDefinition, ReportField } from '../../types/s
 import type { Dataset } from '../../types/dataset'
 import { Alert, Button, Input, Textarea } from '../ui'
 import { DatasetDataDialog } from './DatasetDataDialog'
+import { DatasetOverview } from '../DatasetOverview'
 import { searchDatasetMentions } from '../../lib/dataset-mentions'
 
 /** Persistent inline report chat, styled like the dataset question chat. */
@@ -29,6 +30,7 @@ export function ReportChat({ fields, computed, datasets, availableDatasets, defi
   target: string
 }) {
   const [dataOpen, setDataOpen] = useState(false)
+  const [overviewSlug, setOverviewSlug] = useState<string | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [conversationId, setConversationId] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
@@ -49,6 +51,7 @@ export function ReportChat({ fields, computed, datasets, availableDatasets, defi
   const mentionRange = useRef<{ start: number; end: number } | null>(null)
   const attachedDatasets = useMemo(() => availableDatasets.filter((item) => attachedSlugs.includes(item.slug)),
     [availableDatasets, attachedSlugs])
+  const overviewDataset = attachedDatasets.find((item) => item.slug === overviewSlug)
   const mentionMatches = useMemo(() => searchDatasetMentions(
     availableDatasets, mentionQuery, attachedSlugs), [availableDatasets, attachedSlugs, mentionQuery])
 
@@ -71,6 +74,7 @@ export function ReportChat({ fields, computed, datasets, availableDatasets, defi
     onConversationId(null)
     setProposed(false)
     setAttachedSlugs([])
+    setOverviewSlug(null)
     setMentionQuery(null)
     setError(null)
     setModel(null)
@@ -287,7 +291,9 @@ export function ReportChat({ fields, computed, datasets, availableDatasets, defi
             <label htmlFor="report-chat-input" className="sr-only">Описание отчёта</label>
             {attachedDatasets.length > 0 && <div className="mb-3 flex flex-wrap items-center gap-2" aria-label="Прикреплённые датасеты">
               {attachedDatasets.map((item) => <span key={item.slug} className="inline-flex items-center gap-1 rounded-full border border-accent bg-accent-soft px-3 py-1 text-xs font-medium">
-                @{item.title}
+                <button type="button" aria-label={`Показать содержимое датасета «${item.title}»`}
+                  className="cursor-pointer text-left hover:underline focus-visible:underline"
+                  onClick={() => setOverviewSlug(item.slug)}>@{item.title}</button>
                 <button type="button" className="cursor-pointer text-accent" aria-label={`Открепить ${item.title}`}
                   onClick={() => setAttachedSlugs((current) => current.filter((slug) => slug !== item.slug))}>×</button>
               </span>)}
@@ -331,6 +337,8 @@ export function ReportChat({ fields, computed, datasets, availableDatasets, defi
 
       {dataOpen && <DatasetDataDialog datasets={availableDatasets} selectedSlugs={[...new Set([...attachedSlugs, ...datasets])]}
         onClose={() => setDataOpen(false)} />}
+      {overviewDataset && <DatasetOverview key={overviewDataset.slug} dataset={overviewDataset}
+        mode="dialog" onClose={() => setOverviewSlug(null)} />}
     </>
   )
 }

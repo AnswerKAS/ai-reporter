@@ -52,7 +52,10 @@ export function DatasetOverview({ dataset, mode = 'card', onClose }: {
               const setting = (detail?.dataset ?? dataset).fieldSettings?.[field.name]
               return <Tr key={field.name}>
                 <Td><code>{field.name}</code></Td>
-                <Td>{fieldTitle(detail?.dataset ?? dataset, field)}</Td>
+                <Td>{fieldTitle(detail?.dataset ?? dataset, field)}
+                  {field.comment?.trim() && field.comment.trim() !== fieldTitle(detail?.dataset ?? dataset, field) &&
+                    <span className="mt-1 block text-xs text-fg-muted">{field.comment}</span>}
+                </Td>
                 <Td>{field.type}</Td>
                 <Td>{setting ? ROLE_LABELS[setting.role] : '—'}</Td>
               </Tr>
